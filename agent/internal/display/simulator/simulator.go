@@ -33,11 +33,14 @@ type Snapshot struct {
 // Simulator implements display.Output by atomically replacing one PNG per
 // logical display ID.
 type Simulator struct {
-	mu      sync.Mutex
-	root    string
-	states  map[string]Snapshot
-	updates chan Snapshot
-	closed  bool
+	mu           sync.Mutex
+	root         string
+	states       map[string]Snapshot
+	displayLocks map[string]*sync.Mutex
+	updates      chan Snapshot
+	closeDone    chan struct{}
+	inFlight     sync.WaitGroup
+	closed       bool
 }
 
 var _ display.Output = (*Simulator)(nil)
@@ -55,9 +58,11 @@ func NewSimulator(outputDir string) (*Simulator, error) {
 		return nil, fmt.Errorf("create simulator output directory: %w", err)
 	}
 	return &Simulator{
-		root:    absolute,
-		states:  make(map[string]Snapshot),
-		updates: make(chan Snapshot, 64),
+		root:         absolute,
+		states:       make(map[string]Snapshot),
+		displayLocks: make(map[string]*sync.Mutex),
+		updates:      make(chan Snapshot, 64),
+		closeDone:    make(chan struct{}),
 	}, nil
 }
 
@@ -79,10 +84,20 @@ func (s *Simulator) Present(ctx context.Context, displayID string, frame image.I
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return errors.New("simulator is closed")
 	}
+	writeLock := s.displayLocks[displayID]
+	if writeLock == nil {
+		writeLock = &sync.Mutex{}
+		s.displayLocks[displayID] = writeLock
+	}
+	s.inFlight.Add(1)
+	s.mu.Unlock()
+	defer s.inFlight.Done()
+	writeLock.Lock()
+	defer writeLock.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -112,17 +127,20 @@ func (s *Simulator) Present(ctx context.Context, displayID string, frame image.I
 		return fmt.Errorf("atomically replace display frame: %w", err)
 	}
 
-	previous := s.states[displayID]
 	snapshot := Snapshot{
 		DisplayID: displayID,
 		Path:      path,
-		Sequence:  previous.Sequence + 1,
 		UpdatedAt: time.Now().UTC(),
 		Frame:     clone(frame),
 	}
+	update := cloneSnapshot(snapshot)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	snapshot.Sequence = s.states[displayID].Sequence + 1
+	update.Sequence = snapshot.Sequence
 	s.states[displayID] = snapshot
 	select {
-	case s.updates <- cloneSnapshot(snapshot):
+	case s.updates <- update:
 	default:
 		// The state map is authoritative; slow observers may miss notifications.
 	}
@@ -132,8 +150,8 @@ func (s *Simulator) Present(ctx context.Context, displayID string, frame image.I
 // Snapshot returns a copy of the latest state for one display.
 func (s *Simulator) Snapshot(displayID string) (Snapshot, bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	snapshot, ok := s.states[displayID]
+	s.mu.Unlock()
 	if !ok {
 		return Snapshot{}, false
 	}
@@ -149,11 +167,24 @@ func (s *Simulator) Updates() <-chan Snapshot {
 // Close prevents new frame writes and closes the update stream.
 func (s *Simulator) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.closed {
-		s.closed = true
-		close(s.updates)
+	if s.closed {
+		done := s.closeDone
+		s.mu.Unlock()
+		<-done
+		return nil
 	}
+	s.closed = true
+	s.mu.Unlock()
+
+	// Present calls admitted before Close are allowed to finish. Waiting before
+	// closing updates prevents an in-flight write from publishing to a closed
+	// channel, while Snapshot remains available during file I/O.
+	s.inFlight.Wait()
+
+	s.mu.Lock()
+	close(s.updates)
+	close(s.closeDone)
+	s.mu.Unlock()
 	return nil
 }
 

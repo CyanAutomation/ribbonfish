@@ -217,16 +217,19 @@ func (a *Agent) runDisplay(ctx context.Context, schedule playlist.Schedule) {
 			}
 		}
 
-		next, err := a.scheduler.NextChange(schedule.DisplayID, a.clock.Now())
+		// Account for work spent loading and presenting the current frame, then
+		// use one snapshot for both the boundary and the wait calculation.
+		now = a.clock.Now()
+		next, err := a.scheduler.NextChange(schedule.DisplayID, now)
 		if err != nil {
 			a.logger.Error("could not calculate playlist rotation", "display_id", schedule.DisplayID, "error", err)
 			return
 		}
-		wait := next.Sub(a.clock.Now())
+		wait := next.Sub(now)
 		if wait <= 0 {
 			wait = time.Millisecond
 		}
-		if err := a.clock.Wait(ctx, wait); err != nil && !errors.Is(err, context.Canceled) {
+		if err := a.clock.Wait(ctx, wait); err != nil && ctx.Err() == nil {
 			a.logger.Error("playlist clock failed", "display_id", schedule.DisplayID, "error", err)
 			return
 		}
