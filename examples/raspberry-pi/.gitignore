@@ -1,0 +1,3 @@
+# Local device-specific configuration and credentials
+.env
+secrets/
