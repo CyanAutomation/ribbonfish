@@ -27,6 +27,9 @@ Run the two-display offline simulator using the instructions in
 [`examples/agent/simulator/README.md`](examples/agent/simulator/README.md).
 It uses local sample images and writes current frames to PNG files. Cross-
 compilation for Raspberry Pi architectures does not claim hardware support.
+An optional QEMU container smoke check also builds and starts the ARMv7 and
+ARM64 images against simulated single- and dual-display profiles; this verifies
+container compatibility only and does not replace physical Pi testing.
 
 ## Goals
 
