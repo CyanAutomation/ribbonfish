@@ -4,7 +4,7 @@
 
 **Ribbonfish** is a Cloudflare-native platform for centrally managing information-only screens on lightweight Linux devices (primarily Raspberry Pi 3B/4). It renders websites remotely, distributes versioned screenshots, and displays them through Linux DRM/KMS without requiring a browser or desktop environment on the device.
 
-**Status:** Concept/proposed architecture. This repository contains design documents, architectural decisions, deployment templates, and hardware acceptance criteria. No production implementation yet.
+**Status:** The repository includes a hardware-independent Go agent foundation, offline playlist/cache, and PNG display simulator, alongside proposed architecture and hardware deployment templates. The Cloudflare services and physical Raspberry Pi DRM/KMS backend are not implemented or validated.
 
 ## Key Architectural Principles
 
@@ -46,7 +46,7 @@ This is a **proposed monorepo layout** for the full implementation (not yet in p
 └── README.md
 ```
 
-Current state: **Documentation and templates only** in `examples/` and root README.
+Current state: design documents and deployment templates, plus a tested Go agent prototype under `agent/` and an offline simulator demo under `examples/agent/simulator/`. No production control plane, remote synchronization, or physical display backend yet.
 
 ## Cloudflare Services and Responsibilities
 
@@ -159,6 +159,11 @@ Variants are **keyed by rendering inputs + access permissions**; reuse across di
 - [ ] Cache persistence, network loss, Cloudflare failure scenarios tested
 - [ ] Malformed images, failed captures, low disk space handled gracefully
 - [ ] Mixed monitor resolutions and dual-output operation proven
+
+The ARM container smoke workflow under `.github/workflows/arm-container-smoke.yml`
+builds and runs the ARMv7 single-display and ARM64 dual-display simulator
+profiles under QEMU. This verifies container architecture and startup behavior;
+it does not satisfy physical hardware acceptance criteria.
 
 **Cost modeling:** Actual browser time per capture × capture frequency × daily captures = daily browser-minute usage. **One-at-a-time execution controls concurrency, not total daily usage.** Example: one variant captured every 60s = 1,440 captures/day; 1s per capture = 24 browser-minutes/day. Validate against current Cloudflare plan limits before claiming Free-plan compatibility.
 

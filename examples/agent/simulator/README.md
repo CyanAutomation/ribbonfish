@@ -23,6 +23,18 @@ write, and exits. The content-addressed cache remains under
 `examples/agent/simulator/var/cache`, so startup can reuse verified local
 assets after a restart without downloading anything.
 
+To check ARM container startup under QEMU, run from the repository root:
+
+```sh
+sh agent/scripts/smoke-container.sh linux/arm/v7 pi3b
+sh agent/scripts/smoke-container.sh linux/arm64 pi4
+```
+
+The checks verify that the ARM image starts, loads the configured local PNGs,
+and writes valid output frames. They do not emulate Raspberry Pi OS or validate
+DRM/KMS, GPIO, display timing, or physical hardware behavior. CI runs the same
+checks for both profiles.
+
 The four sample PNGs are local files under `assets/`; no URLs are fetched.
 Missing or corrupt playlist items are logged and skipped, and a display keeps
 its last successfully written frame if none of its configured assets can be
