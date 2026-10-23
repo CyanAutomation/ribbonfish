@@ -1,6 +1,6 @@
 # Ribbonfish
 
-[![Go agent](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml/badge.svg)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml)
+[![Go agent](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml/badge.svg)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml) [![ARM container smoke test](https://github.com/CyanAutomation/ribbonfish/actions/workflows/arm-container-smoke.yml/badge.svg?branch=main)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/arm-container-smoke.yml)
 
 > **Project status:** A hardware-independent Go agent foundation, offline playlist/cache, and software display simulator are implemented. Cloudflare services and Raspberry Pi DRM/KMS output remain proposed and unvalidated.
 
