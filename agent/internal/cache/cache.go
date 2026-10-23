@@ -4,6 +4,7 @@ package cache
 import (
 	"context"
 	"image"
+	"io"
 )
 
 // Asset identifies one verified, content-addressed image in the local cache.
@@ -16,7 +17,7 @@ type Asset struct {
 // Store provides verified local images and protects assets in active
 // playlists during bounded eviction.
 type Store interface {
-	Put(ctx context.Context, sourcePath, expectedSHA256 string) (Asset, error)
+	Put(ctx context.Context, source io.Reader, expectedSHA256 string) (Asset, error)
 	Load(ctx context.Context, asset Asset) (image.Image, error)
 	Prune(ctx context.Context, retainedSHA256 []string) error
 	Close() error

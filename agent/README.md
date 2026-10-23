@@ -1,9 +1,10 @@
 # Ribbonfish agent foundation
 
-This directory contains the hardware-independent Go agent. The first
-implementation phase defines a versioned local JSON contract, structured
-logging, cancellation-aware process lifecycle, and interfaces for display
-output, image caching, playlist scheduling, and synchronization.
+This directory contains the hardware-independent Go agent. It defines a
+versioned local JSON contract, structured logging, cancellation-aware process
+lifecycle, deterministic per-display playlist scheduling, and a persistent
+content-verified image cache. Display output and synchronization remain
+replaceable interfaces.
 
 The agent module uses the Go standard library only. See
 [`../docs/agent-foundation.md`](../docs/agent-foundation.md) for architecture
