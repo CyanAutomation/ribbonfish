@@ -125,7 +125,9 @@ func (c Config) Validate() error {
 		} else {
 			displays[display.ID] = struct{}{}
 		}
-		if _, exists := playlists[display.PlaylistID]; !exists {
+		if strings.TrimSpace(display.PlaylistID) == "" {
+			problems = append(problems, fmt.Errorf("displays[%d].playlist_id is required", i))
+		} else if _, exists := playlists[display.PlaylistID]; !exists {
 			problems = append(problems, fmt.Errorf("display %q references unknown playlist %q", display.ID, display.PlaylistID))
 		}
 		if _, err := display.Interval(); err != nil {
