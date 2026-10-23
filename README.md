@@ -86,10 +86,10 @@ Ribbonfish deliberately supports **no screenshot capture interval shorter than 6
 | D1 | Sites, render variants, playlists, devices, outputs, assignments, capture status, and audit records |
 | Browser Run | Headless page rendering and screenshot capture, with explicit viewport and load/wait policies |
 | R2 | Versioned screenshot objects with a hard per-variant retention limit of 10 captures or 30 days, whichever is sooner |
-| Queues | Asynchronous capture jobs, retries, and failure isolation |
+| Queues | Single-consumer, single-message capture execution, bounded retries, and backlog control |
 | Scheduled Worker (Cron Trigger) | Run every minute, check D1 for due variants, and enqueue deduplicated capture jobs |
 
-Cloudflare Browser Run supports screenshot Quick Actions and browser sessions. The renderer implementation should be replaceable, and all quotas, costs, scheduling limits, and authenticated-page capabilities must be validated before production use.
+Cloudflare Browser Run supports screenshot Quick Actions and browser sessions. The renderer implementation should be replaceable, and all quotas, costs, scheduling limits, and authenticated-page capabilities must be validated before production use. **Serial capture execution limits concurrency, but does not by itself ensure compliance with account-wide browser session creation rates, Quick Action request rates, or daily browser-time quotas.**
 
 ---
 
@@ -186,6 +186,74 @@ Physical connector names and stable display identification will be validated aga
 
 ---
 
+## Serial Capture and Browser Budget
+
+**Initial architectural constraint: at most one Ribbonfish screenshot capture executes at any moment across the entire deployment.** Every scheduled, manual, and retry capture must pass through the same Cloudflare Queue; no API endpoint or Cron handler may invoke Browser Run directly.
+
+The proposed Queue consumer configuration is illustrative Wrangler JSON (confirm the deployed runtime and supported settings):
+
+```json
+{
+  "queues": {
+    "consumers": [
+      {
+        "queue": "ribbonfish-captures",
+        "max_batch_size": 1,
+        "max_concurrency": 1
+      }
+    ]
+  }
+}
+```
+
+The consumer processes **one message and awaits the entire browser capture and publication flow** before acknowledging it. It must not start unawaited or parallel browser operations. A configured Queue consumer concurrency of one is the primary serialisation control; use D1-backed job leases, ownership checks, and idempotency to handle duplicate deliveries and lease expiry safely. If the platform could execute an overlapping retry or a second consumer, the application must prevent concurrent browser work rather than relying on configuration alone. Serialisation is scoped to Ribbonfish, not other workloads sharing the same Cloudflare account.
+
+### Budget and quota controls
+
+- Define a **configurable daily browser-time budget** and per-request timeouts; store usage estimates, observed usage where available, and budget state in D1. Configure a conservative safety margin below the applicable Cloudflare plan limits.
+- Before starting a capture, check the remaining budget and applicable **Browser Sessions** creation or **Quick Actions** request rate limit. These are different Cloudflare APIs with different limits; model the chosen renderer's actual quotas. Do not assume that concurrency one bypasses either rate limit.
+- When the daily budget or a provider quota is exhausted, **defer or skip** new work until the relevant budget or rate window allows it. Surface the reason and stale-image age; do not retry quota failures in a tight loop. A queue consumer should not hold messages indefinitely while waiting for the next day.
+- Set a maximum pending-job age and backlog threshold. **Coalesce** due captures by render variant: allow at most one outstanding queued/running capture per variant, and do not enqueue redundant historical captures when the Cron scheduler ticks again.
+- Give retries bounded attempts, exponential backoff and jitter. Distinguish transient browser failures from quota exhaustion and terminal rendering failures. Failed jobs must not block all subsequent variants indefinitely.
+- Track queue depth, capture duration, time since last successful screenshot, skipped/deferred captures, remaining budget, and rate-limit responses. Keep the last valid image available subject to the separate screenshot retention policy.
+
+**Trade-off:** with a single capture slot, requested 60-second intervals are a minimum *configuration* interval, not guaranteed freshness. If aggregate render time exceeds capacity or the daily browser budget, some captures will be late or skipped. Design for predictable degradation rather than unbounded work accumulation.
+
+---
+
+## Optional JEV Capture Optimiser
+
+JEV 1.14 can be evaluated as a **low-cost, optional decision engine** to reduce unnecessary Browser Run activity, improve cache reuse and make retries more resilient. Its main input should be **compact structured operational data**, not an image on every capture. Image assessment is an optional later experiment, not a prerequisite.
+
+The optimiser sits **after deterministic eligibility checks and before the single serial capture queue**:
+
+`Cron + D1 due variants → hard rules/cache probes → optional JEV decision → serial Queue → Browser Run → R2 → device`
+
+### Decision scope
+
+- **Adaptive scheduling:** consider change history, prior capture durations, recent failures, cached-image age, available browser-time budget and queue pressure to choose whether to capture now or defer. Respect the configured freshness ceiling and never schedule captures more frequently than 60 seconds.
+- **Cache reuse:** prefer inexpensive deterministic checks first, such as trusted `ETag`/`Last-Modified` validators or a suitable lightweight source probe. A static HTML response or cached screenshot **cannot prove** a dynamic dashboard is unchanged; do not infer freshness from it.
+- **Failure recovery:** classify bounded next actions such as `retry`, `defer`, `use_cache` or `escalate`, using error category, recent failures, cache age and quota state.
+- **Queue prioritisation:** rank eligible variants when serial capture capacity or browser budget is scarce, without starving other sites or violating hard freshness requirements.
+- **Optional image-aware decisions:** explore JEV image input for visual-change or cache-suitability assessment only when a screenshot already exists or the expected savings justify an additional analysis. Do not use image analysis to imply that an unobserved live site has not changed.
+
+### Hard constraints and safe fallback
+
+- **The configured interval is a freshness requirement by default**, not permission to defer indefinitely. Adaptive scheduling is explicitly opt-in per variant, with a user-defined maximum screenshot age and a bounded forced-refresh policy. If a site must refresh every minute, JEV cannot skip that capture merely to save money; budget exhaustion may still make the requirement unattainable and must be reported.
+- Deterministic validation and provider quotas **always override** JEV. JEV must not bypass the global one-at-a-time queue, 60-second minimum, retention limits, authorisation boundaries or the daily browser-time budget.
+- Validate JEV outputs against a small typed decision schema; reject invalid, stale, low-confidence or timed-out recommendations. Keep strict limits on JEV request frequency, token usage, latency and total spend so optimisation does not cost more than it saves.
+- **Fail open to deterministic scheduling**, subject to hard quota and safety limits, when JEV is unavailable. A JEV outage must not stop device playback or prevent otherwise permitted captures.
+- Do not send authenticated/private screenshot pixels or sensitive dashboard content to JEV without explicit opt-in and appropriate data-handling controls. Prefer metadata-only decisions.
+
+### Delivery approach (no shadow-mode phase)
+
+1. **Deterministic foundation:** implement budget enforcement, queue coalescing, reliable freshness timestamps, trusted conditional HTTP probes where applicable, backoff and observability.
+2. **Direct, guarded JEV integration:** enable opt-in adaptive decisions immediately behind typed validation, strict timeouts, hard-rule overrides and a feature flag/kill switch. Roll out to a small set of non-critical variants with conservative deferral limits; do not introduce a separate shadow-mode stage.
+3. **Measure and refine:** compare browser seconds per 1,000 capture opportunities, actual screenshot age, freshness breaches, retries avoided, queue wait, JEV latency and total combined Cloudflare/JEV cost. Disable JEV if the net benefit is negative.
+4. **Optional image experiment:** assess whether JEV 1.14 image inputs improve decisions enough to justify their latency, cost and experimental reliability characteristics.
+
+---
+
 ## Core Workflows
 
 ### 1. Provision a Device
@@ -198,7 +266,7 @@ Credentials can be rotated or revoked without reimaging the device.
 
 ### 2. Schedule and Capture a Site
 
-A Cloudflare Cron Trigger runs once per minute (`* * * * *`). Its Worker queries D1 for due render variants, atomically claims eligible jobs, and submits them to a Queue. The dispatcher uses stored `next_due_at` timestamps rather than one Cron Trigger per site. Queue delivery can be at least once, so consumers must be idempotent and enforce per-variant concurrency limits. Missed ticks are reconciled on subsequent runs; overdue jobs must not create unbounded backlogs. Define bounded retries, capture timeouts, and tolerable timing drift. **No sub-minute scheduler or Durable Objects are required.**
+A Cloudflare Cron Trigger runs once per minute (`* * * * *`). Its Worker queries D1 for due render variants, atomically claims eligible jobs, and submits them to a Queue. The dispatcher uses stored `next_due_at` timestamps rather than one Cron Trigger per site. It checks the capture budget, coalesces already queued/running variants, and defers jobs it cannot afford or process promptly. Queue delivery can be at least once, so consumers must be idempotent and enforce per-variant concurrency limits. Missed ticks are reconciled on subsequent runs; overdue jobs must not create unbounded backlogs. Define bounded retries, capture timeouts, and tolerable timing drift. **No sub-minute scheduler or Durable Objects are required.**
 
 The renderer:
 
@@ -328,14 +396,14 @@ Key scenarios to test include:
 - Mixed monitor resolutions
 - Dual-output operation
 
-Capture costs must be modeled using actual browser time, capture frequency, and the number of distinct rendering variants.
+Capture costs must be modelled using actual browser time, capture frequency, the number of distinct rendering variants, and the account's current plan limits. **One-at-a-time capture execution controls concurrency, not total daily browser usage.**
 
 For example:
 
 - One site captured every 60 seconds requires up to **1,440 captures/day** before retries.
 - One site captured daily requires **1 capture/day**.
 
-Device count should not multiply rendering work when assets can be safely shared.
+Device count should not multiply rendering work when assets can be safely shared. For illustration, capturing one variant every minute requires 1,440 captures/day; even 1 second of browser usage per capture would consume 24 browser-minutes/day. Validate the active plan's current daily allowance and price model before claiming Free-plan compatibility.
 
 ---
 
@@ -393,7 +461,11 @@ Add:
 - Independent per-site capture intervals
 - One-minute Cron Trigger and D1-backed due-job scheduling
 - Validation rejecting capture intervals below 60 seconds
-- Queues
+- Queues configured for one-message batches and a single concurrent capture consumer
+- Global serialisation of scheduled, manual and retried captures
+- Daily browser-time budget and renderer-specific rate limiting
+- Optional JEV-based capture optimisation with deterministic guardrails and opt-in adaptive freshness
+- Per-variant backlog coalescing and quota-aware defer/skip behaviour
 - Retry policies
 - Last-known-good manifests
 - Per-variant screenshot retention (10 captures or 30 days, whichever is sooner), plus cleanup and reconciliation
