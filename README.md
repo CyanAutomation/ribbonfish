@@ -85,7 +85,7 @@ Ribbonfish deliberately supports **no screenshot capture interval shorter than 6
 | Workers | Management UI/API, authenticated device endpoints, configuration and image manifests |
 | D1 | Sites, render variants, playlists, devices, outputs, assignments, capture status, and audit records |
 | Browser Run | Headless page rendering and screenshot capture, with explicit viewport and load/wait policies |
-| R2 | Versioned screenshot objects, retention, and last-known-good images |
+| R2 | Versioned screenshot objects with a hard per-variant retention limit of 10 captures or 30 days, whichever is sooner |
 | Queues | Asynchronous capture jobs, retries, and failure isolation |
 | Scheduled Worker (Cron Trigger) | Run every minute, check D1 for due variants, and enqueue deduplicated capture jobs |
 
@@ -207,7 +207,7 @@ The renderer:
 - Captures the requested viewport
 - Validates the result
 
-A successful image is written to R2 under an immutable versioned key. Only then is the current manifest updated.
+A successful image is written to R2 under an immutable versioned key. Only then is the current manifest updated. Retention cleanup then enforces the per-variant **10 captures / 30 days, whichever is sooner** policy without deleting the newly referenced image.
 
 Failed captures preserve the last-known-good image, with bounded retries, backoff, and alerts.
 
@@ -299,6 +299,21 @@ All commands must be explicitly allow-listed, authenticated, and auditable.
 
 ---
 
+## Screenshot Retention Policy
+
+Ribbonfish retains **at most the 10 most recent successful screenshots per render variant, and never retains a screenshot older than 30 days — whichever limit is reached first**. The limits apply independently to each render variant, not globally across all sites or devices. Both limits are mandatory, including for private dashboards.
+
+- On successful capture, write a new immutable screenshot to R2, update its D1 metadata and the current manifest, then prune excess captures so no more than 10 remain for that variant.
+- A scheduled cleanup pass deletes captures older than 30 days even if fewer than 10 exist, and reconciles orphaned R2 objects or D1 records after interrupted writes/deletions.
+- Treat retention as a **hard upper bound**, not a promise that 10 captures or a full 30 days of history will always be available. At a 60-second capture interval, the 10-capture limit represents roughly the latest 10 minutes; at a daily interval, it represents up to 10 days.
+- Avoid deleting an object while it is still referenced by a current manifest. Update pointers atomically where feasible, then delete superseded objects; retry failed cleanup safely.
+- Once the latest screenshot ages beyond 30 days without a successful replacement, it must be removed from cloud retention and no longer advertised as current. Device-local cached images have a separate offline-availability policy, which must not be misrepresented as cloud retention.
+- Do not retain duplicate copies, thumbnails, backups, or other screenshot-derived assets beyond these limits unless a separately documented retention policy explicitly covers them. Keep D1 metadata, audit records and logs free of image content.
+
+Implement retention enforcement in the capture workflow and periodic reconciliation; do not rely solely on R2 lifecycle rules to enforce the 10-capture count. Validate deletion behaviour and storage consumption with automated tests.
+
+---
+
 ## Reliability and Performance
 
 Key scenarios to test include:
@@ -381,6 +396,7 @@ Add:
 - Queues
 - Retry policies
 - Last-known-good manifests
+- Per-variant screenshot retention (10 captures or 30 days, whichever is sooner), plus cleanup and reconciliation
 
 ### Phase 3 — Fleet Management
 
