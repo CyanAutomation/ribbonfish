@@ -7,17 +7,19 @@ in the project README. Its small packages define contracts rather than
 depending on Cloudflare or Linux graphics libraries:
 
 - `internal/config` owns the versioned local JSON contract and validation.
-- `internal/agent` is the future composition point for the runtime adapters.
+- `internal/agent` composes the offline cache, playlist runner, and output.
 - `internal/display` accepts decoded frames through one output interface.
-- `internal/cache` describes verified persistent image storage.
-- `internal/playlist` describes deterministic per-display scheduling.
+- `internal/display/simulator` writes one atomic PNG per logical display.
+- `internal/cache` implements verified, bounded persistent image storage.
+- `internal/playlist` schedules deterministic per-display rotation.
 - `internal/syncer` is the replaceable synchronization boundary.
 - `internal/logging` configures standard-library `log/slog`.
 
 The current CLI loads and validates configuration, emits structured startup
-and shutdown records, and exits cleanly on SIGINT or SIGTERM. Subsequent
-implementation layers add local playback and the software display backend.
-The module has no third-party dependencies.
+and shutdown records, and exits cleanly on SIGINT or SIGTERM. The local runtime
+loads images into the cache, rotates each configured display independently,
+and writes PNG frames through the software simulator. The module has no
+third-party dependencies.
 
 ## Local configuration contract
 
@@ -26,8 +28,9 @@ cache, simulator output directory, ordered playlist assets, and a playlist
 plus rotation interval for each logical display. Relative paths are anchored
 to the config file, so the same config works when launched from another
 working directory. Unknown fields and invalid references fail at startup.
-Asset files are checked at playback time so one missing asset does not make
-other displays or assets unavailable.
+At startup, source files are checked and valid images are cached. Each frame
+is verified again when loaded for presentation, so one missing or corrupt
+asset does not make other displays or assets unavailable.
 
 Playlist timing is a local device concern and is independent of Cloudflare's
 minimum 60-second screenshot capture interval. The scheduler receives wall
@@ -43,6 +46,12 @@ temporary file and atomic rename, and assets referenced by configured
 playlists are protected from eviction. If all unprotected assets have been
 evicted and the cache still cannot fit a required asset, the write fails
 explicitly while existing cached content remains available.
+
+If the cache directory cannot be created or opened, the agent reports a
+startup error. If an individual asset cannot be read, decoded, integrity
+checked, or stored because the cache is full, that item is skipped; displays
+continue with other verified cached items and preserve their last written
+frame when no valid item remains.
 
 ## Compose review
 

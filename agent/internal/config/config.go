@@ -95,6 +95,8 @@ func (c Config) Validate() error {
 	for i, playlist := range c.Playlists {
 		if strings.TrimSpace(playlist.ID) == "" {
 			problems = append(problems, fmt.Errorf("playlists[%d].id is required", i))
+		} else if !validIdentifier(playlist.ID) {
+			problems = append(problems, fmt.Errorf("playlists[%d].id contains unsupported characters", i))
 		} else if _, exists := playlists[playlist.ID]; exists {
 			problems = append(problems, fmt.Errorf("playlist id %q is duplicated", playlist.ID))
 		} else {
@@ -120,6 +122,8 @@ func (c Config) Validate() error {
 	for i, display := range c.Displays {
 		if strings.TrimSpace(display.ID) == "" {
 			problems = append(problems, fmt.Errorf("displays[%d].id is required", i))
+		} else if !validIdentifier(display.ID) {
+			problems = append(problems, fmt.Errorf("displays[%d].id contains unsupported characters", i))
 		} else if _, exists := displays[display.ID]; exists {
 			problems = append(problems, fmt.Errorf("display id %q is duplicated", display.ID))
 		} else {
@@ -183,4 +187,21 @@ func resolvePath(base, path string) string {
 		return filepath.Clean(path)
 	}
 	return filepath.Clean(filepath.Join(base, path))
+}
+
+func validIdentifier(value string) bool {
+	if len(value) == 0 || len(value) > 64 || !isASCIIAlphaNumeric(value[0]) {
+		return false
+	}
+	for i := 1; i < len(value); i++ {
+		c := value[i]
+		if !isASCIIAlphaNumeric(c) && c != '.' && c != '_' && c != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIIAlphaNumeric(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
