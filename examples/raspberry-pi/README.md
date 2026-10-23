@@ -28,7 +28,7 @@ ls /sys/class/drm
 ## Proposed setup (after the agent and control plane exist)
 
 1. Copy `.env.example` to `.env`; set the actual published image version, API URL, device ID and group ID for the DRM card.
-2. Create `secrets/device-token` using an enrolled, device-scoped credential. Restrict file permissions, do not commit it and do not put it in `.env`. **Note:** the current example uses a read-only bind mount, not a Docker Swarm secret.
+2. Create `secrets/device-token` as a **file** before running `docker compose up` — if the file does not exist, Docker will silently create a directory at that path and the agent will fail to read the token. Use `install -m 600 /dev/null ./secrets/device-token` and then write the enrolled credential into it. Restrict file permissions, do not commit it and do not put it in `.env`. **Note:** the current example uses a read-only bind mount, not a Docker Swarm secret.
 3. Confirm the target DRM node in `docker-compose.yaml`; adjust mappings and permissions as needed for your Pi.
 4. Once a compatible image exists, validate the interpolated configuration with `docker compose config`; then start with `docker compose up -d` and inspect `docker compose logs -f agent`.
 5. Confirm local image display, clean restart, cache persistence and offline playback before testing multiple monitors.
@@ -38,7 +38,7 @@ Never supply Cloudflare API credentials, JEV secrets or screenshot-renderer cred
 ## Security and operational notes
 
 - The image reference is hypothetical: pin an immutable release tag or image digest after images are published. Avoid `latest`.
-- The device token is sensitive: protect it with filesystem permissions and provision/rotate it through the control plane. Do not commit `.env), tokens, screenshots or runtime state.
+- The device token is sensitive: protect it with filesystem permissions and provision/rotate it through the control plane. Do not commit `.env`, tokens, screenshots or runtime state.
 - The container intentionally does **not** use `privileged: true`, `network_mode: host`, a browser, X11 or Wayland. Add privileges only if hardware measurements show they are essential.
 - `no-new-privileges` is useful hardening, but does not solve DRM permissions or master ownership.
 - Named-volume caching allows restart and image updates without discarding downloaded screenshots. Define cache eviction and disk limits in the agent.
