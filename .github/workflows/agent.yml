@@ -1,7 +1,6 @@
 name: Go agent
 
 on:
-  workflow_call:
   push:
     branches:
       - main

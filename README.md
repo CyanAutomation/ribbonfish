@@ -111,7 +111,7 @@ Cloudflare Browser Run supports screenshot Quick Actions and browser sessions. T
 
 ### Deployment model
 
-The default deployment is **Docker Compose on Raspberry Pi OS Lite**, with no graphical desktop, Chromium, X11, or Wayland session. Pushing a `vMAJOR.MINOR.PATCH` tag publishes a versioned multi-architecture OCI image for ARM64 and ARMv7 to GHCR. This image remains a software compatibility artifact: the hardware environment interface, agent enrollment, and DRM/KMS output are not implemented. A native Go binary remains an optional future distribution method.
+The default deployment is **Docker Compose on Raspberry Pi OS Lite**, with no graphical desktop, Chromium, X11, or Wayland session. The Raspberry Pi hardware Compose template expects a multi-architecture OCI image for ARM64 and ARMv7, but this repository has no automated container-publishing workflow. Create GitHub Releases and version tags manually through the GitHub UI; creating a tag does not build or publish an image. The agent remains a software compatibility artifact: the hardware environment interface, agent enrollment, and DRM/KMS output are not implemented. A native Go binary remains an optional future distribution method.
 
 The Compose deployment should mount only the required DRM/KMS devices (typically under `/dev/dri`), grant the minimum required graphics permissions, persist an image cache, and configure restart-on-failure behaviour. Device access does not guarantee DRM master ownership or multi-output support: validate both on real hardware. Avoid `privileged: true` as a production default. Updates should use pinned image versions or digests, explicit health checks, and rollback procedures; do not depend on mutable `latest` tags.
 
@@ -375,7 +375,7 @@ All commands must be explicitly allow-listed, authenticated, and auditable.
 - Do not expose R2 objects publicly by default; use authenticated delivery or narrowly scoped expiring URLs.
 - Validate image dimensions, formats, sizes, and hashes before decoding on devices.
 - Run the agent with minimal privileges; document DRM permissions, container device mapping, and container hardening.
-- Signed, reproducible releases and an explicit update/rollback strategy.
+- Signed, reproducible release artifacts with releases and version tags managed manually through the GitHub UI, plus an explicit update/rollback strategy.
 - Distinct administrator authentication, one-time device enrolment, device-scoped identity and image authorisation.
 - Prevent replayed remote commands and unapproved software updates; never grant a device access to another device's protected assets.
 
@@ -503,7 +503,7 @@ Add:
 - Offline recovery
 - Integration tests
 - Benchmark results
-- Release automation
+- Documented manual GitHub release and tag procedures
 
 ### Phase 5 — Extensions
 
