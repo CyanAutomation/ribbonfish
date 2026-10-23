@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,13 +14,22 @@ import (
 	"github.com/CyanAutomation/ribbonfish/agent/internal/agent"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/cache"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/config"
+	"github.com/CyanAutomation/ribbonfish/agent/internal/display/drm"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/display/simulator"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/logging"
 )
 
 func main() {
 	configPath := flag.String("config", "config.json", "path to the agent JSON configuration")
+	listDisplays := flag.Bool("list-displays", false, "list DRM/KMS connectors from Linux sysfs and exit")
 	flag.Parse()
+	if *listDisplays {
+		if err := listDRMDisplays("/sys/class/drm", "/dev/dri", os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "ribbonfish:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -27,6 +37,19 @@ func main() {
 		fmt.Fprintln(os.Stderr, "ribbonfish:", err)
 		os.Exit(1)
 	}
+}
+
+func listDRMDisplays(sysfsRoot, devRoot string, output io.Writer) error {
+	connectors, err := drm.Discover(sysfsRoot, devRoot)
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(output)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(connectors); err != nil {
+		return fmt.Errorf("write DRM connector report: %w", err)
+	}
+	return nil
 }
 
 // run loads the typed contract, composes the local cache and simulator, and

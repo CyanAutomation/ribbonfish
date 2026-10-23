@@ -11,26 +11,39 @@ esac
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 image="ribbonfish-agent:smoke-${profile}"
 container="ribbonfish-agent-smoke-${profile}-$$"
+cache_volume="ribbonfish-agent-smoke-cache-${profile}-$$"
+frames_volume="ribbonfish-agent-smoke-frames-${profile}-$$"
 scratch=$(mktemp -d)
 cleanup() {
   docker rm -f "$container" >/dev/null 2>&1 || true
+  docker volume rm "$cache_volume" "$frames_volume" >/dev/null 2>&1 || true
   rm -rf "$scratch"
 }
 trap cleanup EXIT INT TERM
 
-mkdir -p "$scratch/cache" "$scratch/frames" "$scratch/container-frames" "$scratch/assets"
-chmod 0777 "$scratch/cache" "$scratch/container-frames"
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+mkdir -p "$scratch/frames" "$scratch/offline-frames" "$scratch/assets"
 cp "$repo_root"/examples/agent/simulator/assets/*.png "$scratch/assets/"
 chmod 0755 "$scratch/assets"
 chmod 0644 "$scratch/assets"/*.png
 
 if [ "$profile" = pi3b ]; then
+  operations_sha=$(sha256_file "$repo_root/examples/agent/simulator/assets/operations-overview.png")
   displays='[{"id":"display-main","playlist_id":"main","rotation_interval":"1h"}]'
-  playlists='[{"id":"main","assets":[{"path":"/assets/operations-overview.png"}]}]'
+  playlists="[{\"id\":\"main\",\"assets\":[{\"path\":\"/assets/operations-overview.png\",\"sha256\":\"$operations_sha\"}]}]"
   expected_frames='display-main'
 else
+  operations_sha=$(sha256_file "$repo_root/examples/agent/simulator/assets/operations-overview.png")
+  health_sha=$(sha256_file "$repo_root/examples/agent/simulator/assets/service-health.png")
   displays='[{"id":"display-left","playlist_id":"left","rotation_interval":"1h"},{"id":"display-right","playlist_id":"right","rotation_interval":"1h"}]'
-  playlists='[{"id":"left","assets":[{"path":"/assets/operations-overview.png"}]},{"id":"right","assets":[{"path":"/assets/service-health.png"}]}]'
+  playlists="[{\"id\":\"left\",\"assets\":[{\"path\":\"/assets/operations-overview.png\",\"sha256\":\"$operations_sha\"}]},{\"id\":\"right\",\"assets\":[{\"path\":\"/assets/service-health.png\",\"sha256\":\"$health_sha\"}]}]"
   expected_frames='display-left display-right'
 fi
 
@@ -38,8 +51,8 @@ cat >"$scratch/config.json" <<EOF
 {
   "version": 1,
   "log_level": "info",
-  "cache": {"directory": "/cache", "max_bytes": 52428800},
-  "output": {"directory": "/frames"},
+  "cache": {"directory": "/var/lib/ribbonfish/cache", "max_bytes": 52428800},
+  "output": {"directory": "/var/lib/ribbonfish/frames"},
   "playlists": $playlists,
   "displays": $displays
 }
@@ -47,11 +60,13 @@ EOF
 chmod 0644 "$scratch/config.json"
 
 docker buildx build --platform "$platform" --load --tag "$image" "$repo_root/agent"
+docker volume create "$cache_volume" >/dev/null
+docker volume create "$frames_volume" >/dev/null
 docker run --detach --platform "$platform" --name "$container" \
   --mount "type=bind,src=$scratch/config.json,dst=/config.json,readonly" \
   --mount "type=bind,src=$scratch/assets,dst=/assets,readonly" \
-  --mount "type=bind,src=$scratch/cache,dst=/cache" \
-  --mount "type=bind,src=$scratch/container-frames,dst=/frames" \
+  --mount "type=volume,src=$cache_volume,dst=/var/lib/ribbonfish/cache" \
+  --mount "type=volume,src=$frames_volume,dst=/var/lib/ribbonfish/frames" \
   "$image" -config /config.json >/dev/null
 
 ready=false
@@ -60,7 +75,7 @@ while [ "$attempt" -lt 30 ]; do
   # docker cp writes files as the invoking host user, so owner-only frames
   # produced by the non-root container remain inspectable without loosening
   # the simulator's output permissions.
-  docker cp "$container:/frames/." "$scratch/frames/" >/dev/null 2>&1 || true
+  docker cp "$container:/var/lib/ribbonfish/frames/." "$scratch/frames/" >/dev/null 2>&1 || true
   ready=true
   for display_id in $expected_frames; do
     if [ ! -s "$scratch/frames/$display_id.png" ]; then
@@ -107,6 +122,56 @@ exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$container")
 if [ "$exit_code" != 0 ]; then
   docker logs "$container" >&2 || true
   echo "ARM agent exited with code $exit_code (unexpected exit or failed graceful shutdown)" >&2
+  exit 1
+fi
+
+docker rm "$container" >/dev/null
+docker run --detach --platform "$platform" --name "$container" \
+  --mount "type=bind,src=$scratch/config.json,dst=/config.json,readonly" \
+  --mount "type=volume,src=$cache_volume,dst=/var/lib/ribbonfish/cache" \
+  --mount "type=volume,src=$frames_volume,dst=/var/lib/ribbonfish/frames" \
+  "$image" -config /config.json >/dev/null
+
+ready=false
+attempt=0
+while [ "$attempt" -lt 30 ]; do
+  docker cp "$container:/var/lib/ribbonfish/frames/." "$scratch/offline-frames/" >/dev/null 2>&1 || true
+  if docker logs "$container" 2>&1 | grep -q 'display frame updated'; then
+    ready=true
+    break
+  fi
+  if ! docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null | grep -q true; then
+    docker logs "$container" >&2 || true
+    echo "agent could not restart from its persistent cache without source assets" >&2
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  sleep 1
+done
+
+if [ "$ready" != true ]; then
+  docker logs "$container" >&2 || true
+  echo "timed out waiting for cached frames after an offline restart" >&2
+  exit 1
+fi
+
+for display_id in $expected_frames; do
+  if [ ! -s "$scratch/offline-frames/$display_id.png" ]; then
+    echo "cached restart did not produce a frame for $display_id" >&2
+    exit 1
+  fi
+done
+
+if [ "$profile" = pi4 ] && cmp -s "$scratch/offline-frames/display-left.png" "$scratch/offline-frames/display-right.png"; then
+  echo "offline dual-display profile wrote identical frames for independent playlists" >&2
+  exit 1
+fi
+
+docker stop --time 5 "$container" >/dev/null
+exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$container")
+if [ "$exit_code" != 0 ]; then
+  docker logs "$container" >&2 || true
+  echo "ARM agent offline restart exited with code $exit_code during shutdown" >&2
   exit 1
 fi
 
