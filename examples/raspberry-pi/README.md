@@ -1,6 +1,6 @@
 # Raspberry Pi Docker Compose proof of concept
 
-This directory contains a runnable ARM64 software simulator Compose file and a separate **future hardware deployment template**. Version-tagged OCI images are published for software compatibility testing, but the hardware template is not a working deployment: its environment-variable interface, agent enrollment, DRM/KMS output, and multi-output behavior remain future work.
+This directory contains a runnable ARM64 software simulator Compose file and a separate **future hardware deployment template**. GitHub Releases and version tags are managed manually through the GitHub UI; this repository does not automatically publish OCI images. The hardware template requires a compatible image to be made available separately and is not a working deployment: its environment-variable interface, agent enrollment, DRM/KMS output, and multi-output behavior remain future work.
 
 ## Current agent contract
 
@@ -49,7 +49,7 @@ This identifies the display-capable DRM device on Agentlab; it does not prove th
 
 ## Future hardware setup
 
-Prerequisites are a compatible Raspberry Pi OS Lite installation, Docker Compose, the actual DRM node and group IDs, a published agent image for the host architecture, and a provisioned device identity/token. Before editing the hardware Compose mapping, inspect:
+Prerequisites are a compatible Raspberry Pi OS Lite installation, Docker Compose, the actual DRM node and group IDs, a compatible agent image made available for the host architecture, and a provisioned device identity/token. Before editing the hardware Compose mapping, inspect:
 
 ```sh
 ls -l /dev/dri
