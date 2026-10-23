@@ -6,9 +6,11 @@ on:
       - "agent/**"
       - ".github/workflows/agent.yml"
   pull_request:
-    paths:
-      - "agent/**"
-      - ".github/workflows/agent.yml"
+
+# Keep one run per PR/branch and stop work for superseded commits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -16,9 +18,12 @@ permissions:
 jobs:
   test-and-cross-compile:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: agent/go.mod
           cache-dependency-path: agent/go.mod
@@ -28,9 +33,12 @@ jobs:
       - name: Static analysis
         working-directory: agent
         run: go vet ./...
-      - name: Unit tests
+      - name: Check for known Go vulnerabilities
         working-directory: agent
-        run: go test ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - name: Unit tests with race detector
+        working-directory: agent
+        run: go test -race ./...
       - name: Cross-compile Linux ARMv7
         working-directory: agent
         env:
