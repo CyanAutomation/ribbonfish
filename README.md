@@ -12,6 +12,15 @@ The initial use case is a fleet of Raspberry Pis showing company websites and Up
 
 ---
 
+## How It Works
+
+1. Cloudflare captures each due render variant and stores a versioned screenshot in R2.
+2. Each enrolled device retrieves authenticated configuration and image manifests.
+3. The local Go agent caches images and independently rotates playlists on physical HDMI outputs using DRM/KMS.
+4. Displays continue showing last-known-good content when the network or control plane is unavailable.
+
+**Status:** All capabilities below are proposed; hardware feasibility and Cloudflare timing/cost assumptions remain unverified.
+
 ## Goals
 
 - Run on Raspberry Pi 3B and 4 without a full desktop, Chromium, or a browser extension.
@@ -82,7 +91,14 @@ Cloudflare Browser Run supports screenshot Quick Actions and browser sessions. T
 
 ## Device Software
 
-A small Go agent, running as a `systemd` service on Raspberry Pi OS Lite or another compatible Linux distribution, will:
+### Deployment model
+
+The default deployment is **Docker Compose on Raspberry Pi OS Lite**, with no graphical desktop, Chromium, X11, or Wayland session. GitHub Actions should publish versioned, multi-architecture OCI images (ARM64 and ARMv7 where supported) to GHCR. A native Go binary remains an optional future distribution method.
+
+The Compose deployment should mount only the required DRM/KMS devices (typically under `/dev/dri`), grant the minimum required graphics permissions, persist an image cache, and configure restart-on-failure behaviour. Device access does not guarantee DRM master ownership or multi-output support: validate both on real hardware. Avoid `privileged: true` as a production default. Updates should use pinned image versions or digests, explicit health checks, and rollback procedures; do not depend on mutable `latest` tags.
+
+
+A small Go agent, packaged as a multi-architecture OCI image and deployed primarily with Docker Compose on Raspberry Pi OS Lite or another compatible Linux distribution, will:
 
 1. Identify available DRM/KMS connectors, supported modes, and output identities.
 2. Authenticate to the control plane and retrieve versioned configuration.
@@ -96,6 +112,10 @@ A small Go agent, running as a `systemd` service on Raspberry Pi OS Lite or anot
 An alternative display backend may be provided if necessary; the core agent must not depend on any specific renderer.
 
 ---
+
+## Render Variants
+
+A **site** identifies a source URL; a **render variant** identifies a particular screenshot contract for that site. Variants may differ in viewport dimensions, authentication context, wait policy, image format, and capture cadence. Playlists reference variants rather than assuming every site has one global screenshot. A variant may be reused across displays only when its rendering inputs and authorisation scope match.
 
 ## Three Independent Clocks
 
@@ -119,29 +139,29 @@ These are separate settings. A display can rotate between two cached screenshots
 
 ```yaml
 sites:
-  - id: future-tools-news
-    url: https://futuretools.io/news
-    capture_interval: 24h
-    viewport:
-      width: 1920
-      height: 1080
-    wait_strategy: network-idle-or-timeout
+  - id: myairops
+    url: https://myairops.com
+    variants:
+      - id: myairops-landscape
+        capture_interval: 24h
+        viewport: { width: 1920, height: 1080 }
+        wait_strategy: network-idle-or-timeout
 
   - id: uptime-kuma
     url: https://status.example.com
-    capture_interval: 30s
-    viewport:
-      width: 1920
-      height: 1080
-    wait_strategy: selector-or-timeout
+    variants:
+      - id: uptime-landscape
+        capture_interval: 30s
+        viewport: { width: 1920, height: 1080 }
+        wait_strategy: selector-or-timeout
 
 playlists:
   - id: office-rotation
     entries:
-      - site: future-tools
+      - variant: myairops-landscape
         display_duration: 60s
 
-      - site: uptime-kuma
+      - variant: uptime-landscape
         display_duration: 60s
 
 devices:
@@ -174,7 +194,7 @@ Credentials can be rotated or revoked without reimaging the device.
 
 ### 2. Schedule and Capture a Site
 
-A scheduler checks which site/viewport variants are due, claims each due job without duplication, and submits work to a queue.
+A scheduler checks which render variants are due, atomically claims each due job, and submits work to a queue. Queue delivery can be at least once, so consumers must be idempotent and enforce a per-variant concurrency policy. The scheduler must define catch-up behaviour, bounded retries, and tolerable timing drift. Cloudflare Cron Triggers alone do not provide a 30-second cadence; evaluate Durable Object alarms or another supported sub-minute dispatcher, with periodic reconciliation and measured timing accuracy.
 
 The renderer:
 
@@ -268,8 +288,10 @@ All commands must be explicitly allow-listed, authenticated, and auditable.
 - Isolate credentials for private pages; do not reuse protected screenshots across unrelated access scopes.
 - Do not expose R2 objects publicly by default; use authenticated delivery or narrowly scoped expiring URLs.
 - Validate image dimensions, formats, sizes, and hashes before decoding on devices.
-- Run the agent with minimal privileges; document DRM permissions and systemd hardening.
+- Run the agent with minimal privileges; document DRM permissions, container device mapping, and container hardening.
 - Signed, reproducible releases and an explicit update/rollback strategy.
+- Distinct administrator authentication, one-time device enrolment, device-scoped identity and image authorisation.
+- Prevent replayed remote commands and unapproved software updates; never grant a device access to another device's protected assets.
 
 ---
 
@@ -318,6 +340,10 @@ Device count should not multiply rendering work when assets can be safely shared
 > This is a proposed monorepo structure. Boundaries and tooling should be adjusted following the first proof of concept.
 
 ---
+
+## Hardware Acceptance Criteria
+
+Phase 0 must demonstrate a container displaying a local PNG via DRM/KMS on Pi 3B, and different images on both Pi 4 HDMI outputs. Test least-privilege graphics access, scaling/aspect ratio, rotation, hotplug, monitor sleep/wake, power loss, restart and offline caching. Record CPU, RAM, image-switch latency and stability before setting numerical performance targets. Smooth, tear-free transitions are a goal subject to hardware validation.
 
 ## Roadmap
 
@@ -422,3 +448,6 @@ The repository should ultimately include:
 5. Device authentication, enrollment, and credential rotation.
 6. Image format, compression, scaling, storage retention, and delivery method.
 7. Whether a shared 30-second screenshot is sufficiently fresh for operational monitoring.
+8. Container permissions and DRM master ownership on Pi 3B and Pi 4.
+9. Sub-minute dispatcher implementation, concurrency limits and capture cost ceilings.
+10. Administrator authentication and device-scoped asset delivery.
