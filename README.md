@@ -68,10 +68,15 @@ flowchart TD
     Pi1 --> DRM1[DRM/KMS: HDMI]
     Pi2 --> DRM2[DRM/KMS: HDMI 1 and 2]
 
-    API -. Optional Push .-> DO[Durable Object: Device Coordination]
 ```
 
 ---
+
+## Scheduling Constraint
+
+Ribbonfish deliberately supports **no screenshot capture interval shorter than 60 seconds**. A single once-per-minute Cloudflare Cron Trigger dispatches due work using D1 scheduling state and Queues. This avoids sub-minute timers, delayed-message scheduling loops, and Durable Objects. Capture intervals are configuration values, not promises of exact wall-clock execution; browser rendering and device synchronisation add further freshness latency. Reject capture intervals below `60s` at the API and configuration-validation boundaries.
+
+**Durable Objects are explicitly out of scope**, including for device presence, push commands, and display coordination. Devices poll for configuration and manifests, and all playlist rotation is local. Reconsidering this decision requires a new, demonstrated product requirement rather than speculative extensibility.
 
 ## Cloud Services
 
@@ -82,8 +87,7 @@ flowchart TD
 | Browser Run | Headless page rendering and screenshot capture, with explicit viewport and load/wait policies |
 | R2 | Versioned screenshot objects, retention, and last-known-good images |
 | Queues | Asynchronous capture jobs, retries, and failure isolation |
-| Scheduled Worker | Detect due captures at a practical polling cadence and enqueue deduplicated work |
-| Durable Objects (optional) | Real-time device presence and low-latency commands; not required for local rotation |
+| Scheduled Worker (Cron Trigger) | Run every minute, check D1 for due variants, and enqueue deduplicated capture jobs |
 
 Cloudflare Browser Run supports screenshot Quick Actions and browser sessions. The renderer implementation should be replaceable, and all quotas, costs, scheduling limits, and authenticated-page capabilities must be validated before production use.
 
@@ -121,7 +125,7 @@ A **site** identifies a source URL; a **render variant** identifies a particular
 
 ### Capture Interval
 
-How frequently Cloudflare creates a fresh screenshot of a site/variant.
+How frequently Cloudflare creates a fresh screenshot of a site/variant. **Minimum supported interval: 60 seconds.** Intervals must be at least one minute and should be expressed as whole-minute multiples; longer intervals (such as `24h`) are supported. Capture timing is best-effort, not a real-time guarantee.
 
 ### Rotation Duration
 
@@ -131,7 +135,7 @@ How long an image remains visible before the device advances to the next playlis
 
 How frequently the agent checks for configuration and updated image manifests.
 
-These are separate settings. A display can rotate between two cached screenshots every 20 seconds even when one screenshot is captured daily and another every 30 seconds.
+These are separate settings. A display can rotate between two cached screenshots every 20 seconds even when one screenshot is captured daily and another every 60 seconds. The 60-second minimum applies **only to screenshot capture**, not to local playlist dwell times or device synchronisation.
 
 ---
 
@@ -151,7 +155,7 @@ sites:
     url: https://status.example.com
     variants:
       - id: uptime-landscape
-        capture_interval: 30s  # Requires a sub-minute dispatcher (e.g. Durable Object alarms); Cloudflare Cron Triggers alone cannot provide this cadence — open design decision
+        capture_interval: 60s
         viewport: { width: 1920, height: 1080 }
         wait_strategy: selector-or-timeout
 
@@ -178,7 +182,7 @@ devices:
 
 > This is an illustrative product schema, not an implemented configuration format.
 
-Physical connector names and stable display identification will be validated against actual devices. A 30-second capture interval is a target, not a guarantee of precisely timed capture or delivery. **Note:** Cloudflare Cron Triggers alone cannot provide a sub-minute cadence; achieving `30s` requires a Durable Object alarm or an equivalent sub-minute dispatcher, which remains an open design decision.
+Physical connector names and stable display identification will be validated against actual devices. The shortest supported capture interval is `60s`; captures and delivery are best-effort and may be delayed by scheduler, queue, and rendering latency.
 
 ---
 
@@ -194,7 +198,7 @@ Credentials can be rotated or revoked without reimaging the device.
 
 ### 2. Schedule and Capture a Site
 
-A scheduler checks which render variants are due, atomically claims each due job, and submits work to a queue. Queue delivery can be at least once, so consumers must be idempotent and enforce a per-variant concurrency policy. The scheduler must define catch-up behaviour, bounded retries, and tolerable timing drift. Cloudflare Cron Triggers alone do not provide a 30-second cadence; evaluate Durable Object alarms or another supported sub-minute dispatcher, with periodic reconciliation and measured timing accuracy.
+A Cloudflare Cron Trigger runs once per minute (`* * * * *`). Its Worker queries D1 for due render variants, atomically claims eligible jobs, and submits them to a Queue. The dispatcher uses stored `next_due_at` timestamps rather than one Cron Trigger per site. Queue delivery can be at least once, so consumers must be idempotent and enforce per-variant concurrency limits. Missed ticks are reconciled on subsequent runs; overdue jobs must not create unbounded backlogs. Define bounded retries, capture timeouts, and tolerable timing drift. **No sub-minute scheduler or Durable Objects are required.**
 
 The renderer:
 
@@ -313,7 +317,7 @@ Capture costs must be modeled using actual browser time, capture frequency, and 
 
 For example:
 
-- One site captured every 30 seconds requires up to **2,880 captures/day** before retries.
+- One site captured every 60 seconds requires up to **1,440 captures/day** before retries.
 - One site captured daily requires **1 capture/day**.
 
 Device count should not multiply rendering work when assets can be safely shared.
@@ -372,7 +376,8 @@ Add:
 
 - D1 site configuration
 - Independent per-site capture intervals
-- Due-job scheduling
+- One-minute Cron Trigger and D1-backed due-job scheduling
+- Validation rejecting capture intervals below 60 seconds
 - Queues
 - Retry policies
 - Last-known-good manifests
@@ -402,7 +407,6 @@ Add:
 
 Explore:
 
-- Durable Object push coordination
 - Alternative renderers
 - Native data-to-image dashboards
 - Wider Linux hardware support
@@ -443,11 +447,11 @@ The repository should ultimately include:
 
 1. DRM/KMS library and image-decoding strategy for Go, including multi-output support.
 2. Stable physical display identity across reboot and connector reordering.
-3. Minimum practical capture cadence and scheduling mechanism for 30-second sites.
+3. Cron-based due-job claim strategy, handling of missed minutes, and acceptable capture timing drift.
 4. Browser Run Quick Actions versus persistent sessions for complex or authenticated pages.
 5. Device authentication, enrollment, and credential rotation.
 6. Image format, compression, scaling, storage retention, and delivery method.
-7. Whether a shared 30-second screenshot is sufficiently fresh for operational monitoring.
+7. Whether a shared 60-second screenshot is sufficiently fresh for operational monitoring.
 8. Container permissions and DRM master ownership on Pi 3B and Pi 4.
-9. Sub-minute dispatcher implementation, concurrency limits and capture cost ceilings.
+9. Capture concurrency limits, missed-job reconciliation, and capture cost ceilings.
 10. Administrator authentication and device-scoped asset delivery.
