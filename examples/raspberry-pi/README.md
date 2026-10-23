@@ -2,6 +2,17 @@
 
 This directory describes the **intended deployment contract** for Ribbonfish's lightweight Go display agent on Raspberry Pi OS Lite. It is a **template, not a working deployment**: the OCI image, environment variable interface, agent enrolment, DRM/KMS backend and multi-output behaviour are not yet implemented or validated.
 
+## Compatibility with the current Go agent
+
+The local Go agent now supports a versioned JSON file passed with
+`ribbonfish -config <path>`, filesystem image caching, and a PNG simulator.
+It does **not** yet read the `RIBBONFISH_API_URL`, `RIBBONFISH_DEVICE_ID`,
+`RIBBONFISH_TOKEN_FILE`, or `RIBBONFISH_CACHE_DIR` values below, enroll with a
+control plane, or present frames through `/dev/dri`. The Compose file therefore
+remains a future hardware deployment template and is not a way to run the
+current simulator. Use [`../agent/simulator/README.md`](../agent/simulator/README.md)
+for the runnable local demonstration.
+
 ## Files
 
 - `docker-compose.yaml`: one headless agent service, no browser or desktop on the Pi
