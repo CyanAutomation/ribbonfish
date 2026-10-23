@@ -221,6 +221,39 @@ The consumer processes **one message and awaits the entire browser capture and p
 
 ---
 
+## Optional JEV Capture Optimiser
+
+JEV 1.14 can be evaluated as a **low-cost, optional decision engine** to reduce unnecessary Browser Run activity, improve cache reuse and make retries more resilient. Its main input should be **compact structured operational data**, not an image on every capture. Image assessment is an optional later experiment, not a prerequisite.
+
+The optimiser sits **after deterministic eligibility checks and before the single serial capture queue**:
+
+`Cron + D1 due variants → hard rules/cache probes → optional JEV decision → serial Queue → Browser Run → R2 → device`
+
+### Decision scope
+
+- **Adaptive scheduling:** consider change history, prior capture durations, recent failures, cached-image age, available browser-time budget and queue pressure to choose whether to capture now or defer. Respect the configured freshness ceiling and never schedule captures more frequently than 60 seconds.
+- **Cache reuse:** prefer inexpensive deterministic checks first, such as trusted `ETag`/`Last-Modified` validators or a suitable lightweight source probe. A static HTML response or cached screenshot **cannot prove** a dynamic dashboard is unchanged; do not infer freshness from it.
+- **Failure recovery:** classify bounded next actions such as `retry`, `defer`, `use_cache` or `escalate`, using error category, recent failures, cache age and quota state.
+- **Queue prioritisation:** rank eligible variants when serial capture capacity or browser budget is scarce, without starving other sites or violating hard freshness requirements.
+- **Optional image-aware decisions:** explore JEV image input for visual-change or cache-suitability assessment only when a screenshot already exists or the expected savings justify an additional analysis. Do not use image analysis to imply that an unobserved live site has not changed.
+
+### Hard constraints and safe fallback
+
+- **The configured interval is a freshness requirement by default**, not permission to defer indefinitely. Adaptive scheduling is explicitly opt-in per variant, with a user-defined maximum screenshot age and a bounded forced-refresh policy. If a site must refresh every minute, JEV cannot skip that capture merely to save money; budget exhaustion may still make the requirement unattainable and must be reported.
+- Deterministic validation and provider quotas **always override** JEV. JEV must not bypass the global one-at-a-time queue, 60-second minimum, retention limits, authorisation boundaries or the daily browser-time budget.
+- Validate JEV outputs against a small typed decision schema; reject invalid, stale, low-confidence or timed-out recommendations. Keep strict limits on JEV request frequency, token usage, latency and total spend so optimisation does not cost more than it saves.
+- **Fail open to deterministic scheduling**, subject to hard quota and safety limits, when JEV is unavailable. A JEV outage must not stop device playback or prevent otherwise permitted captures.
+- Do not send authenticated/private screenshot pixels or sensitive dashboard content to JEV without explicit opt-in and appropriate data-handling controls. Prefer metadata-only decisions.
+
+### Delivery approach (no shadow-mode phase)
+
+1. **Deterministic foundation:** implement budget enforcement, queue coalescing, reliable freshness timestamps, trusted conditional HTTP probes where applicable, backoff and observability.
+2. **Direct, guarded JEV integration:** enable opt-in adaptive decisions immediately behind typed validation, strict timeouts, hard-rule overrides and a feature flag/kill switch. Roll out to a small set of non-critical variants with conservative deferral limits; do not introduce a separate shadow-mode stage.
+3. **Measure and refine:** compare browser seconds per 1,000 capture opportunities, actual screenshot age, freshness breaches, retries avoided, queue wait, JEV latency and total combined Cloudflare/JEV cost. Disable JEV if the net benefit is negative.
+4. **Optional image experiment:** assess whether JEV 1.14 image inputs improve decisions enough to justify their latency, cost and experimental reliability characteristics.
+
+---
+
 ## Core Workflows
 
 ### 1. Provision a Device
@@ -431,6 +464,7 @@ Add:
 - Queues configured for one-message batches and a single concurrent capture consumer
 - Global serialisation of scheduled, manual and retried captures
 - Daily browser-time budget and renderer-specific rate limiting
+- Optional JEV-based capture optimisation with deterministic guardrails and opt-in adaptive freshness
 - Per-variant backlog coalescing and quota-aware defer/skip behaviour
 - Retry policies
 - Last-known-good manifests
