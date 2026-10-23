@@ -2,6 +2,8 @@ name: ARM container smoke test
 
 on:
   push:
+    branches:
+      - main
     paths:
       - "agent/**"
       - "examples/agent/simulator/**"
@@ -13,6 +15,11 @@ on:
       - "examples/agent/simulator/**"
       - "examples/raspberry-pi/**"
       - ".github/workflows/arm-container-smoke.yml"
+
+# Keep one run per PR or main branch and stop superseded QEMU work.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

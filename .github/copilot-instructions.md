@@ -108,7 +108,8 @@ Variants are **keyed by rendering inputs + access permissions**; reuse across di
 
 ### Deployment Model
 - **Default:** Docker Compose on Raspberry Pi OS Lite (no desktop, Chromium, X11, Wayland)
-- **Images:** Multi-architecture OCI images published to GHCR (ARM64 and ARMv7)
+- **Images:** Hardware template targets multi-architecture OCI images (ARM64 and ARMv7); no automated GHCR publishing workflow is configured
+- **Releases:** Create GitHub Releases and version tags manually through the GitHub UI
 - **Updates:** Pinned image versions/digests, explicit health checks, rollback procedures; avoid mutable `latest` tags
 
 ### Agent Responsibilities
@@ -143,7 +144,7 @@ Variants are **keyed by rendering inputs + access permissions**; reuse across di
 - Authenticated/narrowly-scoped R2 delivery (not public by default)
 - Validate image dimensions, formats, sizes, and hashes before decoding on device
 - Minimal privileges for agent; document DRM permissions and container hardening
-- Signed, reproducible releases with explicit update/rollback strategy
+- Signed, reproducible release artifacts with releases and version tags managed manually through the GitHub UI; explicit update/rollback strategy
 - Prevent command replay; no unapproved software updates
 - Devices cannot access other devices' protected assets
 
