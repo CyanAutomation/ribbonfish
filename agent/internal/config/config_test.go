@@ -46,10 +46,12 @@ func TestValidateRejectsInvalidContracts(t *testing.T) {
 		{name: "zero cache limit", mutate: func(c *Config) { c.Cache.MaxBytes = 0 }},
 		{name: "empty output directory", mutate: func(c *Config) { c.Output.Directory = "" }},
 		{name: "duplicate playlist", mutate: func(c *Config) { c.Playlists = append(c.Playlists, c.Playlists[0]) }},
+		{name: "unsafe playlist id", mutate: func(c *Config) { c.Playlists[0].ID = "../left" }},
 		{name: "playlist without assets", mutate: func(c *Config) { c.Playlists[0].Assets = nil }},
 		{name: "empty asset path", mutate: func(c *Config) { c.Playlists[0].Assets[0].Path = "" }},
 		{name: "invalid asset digest", mutate: func(c *Config) { c.Playlists[0].Assets[0].SHA256 = "abc" }},
 		{name: "duplicate display", mutate: func(c *Config) { c.Displays = append(c.Displays, c.Displays[0]) }},
+		{name: "unsafe display id", mutate: func(c *Config) { c.Displays[0].ID = "../left" }},
 		{name: "unknown playlist", mutate: func(c *Config) { c.Displays[0].PlaylistID = "missing" }},
 		{name: "invalid interval", mutate: func(c *Config) { c.Displays[0].RotationInterval = "0s" }},
 	}
