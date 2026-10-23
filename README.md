@@ -143,10 +143,10 @@ These are separate settings. A display can rotate between two cached screenshots
 
 ```yaml
 sites:
-  - id: myairops
-    url: https://myairops.com
+  - id: futuretools
+    url: https://futuretools.io/news
     variants:
-      - id: myairops-landscape
+      - id: future-tools-landscape
         capture_interval: 24h
         viewport: { width: 1920, height: 1080 }
         wait_strategy: network-idle-or-timeout
@@ -162,7 +162,7 @@ sites:
 playlists:
   - id: office-rotation
     entries:
-      - variant: myairops-landscape
+      - variant: future-tools-landscape
         display_duration: 60s
 
       - variant: uptime-landscape
