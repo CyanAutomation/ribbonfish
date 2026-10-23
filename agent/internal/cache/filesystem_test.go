@@ -115,10 +115,8 @@ func TestFileStoreEvictsLeastRecentlyUsedUnretainedAsset(t *testing.T) {
 	red := pngBytes(t, color.RGBA{R: 255, A: 255})
 	green := pngBytes(t, color.RGBA{G: 255, A: 255})
 	blue := pngBytes(t, color.RGBA{B: 255, A: 255})
-	if len(red) != len(green) || len(red) != len(blue) {
-		t.Fatal("fixture PNG lengths differ; adjust cache limit test")
-	}
-	store, err := NewFileStore(t.TempDir(), int64(len(red)*2))
+	limit := len(red) + max(len(green), len(blue))
+	store, err := NewFileStore(t.TempDir(), int64(limit))
 	if err != nil {
 		t.Fatal(err)
 	}
