@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -21,6 +22,16 @@ func validConfig() Config {
 func TestValidateAcceptsValidConfig(t *testing.T) {
 	if err := validConfig().Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRequiresDisplayPlaylistID(t *testing.T) {
+	cfg := validConfig()
+	cfg.Displays[0].PlaylistID = " "
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "displays[0].playlist_id is required") {
+		t.Fatalf("Validate() error = %v, want required playlist_id diagnostic", err)
 	}
 }
 
