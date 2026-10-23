@@ -21,6 +21,10 @@ The initial use case is a fleet of Raspberry Pis showing company websites and Up
 
 **Implementation status:** The local agent can load configured image files, cache them, rotate independent playlists, and write simulated display frames without network access. The control plane, remote synchronization, and physical DRM/KMS output described below remain proposed; hardware feasibility and Cloudflare timing/cost assumptions remain unverified.
 
+The agent can also list Linux DRM connector metadata from sysfs with
+`ribbonfish -list-displays`. This is discovery only and does not verify DRM
+permissions or drive a display.
+
 ## Local Agent Demonstration
 
 Run the two-display offline simulator using the instructions in
