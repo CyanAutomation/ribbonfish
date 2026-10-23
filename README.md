@@ -111,7 +111,7 @@ Cloudflare Browser Run supports screenshot Quick Actions and browser sessions. T
 
 ### Deployment model
 
-The default deployment is **Docker Compose on Raspberry Pi OS Lite**, with no graphical desktop, Chromium, X11, or Wayland session. GitHub Actions should publish versioned, multi-architecture OCI images (ARM64 and ARMv7 where supported) to GHCR. A native Go binary remains an optional future distribution method.
+The default deployment is **Docker Compose on Raspberry Pi OS Lite**, with no graphical desktop, Chromium, X11, or Wayland session. Pushing a `vMAJOR.MINOR.PATCH` tag publishes a versioned multi-architecture OCI image for ARM64 and ARMv7 to GHCR. This image remains a software compatibility artifact: the hardware environment interface, agent enrollment, and DRM/KMS output are not implemented. A native Go binary remains an optional future distribution method.
 
 The Compose deployment should mount only the required DRM/KMS devices (typically under `/dev/dri`), grant the minimum required graphics permissions, persist an image cache, and configure restart-on-failure behaviour. Device access does not guarantee DRM master ownership or multi-output support: validate both on real hardware. Avoid `privileged: true` as a production default. Updates should use pinned image versions or digests, explicit health checks, and rollback procedures; do not depend on mutable `latest` tags.
 
