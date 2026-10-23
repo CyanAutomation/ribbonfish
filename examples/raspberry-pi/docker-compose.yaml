@@ -19,11 +19,12 @@ services:
     # PoC assumption, not a universal Pi 3B / Pi 4 mapping.
     # Inspect /dev/dri and /sys/class/drm on the target host first.
     devices:
-      - /dev/dri/card0:/dev/dri/card0
+      - "${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE}:${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE}"
 
     # Set to the actual host group ID with access to the DRM card device.
     group_add:
       - "${RIBBONFISH_DRM_GID:?Set RIBBONFISH_DRM_GID}"
+      - "${RIBBONFISH_TOKEN_GID:?Set RIBBONFISH_TOKEN_GID}"
 
     volumes:
       - ribbonfish-cache:/var/lib/ribbonfish/cache

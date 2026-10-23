@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "log_level": "info",
+  "cache": {
+    "directory": "/var/lib/ribbonfish/cache",
+    "max_bytes": 52428800
+  },
+  "output": {
+    "directory": "/var/lib/ribbonfish/frames"
+  },
+  "playlists": [
+    {
+      "id": "operations",
+      "assets": [
+        { "path": "/assets/operations-overview.png" },
+        { "path": "/assets/service-health.png" }
+      ]
+    },
+    {
+      "id": "platform",
+      "assets": [
+        { "path": "/assets/platform-status.png" },
+        { "path": "/assets/deployment-pipeline.png" }
+      ]
+    }
+  ],
+  "displays": [
+    {
+      "id": "display-left",
+      "playlist_id": "operations",
+      "rotation_interval": "15s"
+    },
+    {
+      "id": "display-right",
+      "playlist_id": "platform",
+      "rotation_interval": "9s"
+    }
+  ]
+}
