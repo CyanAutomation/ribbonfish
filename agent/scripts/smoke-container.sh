@@ -98,7 +98,7 @@ docker stop --time 5 "$container" >/dev/null
 exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$container")
 if [ "$exit_code" != 0 ]; then
   docker logs "$container" >&2 || true
-  echo "ARM agent did not shut down cleanly (exit code $exit_code)" >&2
+  echo "ARM agent exited with code $exit_code (unexpected exit or failed graceful shutdown)" >&2
   exit 1
 fi
 
