@@ -1,6 +1,6 @@
 # Ribbonfish
 
-> **Project status: concept / proposed architecture.** No production implementation is implied by this document.
+> **Project status:** A hardware-independent Go agent foundation, offline playlist/cache, and software display simulator are implemented. Cloudflare services and Raspberry Pi DRM/KMS output remain proposed and unvalidated.
 
 ## Render Once. Display Anywhere.
 
@@ -19,7 +19,14 @@ The initial use case is a fleet of Raspberry Pis showing company websites and Up
 3. The local Go agent caches images and independently rotates playlists on physical HDMI outputs using DRM/KMS.
 4. Displays continue showing last-known-good content when the network or control plane is unavailable.
 
-**Status:** All capabilities below are proposed; hardware feasibility and Cloudflare timing/cost assumptions remain unverified.
+**Implementation status:** The local agent can load configured image files, cache them, rotate independent playlists, and write simulated display frames without network access. The control plane, remote synchronization, and physical DRM/KMS output described below remain proposed; hardware feasibility and Cloudflare timing/cost assumptions remain unverified.
+
+## Local Agent Demonstration
+
+Run the two-display offline simulator using the instructions in
+[`examples/agent/simulator/README.md`](examples/agent/simulator/README.md).
+It uses local sample images and writes current frames to PNG files. Cross-
+compilation for Raspberry Pi architectures does not claim hardware support.
 
 ## Goals
 
