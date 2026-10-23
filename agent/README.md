@@ -58,6 +58,10 @@ exercise the Pi's native Docker Engine and kernel without a connected monitor;
 the check only writes PNG files and does not access DRM.
 
 GitHub Actions runs both checks on changes to the agent, simulator, or Pi
-examples, and validates both Raspberry Pi Compose files.
-The container is a local compatibility artifact; release publishing and
-physical Pi acceptance remain separate work.
+examples, and validates both Raspberry Pi Compose files. GitHub Releases and
+version tags are managed manually through the GitHub UI. This repository does
+not automatically build or publish an image to GHCR; a compatible ARMv7 or
+ARM64 image must be made available separately before using the hardware
+template. The image is a software compatibility artifact; it does not
+implement the proposed hardware environment interface or physical display
+output. Pi acceptance remains separate work.
