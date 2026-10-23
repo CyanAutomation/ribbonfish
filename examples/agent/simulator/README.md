@@ -30,6 +30,10 @@ sh agent/scripts/smoke-container.sh linux/arm/v7 pi3b
 sh agent/scripts/smoke-container.sh linux/arm64 pi4
 ```
 
+On an amd64 machine, the container smoke harness can also be checked without
+QEMU using `sh agent/scripts/smoke-container.sh linux/amd64 pi4`. That confirms
+the container's simulator behavior but does not test ARM compatibility.
+
 The checks verify that the ARM image starts, loads the configured local PNGs,
 and writes valid output frames. They do not emulate Raspberry Pi OS or validate
 DRM/KMS, GPIO, display timing, or physical hardware behavior. CI runs the same

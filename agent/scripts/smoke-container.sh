@@ -1,10 +1,10 @@
 #!/bin/sh
 set -eu
 
-platform=${1:?usage: smoke-container.sh <linux/arm/v7|linux/arm64> <pi3b|pi4>}
-profile=${2:?usage: smoke-container.sh <linux/arm/v7|linux/arm64> <pi3b|pi4>}
+platform=${1:?usage: smoke-container.sh <linux/amd64|linux/arm/v7|linux/arm64> <pi3b|pi4>}
+profile=${2:?usage: smoke-container.sh <linux/amd64|linux/arm/v7|linux/arm64> <pi3b|pi4>}
 case "$platform:$profile" in
-  linux/arm/v7:pi3b|linux/arm64:pi4) ;;
+  linux/arm/v7:pi3b|linux/arm64:pi4|linux/amd64:pi4) ;;
   *) echo "unsupported platform/profile pair: $platform:$profile" >&2; exit 2 ;;
 esac
 
@@ -18,8 +18,11 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-mkdir -p "$scratch/cache" "$scratch/frames"
-chmod 0777 "$scratch/cache" "$scratch/frames"
+mkdir -p "$scratch/cache" "$scratch/frames" "$scratch/container-frames" "$scratch/assets"
+chmod 0777 "$scratch/cache" "$scratch/container-frames"
+cp "$repo_root"/examples/agent/simulator/assets/*.png "$scratch/assets/"
+chmod 0755 "$scratch/assets"
+chmod 0644 "$scratch/assets"/*.png
 
 if [ "$profile" = pi3b ]; then
   displays='[{"id":"display-main","playlist_id":"main","rotation_interval":"1h"}]'
@@ -41,18 +44,23 @@ cat >"$scratch/config.json" <<EOF
   "displays": $displays
 }
 EOF
+chmod 0644 "$scratch/config.json"
 
 docker buildx build --platform "$platform" --load --tag "$image" "$repo_root/agent"
 docker run --detach --platform "$platform" --name "$container" \
   --mount "type=bind,src=$scratch/config.json,dst=/config.json,readonly" \
-  --mount "type=bind,src=$repo_root/examples/agent/simulator/assets,dst=/assets,readonly" \
+  --mount "type=bind,src=$scratch/assets,dst=/assets,readonly" \
   --mount "type=bind,src=$scratch/cache,dst=/cache" \
-  --mount "type=bind,src=$scratch/frames,dst=/frames" \
+  --mount "type=bind,src=$scratch/container-frames,dst=/frames" \
   "$image" -config /config.json >/dev/null
 
 ready=false
 attempt=0
 while [ "$attempt" -lt 30 ]; do
+  # docker cp writes files as the invoking host user, so owner-only frames
+  # produced by the non-root container remain inspectable without loosening
+  # the simulator's output permissions.
+  docker cp "$container:/frames/." "$scratch/frames/" >/dev/null 2>&1 || true
   ready=true
   for display_id in $expected_frames; do
     if [ ! -s "$scratch/frames/$display_id.png" ]; then
@@ -102,4 +110,4 @@ if [ "$exit_code" != 0 ]; then
   exit 1
 fi
 
-echo "ARM container smoke check passed: $platform ($profile)"
+echo "Container smoke check passed: $platform ($profile)"
