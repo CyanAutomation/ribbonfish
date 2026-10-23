@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestSimulatorWritesIndependentAtomicFrames(t *testing.T) {
@@ -95,6 +97,64 @@ func TestSimulatorPublishesObservableStateAndUpdates(t *testing.T) {
 	}
 }
 
+func TestSimulatorKeepsSnapshotsAndOtherDisplaysResponsiveDuringFrameIO(t *testing.T) {
+	backend, err := NewSimulator(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+
+	frame := &blockingImage{entered: make(chan struct{}), release: make(chan struct{})}
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(frame.release) })
+	presentDone := make(chan error, 1)
+	go func() { presentDone <- backend.Present(context.Background(), "display-left", frame) }()
+	select {
+	case <-frame.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("PNG encoding did not reach the blocking pixel")
+	}
+
+	type snapshotResult struct {
+		state Snapshot
+		ok    bool
+	}
+	snapshotDone := make(chan snapshotResult, 1)
+	go func() {
+		state, ok := backend.Snapshot("display-left")
+		snapshotDone <- snapshotResult{state: state, ok: ok}
+	}()
+	select {
+	case got := <-snapshotDone:
+		if got.ok {
+			t.Fatalf("Snapshot() = %#v, true before first frame was published", got.state)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Snapshot() blocked during PNG encoding")
+	}
+
+	otherDone := make(chan error, 1)
+	go func() {
+		otherDone <- backend.Present(context.Background(), "display-right", solidFrame(color.RGBA{B: 90, A: 255}))
+	}()
+	select {
+	case err := <-otherDone:
+		if err != nil {
+			t.Fatalf("Present(display-right) error = %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("independent display write blocked behind PNG encoding")
+	}
+
+	releaseOnce.Do(func() { close(frame.release) })
+	if err := <-presentDone; err != nil {
+		t.Fatalf("Present(display-left) error = %v", err)
+	}
+	if _, ok := backend.Snapshot("display-left"); !ok {
+		t.Fatal("Snapshot(display-left) is missing after Present completed")
+	}
+}
+
 func TestSimulatorRejectsUnsafeDisplayIDs(t *testing.T) {
 	backend, err := NewSimulator(t.TempDir())
 	if err != nil {
@@ -116,4 +176,20 @@ func solidFrame(value color.RGBA) *image.RGBA {
 		}
 	}
 	return frame
+}
+
+type blockingImage struct {
+	entered    chan struct{}
+	release    chan struct{}
+	enteredOne sync.Once
+}
+
+func (*blockingImage) ColorModel() color.Model { return color.RGBAModel }
+
+func (*blockingImage) Bounds() image.Rectangle { return image.Rect(0, 0, 1, 1) }
+
+func (frame *blockingImage) At(_, _ int) color.Color {
+	frame.enteredOne.Do(func() { close(frame.entered) })
+	<-frame.release
+	return color.RGBA{R: 1, A: 255}
 }

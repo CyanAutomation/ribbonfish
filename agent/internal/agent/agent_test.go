@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/CyanAutomation/ribbonfish/agent/internal/cache"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/config"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/display/simulator"
+	"github.com/CyanAutomation/ribbonfish/agent/internal/playlist"
 )
 
 func TestAgentRotatesDisplaysIndependentlyAndSkipsBadAssets(t *testing.T) {
@@ -200,6 +202,115 @@ func TestAgentWritesTwoDisplaysThroughSoftwareBackend(t *testing.T) {
 	_ = imageCache.Close()
 }
 
+func TestRunDisplayUsesOneClockSampleForNextBoundaryAndWait(t *testing.T) {
+	dir := t.TempDir()
+	store, err := cache.NewFileStore(filepath.Join(dir, "cache"), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	asset, err := store.Put(context.Background(), bytes.NewReader(pngData(t, color.RGBA{R: 40, A: 255})), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor := time.Unix(0, 0).UTC()
+	schedule := playlist.Schedule{
+		DisplayID: "display",
+		Interval:  10 * time.Second,
+		Entries:   []playlist.Entry{{SHA256: asset.SHA256, Path: "fixture.png"}},
+		Anchor:    anchor,
+	}
+	engine, err := playlist.New([]playlist.Schedule{schedule})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := &sequenceClock{
+		values: []time.Time{anchor, anchor.Add(9 * time.Second), anchor.Add(11 * time.Second)},
+		waits:  make(chan time.Duration, 1),
+	}
+	output := &recordingOutput{frames: make(chan frameEvent, 1)}
+	app := &Agent{
+		cache:     store,
+		output:    output,
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		clock:     clock,
+		scheduler: engine,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		app.runDisplay(ctx, schedule)
+		close(done)
+	}()
+	_ = receiveFrame(t, output.frames)
+
+	select {
+	case got := <-clock.waits:
+		if got != time.Second {
+			t.Errorf("wait until next playlist boundary = %v, want 1s", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("display loop did not schedule its next wait")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("display loop did not stop after cancellation")
+	}
+}
+
+func TestRunDisplayTreatsDeadlineAsCleanShutdown(t *testing.T) {
+	dir := t.TempDir()
+	store, err := cache.NewFileStore(filepath.Join(dir, "cache"), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	asset, err := store.Put(context.Background(), bytes.NewReader(pngData(t, color.RGBA{G: 40, A: 255})), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor := time.Unix(0, 0).UTC()
+	schedule := playlist.Schedule{
+		DisplayID: "display",
+		Interval:  time.Minute,
+		Entries:   []playlist.Entry{{SHA256: asset.SHA256, Path: "fixture.png"}},
+		Anchor:    anchor,
+	}
+	engine, err := playlist.New([]playlist.Schedule{schedule})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := newTestClock(anchor)
+	output := &recordingOutput{frames: make(chan frameEvent, 1)}
+	var logs bytes.Buffer
+	app := &Agent{
+		cache:     store,
+		output:    output,
+		logger:    slog.New(slog.NewTextHandler(&logs, nil)),
+		clock:     clock,
+		scheduler: engine,
+	}
+	ctx := newDeadlineTestContext()
+	done := make(chan struct{})
+	go func() {
+		app.runDisplay(ctx, schedule)
+		close(done)
+	}()
+	_ = receiveFrame(t, output.frames)
+	waitForTimers(t, clock, 1)
+	ctx.expire()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("display loop did not stop after its deadline")
+	}
+	if strings.Contains(logs.String(), "playlist clock failed") {
+		t.Errorf("deadline shutdown logged a clock failure: %s", logs.String())
+	}
+}
+
 func testConfig(dir string, playlists ...config.PlaylistConfig) config.Config {
 	return config.Config{
 		Version:   1,
@@ -239,6 +350,53 @@ type frameEvent struct {
 	displayID string
 	pixel     color.RGBA
 }
+
+type sequenceClock struct {
+	values []time.Time
+	index  int
+	waits  chan time.Duration
+}
+
+func (clock *sequenceClock) Now() time.Time {
+	index := clock.index
+	clock.index++
+	if index >= len(clock.values) {
+		return clock.values[len(clock.values)-1]
+	}
+	return clock.values[index]
+}
+
+func (clock *sequenceClock) Wait(ctx context.Context, duration time.Duration) error {
+	clock.waits <- duration
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type deadlineTestContext struct {
+	done chan struct{}
+	once sync.Once
+}
+
+func newDeadlineTestContext() *deadlineTestContext {
+	return &deadlineTestContext{done: make(chan struct{})}
+}
+
+func (ctx *deadlineTestContext) Deadline() (time.Time, bool) { return time.Time{}, true }
+
+func (ctx *deadlineTestContext) Done() <-chan struct{} { return ctx.done }
+
+func (ctx *deadlineTestContext) Err() error {
+	select {
+	case <-ctx.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func (*deadlineTestContext) Value(any) any { return nil }
+
+func (ctx *deadlineTestContext) expire() { ctx.once.Do(func() { close(ctx.done) }) }
 
 type recordingOutput struct{ frames chan frameEvent }
 
