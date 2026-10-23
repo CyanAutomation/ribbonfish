@@ -151,7 +151,7 @@ sites:
     url: https://status.example.com
     variants:
       - id: uptime-landscape
-        capture_interval: 30s
+        capture_interval: 30s  # Requires a sub-minute dispatcher (e.g. Durable Object alarms); Cloudflare Cron Triggers alone cannot provide this cadence — open design decision
         viewport: { width: 1920, height: 1080 }
         wait_strategy: selector-or-timeout
 
@@ -178,7 +178,7 @@ devices:
 
 > This is an illustrative product schema, not an implemented configuration format.
 
-Physical connector names and stable display identification will be validated against actual devices. A 30-second capture interval is a target, not a guarantee of precisely timed capture or delivery.
+Physical connector names and stable display identification will be validated against actual devices. A 30-second capture interval is a target, not a guarantee of precisely timed capture or delivery. **Note:** Cloudflare Cron Triggers alone cannot provide a sub-minute cadence; achieving `30s` requires a Durable Object alarm or an equivalent sub-minute dispatcher, which remains an open design decision.
 
 ---
 
