@@ -29,7 +29,7 @@ sha256_file() {
   fi
 }
 
-mkdir -p "$scratch/frames" "$scratch/assets"
+mkdir -p "$scratch/frames" "$scratch/offline-frames" "$scratch/assets"
 cp "$repo_root"/examples/agent/simulator/assets/*.png "$scratch/assets/"
 chmod 0755 "$scratch/assets"
 chmod 0644 "$scratch/assets"/*.png
@@ -135,7 +135,7 @@ docker run --detach --platform "$platform" --name "$container" \
 ready=false
 attempt=0
 while [ "$attempt" -lt 30 ]; do
-  docker cp "$container:/var/lib/ribbonfish/frames/." "$scratch/frames/" >/dev/null 2>&1 || true
+  docker cp "$container:/var/lib/ribbonfish/frames/." "$scratch/offline-frames/" >/dev/null 2>&1 || true
   if docker logs "$container" 2>&1 | grep -q 'display frame updated'; then
     ready=true
     break
@@ -156,13 +156,13 @@ if [ "$ready" != true ]; then
 fi
 
 for display_id in $expected_frames; do
-  if [ ! -s "$scratch/frames/$display_id.png" ]; then
+  if [ ! -s "$scratch/offline-frames/$display_id.png" ]; then
     echo "cached restart did not produce a frame for $display_id" >&2
     exit 1
   fi
 done
 
-if [ "$profile" = pi4 ] && cmp -s "$scratch/frames/display-left.png" "$scratch/frames/display-right.png"; then
+if [ "$profile" = pi4 ] && cmp -s "$scratch/offline-frames/display-left.png" "$scratch/offline-frames/display-right.png"; then
   echo "offline dual-display profile wrote identical frames for independent playlists" >&2
   exit 1
 fi
