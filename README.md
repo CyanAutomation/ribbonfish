@@ -275,21 +275,6 @@ All commands must be explicitly allow-listed, authenticated, and auditable.
 
 ## Reliability and Performance
 
-The project will measure, rather than assume, the benefits of remote rendering.
-
-Benchmark categories include:
-
-- Idle CPU usage
-- Active CPU usage
-- RAM consumption
-- Boot-to-display time
-- Rotation latency
-- Image-download bandwidth
-- Power usage
-- Recovery behavior
-
-Comparisons should be made against the existing desktop-plus-Chromium kiosk approach.
-
 Key scenarios to test include:
 
 - Network loss
