@@ -58,6 +58,8 @@ exercise the Pi's native Docker Engine and kernel without a connected monitor;
 the check only writes PNG files and does not access DRM.
 
 GitHub Actions runs both checks on changes to the agent, simulator, or Pi
-examples, and validates both Raspberry Pi Compose files.
-The container is a local compatibility artifact; release publishing and
-physical Pi acceptance remain separate work.
+examples, and validates both Raspberry Pi Compose files. Pushing a
+`vMAJOR.MINOR.PATCH` tag publishes `ghcr.io/cyanautomation/ribbonfish-agent:<tag>`
+for ARMv7 and ARM64. The image is a software compatibility artifact; it does
+not implement the proposed hardware environment interface or physical display
+output. Pi acceptance remains separate work.

@@ -1,6 +1,6 @@
 # Raspberry Pi Docker Compose proof of concept
 
-This directory contains a runnable ARM64 software simulator Compose file and a separate **future hardware deployment template**. The hardware template is not a working deployment: the published OCI image, environment-variable interface, agent enrollment, DRM/KMS output, and multi-output behavior remain future work.
+This directory contains a runnable ARM64 software simulator Compose file and a separate **future hardware deployment template**. Version-tagged OCI images are published for software compatibility testing, but the hardware template is not a working deployment: its environment-variable interface, agent enrollment, DRM/KMS output, and multi-output behavior remain future work.
 
 ## Current agent contract
 

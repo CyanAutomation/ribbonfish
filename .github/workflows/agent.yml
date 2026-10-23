@@ -1,13 +1,17 @@
 name: Go agent
 
 on:
+  workflow_call:
   push:
+    branches:
+      - main
     paths:
       - "agent/**"
       - ".github/workflows/agent.yml"
+  # Keep this unfiltered so required checks are reported for every PR.
   pull_request:
 
-# Keep one run per PR/branch and stop work for superseded commits.
+# Keep one run per PR or main branch and stop superseded work.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
