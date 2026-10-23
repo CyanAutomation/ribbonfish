@@ -1,0 +1,36 @@
+# Hardware proof-of-concept template: NOT a tested or deployable release.
+# Requires a published Ribbonfish agent image and matching agent configuration contract.
+name: ribbonfish
+
+services:
+  agent:
+    image: ghcr.io/cyanautomation/ribbonfish-agent:${RIBBONFISH_VERSION:?Set RIBBONFISH_VERSION}
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 15s
+
+    environment:
+      # Proposed environment interface; not implemented or verified.
+      RIBBONFISH_API_URL: ${RIBBONFISH_API_URL:?Set RIBBONFISH_API_URL}
+      RIBBONFISH_DEVICE_ID: ${RIBBONFISH_DEVICE_ID:?Set RIBBONFISH_DEVICE_ID}
+      RIBBONFISH_TOKEN_FILE: /run/secrets/device-token
+      RIBBONFISH_CACHE_DIR: /var/lib/ribbonfish/cache
+
+    # PoC assumption, not a universal Pi 3B / Pi 4 mapping.
+    # Inspect /dev/dri and /sys/class/drm on the target host first.
+    devices:
+      - /dev/dri/card0:/dev/dri/card0
+
+    # Set to the actual host group ID with access to the DRM card device.
+    group_add:
+      - "${RIBBONFISH_DRM_GID:?Set RIBBONFISH_DRM_GID}"
+
+    volumes:
+      - ribbonfish-cache:/var/lib/ribbonfish/cache
+      - ./secrets/device-token:/run/secrets/device-token:ro
+
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  ribbonfish-cache:
