@@ -1,0 +1,25 @@
+# Run the software display simulator on the Pi's native ARM64 Docker host.
+# This writes PNG frames to a Docker volume; it does not access HDMI or DRM.
+name: ribbonfish-pi-simulator
+
+services:
+  agent:
+    image: ribbonfish-agent:agentlab-simulator
+    platform: linux/arm64
+    build:
+      context: ../../agent
+    command: ["-config", "/etc/ribbonfish/config.json"]
+    user: "65532:65532"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 15s
+    network_mode: none
+    volumes:
+      - ./simulator-config.json:/etc/ribbonfish/config.json:ro
+      - ../agent/simulator/assets:/assets:ro
+      - simulator-cache:/var/lib/ribbonfish/cache
+      - simulator-frames:/var/lib/ribbonfish/frames
+
+volumes:
+  simulator-cache:
+  simulator-frames:

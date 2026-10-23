@@ -5,11 +5,13 @@ on:
     paths:
       - "agent/**"
       - "examples/agent/simulator/**"
+      - "examples/raspberry-pi/**"
       - ".github/workflows/arm-container-smoke.yml"
   pull_request:
     paths:
       - "agent/**"
       - "examples/agent/simulator/**"
+      - "examples/raspberry-pi/**"
       - ".github/workflows/arm-container-smoke.yml"
 
 permissions:
@@ -33,5 +35,16 @@ jobs:
           persist-credentials: false
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
       - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - name: Validate Raspberry Pi Compose examples
+        env:
+          RIBBONFISH_VERSION: ci
+          RIBBONFISH_API_URL: https://example.invalid
+          RIBBONFISH_DEVICE_ID: ci
+          RIBBONFISH_DRM_DEVICE: /dev/dri/card1
+          RIBBONFISH_DRM_GID: "44"
+          RIBBONFISH_TOKEN_GID: "1001"
+        run: |
+          docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml config --quiet
+          docker compose -f examples/raspberry-pi/docker-compose.yaml config --quiet
       - name: Build and run the emulated agent container
         run: sh agent/scripts/smoke-container.sh "${{ matrix.platform }}" "${{ matrix.profile }}"

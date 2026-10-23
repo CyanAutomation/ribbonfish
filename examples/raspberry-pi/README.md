@@ -1,32 +1,55 @@
 # Raspberry Pi Docker Compose proof of concept
 
-This directory describes the **intended deployment contract** for Ribbonfish's lightweight Go display agent on Raspberry Pi OS Lite. It is a **template, not a working deployment**: the OCI image, environment variable interface, agent enrolment, DRM/KMS backend and multi-output behaviour are not yet implemented or validated.
+This directory contains a runnable ARM64 software simulator Compose file and a separate **future hardware deployment template**. The hardware template is not a working deployment: the published OCI image, environment-variable interface, agent enrollment, DRM/KMS output, and multi-output behavior remain future work.
 
-## Compatibility with the current Go agent
+## Current agent contract
 
-The local Go agent now supports a versioned JSON file passed with
-`ribbonfish -config <path>`, filesystem image caching, and a PNG simulator.
-It does **not** yet read the `RIBBONFISH_API_URL`, `RIBBONFISH_DEVICE_ID`,
-`RIBBONFISH_TOKEN_FILE`, or `RIBBONFISH_CACHE_DIR` values below, enroll with a
-control plane, or present frames through `/dev/dri`. The Compose file therefore
-remains a future hardware deployment template and is not a way to run the
-current simulator. Use [`../agent/simulator/README.md`](../agent/simulator/README.md)
-for the runnable local demonstration.
+The local Go agent accepts a versioned JSON file through `ribbonfish -config <path>`, uses a persistent filesystem cache, and writes simulated frames as PNG files. It does not yet read the proposed `RIBBONFISH_API_URL`, `RIBBONFISH_DEVICE_ID`, `RIBBONFISH_TOKEN_FILE`, or `RIBBONFISH_CACHE_DIR` variables, enroll with a control plane, or present frames through `/dev/dri`.
 
-## Files
+Files:
 
-- `docker-compose.yaml`: one headless agent service, no browser or desktop on the Pi
-- `.env.example`: non-secret Compose substitution variables
+- `docker-compose.simulator.yaml`: builds and runs the two-output PNG simulator on a native ARM64 Docker host
+- `simulator-config.json`: local simulator configuration for that Compose file
+- `docker-compose.yaml`: future hardware deployment template
+- `.env.example`: non-secret hardware Compose substitutions
 
-## Prerequisites
+## Run the simulator natively on Agentlab
 
-- Raspberry Pi 3B or Raspberry Pi 4 running a compatible Raspberry Pi OS Lite installation
-- Docker Engine with Docker Compose v2
-- Available DRM/KMS device node(s) under `/dev/dri`
-- An agent image built for the host architecture (ARMv7 for 32-bit Pi 3B; ARM64 if using a compatible 64-bit installation)
-- A deployed Ribbonfish control plane and a provisioned device identity and token (both future work)
+Agentlab is a Raspberry Pi 4 Model B Rev 1.5 running 64-bit Debian 13 (`aarch64`) with kernel `6.18.29+rpt-rpi-v8`, Docker Engine 29.6.0, and Compose 5.1.4. The simulator Compose file explicitly builds/runs `linux/arm64`, keeps the process at UID 65532, persists cache and frame data in Docker-managed volumes, and has no network or DRM device access.
 
-Check the local graphics devices and their permissions before editing the Compose mapping:
+From a checkout on Agentlab, run these commands from the repository root:
+
+```sh
+docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml config
+docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml up --build -d
+docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml logs -f agent
+```
+
+While the service is running, inspect the host's DRM connector metadata with `docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml exec agent /ribbonfish -list-displays`. This reads sysfs only and does not open or change a DRM device.
+
+The PNGs live in the `simulator-frames` volume. Copy them to the host with `docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml cp agent:/var/lib/ribbonfish/frames/display-left.png ./display-left.png` and the corresponding command for `display-right.png`. Stop the service with `docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml down`.
+
+To observe host resource use while it runs, use `docker stats "$(docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml ps -q agent)"`. For longer runs, record idle and active CPU/RAM, cache volume growth (`docker system df -v`), and Pi temperature (`vcgencmd measure_temp` when available). These measurements cover the simulator workload, not HDMI scanout or display-related GPU use.
+
+The native host smoke check can also run without Compose:
+
+```sh
+sh agent/scripts/smoke-container.sh linux/arm64 pi4
+```
+
+It builds and runs the ARM64 image, checks fresh named-volume writes and graceful stop, then restarts without the source assets to prove cache persistence and offline startup. GitHub Actions runs ARMv7 and ARM64 variants under QEMU; only the manual run on Agentlab exercises the Pi kernel and its Docker installation. Neither path proves physical display output.
+
+The read-only connector inventory command reports which card owns each connector and the sysfs-reported driver, connection state, and modes; it does not attempt to open the card or change display state.
+
+## Agentlab DRM baseline
+
+Agentlab exposes `/dev/dri/card0` with the `v3d` driver and `/dev/dri/card1` with `vc4-drm`. Its HDMI connectors appear as `card1-HDMI-A-1` and `card1-HDMI-A-2`; both were disconnected during the last inspection. Both card nodes are owned by `root:video` (GID 44); `/dev/dri/renderD128` is owned by `root:render` (GID 992). The hardware template defaults to `/dev/dri/card1` and GID 44 for this host. Recheck the actual nodes and groups on every target because numbering can vary with the kernel and boot configuration.
+
+This identifies the display-capable DRM device on Agentlab; it does not prove that a container can take DRM master or present a frame. Connector mapping, hotplug behavior, Pi 4 dual-HDMI output, and simultaneous scanout remain hardware acceptance items for the phase when a monitor is available.
+
+## Future hardware setup
+
+Prerequisites are a compatible Raspberry Pi OS Lite installation, Docker Compose, the actual DRM node and group IDs, a published agent image for the host architecture, and a provisioned device identity/token. Before editing the hardware Compose mapping, inspect:
 
 ```sh
 ls -l /dev/dri
@@ -34,35 +57,17 @@ stat -c '%g %G %n' /dev/dri/card*
 ls /sys/class/drm
 ```
 
-`/dev/dri/card0` and the numeric group ID in the example are **illustrative only**. Depending on the kernel, boot configuration and hardware, a different card node or additional nodes may be needed. In particular, **Pi 4 dual HDMI is not yet proven**, nor is DRM master ownership inside a container.
+Copy `.env.example` to `.env` and set the actual image version, API URL, device ID, DRM device path and GID. For the sensitive token file, create a dedicated host group named `ribbonfish-token`, put its numeric GID in `RIBBONFISH_TOKEN_GID`, then create `secrets/device-token` owned by `root:ribbonfish-token` with mode `0440`. For example: `sudo install -o root -g ribbonfish-token -m 0440 /dev/null ./secrets/device-token`; populate it only through the approved enrollment flow. The container runs as UID 65532 and receives this group as a supplementary group, so an owner-only `0600` token file would not be readable. The example is a read-only bind mount, not a Docker Swarm secret.
 
-## Proposed setup (after the agent and control plane exist)
+Never supply Cloudflare API credentials, JEV secrets, or screenshot-renderer credentials to the device agent. Keep `.env`, tokens, screenshots, and runtime files out of Git. The container does not use `privileged: true`, host networking, a browser, X11, or Wayland. `no-new-privileges` does not grant DRM permissions or DRM master ownership. Named-volume cache writes are prepared for the non-root image, but hardware output still needs validation. No health check is defined until the agent exposes a readiness contract.
 
-1. Copy `.env.example` to `.env`; set the actual published image version, API URL, device ID and group ID for the DRM card.
-2. Create `secrets/device-token` as a **file** before running `docker compose up` — if the file does not exist, Docker will silently create a directory at that path and the agent will fail to read the token. Use `install -m 600 /dev/null ./secrets/device-token` and then write the enrolled credential into it. Restrict file permissions, do not commit it and do not put it in `.env`. **Note:** the current example uses a read-only bind mount, not a Docker Swarm secret.
-3. Confirm the target DRM node in `docker-compose.yaml`; adjust mappings and permissions as needed for your Pi.
-4. Once a compatible image exists, validate the interpolated configuration with `docker compose config`; then start with `docker compose up -d` and inspect `docker compose logs -f agent`.
-5. Confirm local image display, clean restart, cache persistence and offline playback before testing multiple monitors.
+## Hardware acceptance checklist
 
-Never supply Cloudflare API credentials, JEV secrets or screenshot-renderer credentials to this agent. Those belong in the Cloudflare control plane. Device-side cache persists independently of the credential file.
-
-## Security and operational notes
-
-- The image reference is hypothetical: pin an immutable release tag or image digest after images are published. Avoid `latest`.
-- The device token is sensitive: protect it with filesystem permissions and provision/rotate it through the control plane. Do not commit `.env`, tokens, screenshots or runtime state.
-- The container intentionally does **not** use `privileged: true`, `network_mode: host`, a browser, X11 or Wayland. Add privileges only if hardware measurements show they are essential.
-- `no-new-privileges` is useful hardening, but does not solve DRM permissions or master ownership.
-- Named-volume caching allows restart and image updates without discarding downloaded screenshots. Define cache eviction and disk limits in the agent.
-- No speculative `healthcheck` is included: add one once the Go agent exposes a real readiness/health contract.
-- Any additional DRM node mapping or permissions should be validated separately on Pi 3B and Pi 4, including screen hotplug and dual-output operation.
-
-## Hardware PoC acceptance checklist
-
-- [ ] Pi 3B can display a local image with direct DRM/KMS from an unprivileged-as-practical container
-- [ ] Pi 4 can show different images simultaneously on both HDMI connectors
+- [ ] Pi 3B displays a local image through DRM/KMS from an unprivileged container
+- [ ] Pi 4 shows different images simultaneously on both HDMI connectors
 - [ ] Display identity survives reboot and connector ordering changes
-- [ ] Agent restarts and preserves cache; playback continues through control-plane/network outages
-- [ ] Permissions, DRM master ownership and any required device-node mappings are documented
-- [ ] Actual resource use (RAM, CPU), image switch latency and display stability are measured
+- [ ] Agent restarts and preserves its cache; playback survives control-plane/network outages
+- [ ] DRM permissions, master ownership, hotplug, and node mappings are documented
+- [ ] RAM, CPU, storage growth, image-switch latency, temperature, and display stability are measured during sustained playback
 
-The Cloudflare capture scheduler, queue, Browser Run integration, R2 screenshots and optional JEV optimiser run **outside this Compose deployment**.
+The Cloudflare capture scheduler, queues, Browser Run integration, R2 screenshots, and optional JEV optimizer run outside this Compose deployment.

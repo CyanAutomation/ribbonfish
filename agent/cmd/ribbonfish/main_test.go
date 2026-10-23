@@ -35,3 +35,38 @@ func TestRunRejectsInvalidConfig(t *testing.T) {
 		t.Fatal("run() error = nil, want config validation error")
 	}
 }
+
+func TestListDRMDisplaysReportsConnectorOwningDevice(t *testing.T) {
+	sysfsRoot := t.TempDir()
+	cardDevice := filepath.Join(sysfsRoot, "card1", "device")
+	if err := os.MkdirAll(cardDevice, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	driver := filepath.Join(sysfsRoot, "drivers", "vc4-drm")
+	if err := os.MkdirAll(driver, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(driver, filepath.Join(cardDevice, "driver")); err != nil {
+		t.Fatal(err)
+	}
+	connector := filepath.Join(sysfsRoot, "card1-HDMI-A-1")
+	if err := os.MkdirAll(connector, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(connector, "status"), []byte("disconnected\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(connector, "modes"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := listDRMDisplays(sysfsRoot, "/dev/dri", &output); err != nil {
+		t.Fatalf("listDRMDisplays() error = %v", err)
+	}
+	for _, expected := range []string{`"name": "HDMI-A-1"`, `"device": "/dev/dri/card1"`, `"driver": "vc4-drm"`, `"status": "disconnected"`} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("listDRMDisplays() output missing %s: %s", expected, output.String())
+		}
+	}
+}
