@@ -1,5 +1,7 @@
 # Ribbonfish
 
+[![Go agent](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml/badge.svg)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml)
+
 > **Project status:** A hardware-independent Go agent foundation, offline playlist/cache, and software display simulator are implemented. Cloudflare services and Raspberry Pi DRM/KMS output remain proposed and unvalidated.
 
 ## Render Once. Display Anywhere.
