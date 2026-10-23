@@ -38,6 +38,15 @@ sh agent/scripts/smoke-container.sh linux/arm/v7 pi3b
 sh agent/scripts/smoke-container.sh linux/arm64 pi4
 ```
 
+For a host-native container smoke check that does not require QEMU, use:
+
+```sh
+sh agent/scripts/smoke-container.sh linux/amd64 pi4
+```
+
+The native check exercises the container and dual-output simulator profile,
+but does not check ARM compatibility.
+
 GitHub Actions runs both checks on changes to the agent and simulator example.
 The container is a local compatibility artifact; release publishing and
 physical Pi acceptance remain separate work.
