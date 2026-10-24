@@ -32,10 +32,10 @@ sha256_file() {
 }
 
 frame_update_logged() {
-  docker logs "$container" 2>&1 \
+  printf '%s\n' "$1" \
     | grep -F 'msg="display frame updated"' \
-    | grep -F "display_id=$1" \
-    | grep -F "asset_sha256=$2" >/dev/null
+    | grep -F "display_id=$2" \
+    | grep -F "asset_sha256=$3" >/dev/null
 }
 
 mkdir -p "$scratch/frames" "$scratch/offline-frames" "$scratch/assets"
@@ -87,11 +87,12 @@ while [ "$attempt" -lt 30 ]; do
   # produced by the non-root container remain inspectable without loosening
   # the simulator's output permissions.
   docker cp "$container:/var/lib/ribbonfish/frames/." "$scratch/frames/" >/dev/null 2>&1 || true
+  container_logs=$(docker logs "$container" 2>&1 || true)
   ready=true
   for asset in $expected_assets; do
     display_id=${asset%%:*}
     digest=${asset#*:}
-    if [ ! -s "$scratch/frames/$display_id.png" ] || ! frame_update_logged "$display_id" "$digest"; then
+    if [ ! -s "$scratch/frames/$display_id.png" ] || ! frame_update_logged "$container_logs" "$display_id" "$digest"; then
       ready=false
       break
     fi
@@ -149,11 +150,12 @@ ready=false
 attempt=0
 while [ "$attempt" -lt 30 ]; do
   docker cp "$container:/var/lib/ribbonfish/frames/." "$scratch/offline-frames/" >/dev/null 2>&1 || true
+  container_logs=$(docker logs "$container" 2>&1 || true)
   ready=true
   for asset in $expected_assets; do
     display_id=${asset%%:*}
     digest=${asset#*:}
-    if [ ! -s "$scratch/offline-frames/$display_id.png" ] || ! frame_update_logged "$display_id" "$digest"; then
+    if [ ! -s "$scratch/offline-frames/$display_id.png" ] || ! frame_update_logged "$container_logs" "$display_id" "$digest"; then
       ready=false
       break
     fi
