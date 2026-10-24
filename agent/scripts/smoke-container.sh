@@ -1,10 +1,12 @@
 #!/bin/sh
 set -eu
 
+# Contract source: agent/README.md#arm-container-compatibility.
+
 platform=${1:?usage: smoke-container.sh <linux/amd64|linux/arm/v7|linux/arm64> <pi3b|pi4>}
 profile=${2:?usage: smoke-container.sh <linux/amd64|linux/arm/v7|linux/arm64> <pi3b|pi4>}
 case "$platform:$profile" in
-  linux/arm/v7:pi3b|linux/arm64:pi4|linux/amd64:pi4) ;;
+	linux/arm/v7:pi3b|linux/arm64:pi4|linux/amd64:pi3b|linux/amd64:pi4) ;;
   *) echo "unsupported platform/profile pair: $platform:$profile" >&2; exit 2 ;;
 esac
 
@@ -29,6 +31,13 @@ sha256_file() {
   fi
 }
 
+frame_update_logged() {
+  docker logs "$container" 2>&1 \
+    | grep -F 'msg="display frame updated"' \
+    | grep -F "display_id=$1" \
+    | grep -F "asset_sha256=$2" >/dev/null
+}
+
 mkdir -p "$scratch/frames" "$scratch/offline-frames" "$scratch/assets"
 cp "$repo_root"/examples/agent/simulator/assets/*.png "$scratch/assets/"
 chmod 0755 "$scratch/assets"
@@ -39,12 +48,14 @@ if [ "$profile" = pi3b ]; then
   displays='[{"id":"display-main","playlist_id":"main","rotation_interval":"1h"}]'
   playlists="[{\"id\":\"main\",\"assets\":[{\"path\":\"/assets/operations-overview.png\",\"sha256\":\"$operations_sha\"}]}]"
   expected_frames='display-main'
+  expected_assets="display-main:$operations_sha"
 else
   operations_sha=$(sha256_file "$repo_root/examples/agent/simulator/assets/operations-overview.png")
   health_sha=$(sha256_file "$repo_root/examples/agent/simulator/assets/service-health.png")
   displays='[{"id":"display-left","playlist_id":"left","rotation_interval":"1h"},{"id":"display-right","playlist_id":"right","rotation_interval":"1h"}]'
   playlists="[{\"id\":\"left\",\"assets\":[{\"path\":\"/assets/operations-overview.png\",\"sha256\":\"$operations_sha\"}]},{\"id\":\"right\",\"assets\":[{\"path\":\"/assets/service-health.png\",\"sha256\":\"$health_sha\"}]}]"
   expected_frames='display-left display-right'
+  expected_assets="display-left:$operations_sha display-right:$health_sha"
 fi
 
 cat >"$scratch/config.json" <<EOF
@@ -77,8 +88,10 @@ while [ "$attempt" -lt 30 ]; do
   # the simulator's output permissions.
   docker cp "$container:/var/lib/ribbonfish/frames/." "$scratch/frames/" >/dev/null 2>&1 || true
   ready=true
-  for display_id in $expected_frames; do
-    if [ ! -s "$scratch/frames/$display_id.png" ]; then
+  for asset in $expected_assets; do
+    display_id=${asset%%:*}
+    digest=${asset#*:}
+    if [ ! -s "$scratch/frames/$display_id.png" ] || ! frame_update_logged "$display_id" "$digest"; then
       ready=false
       break
     fi
@@ -136,8 +149,16 @@ ready=false
 attempt=0
 while [ "$attempt" -lt 30 ]; do
   docker cp "$container:/var/lib/ribbonfish/frames/." "$scratch/offline-frames/" >/dev/null 2>&1 || true
-  if docker logs "$container" 2>&1 | grep -q 'display frame updated'; then
-    ready=true
+  ready=true
+  for asset in $expected_assets; do
+    display_id=${asset%%:*}
+    digest=${asset#*:}
+    if [ ! -s "$scratch/offline-frames/$display_id.png" ] || ! frame_update_logged "$display_id" "$digest"; then
+      ready=false
+      break
+    fi
+  done
+  if [ "$ready" = true ]; then
     break
   fi
   if ! docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null | grep -q true; then
@@ -154,13 +175,6 @@ if [ "$ready" != true ]; then
   echo "timed out waiting for cached frames after an offline restart" >&2
   exit 1
 fi
-
-for display_id in $expected_frames; do
-  if [ ! -s "$scratch/offline-frames/$display_id.png" ]; then
-    echo "cached restart did not produce a frame for $display_id" >&2
-    exit 1
-  fi
-done
 
 if [ "$profile" = pi4 ] && cmp -s "$scratch/offline-frames/display-left.png" "$scratch/offline-frames/display-right.png"; then
   echo "offline dual-display profile wrote identical frames for independent playlists" >&2

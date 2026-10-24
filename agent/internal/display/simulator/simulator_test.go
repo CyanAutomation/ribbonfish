@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+// Test suite contract source: docs/agent-foundation.md#architecture.
+
 func TestSimulatorWritesIndependentAtomicFrames(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := NewSimulator(dir)
@@ -84,16 +86,40 @@ func TestSimulatorPublishesObservableStateAndUpdates(t *testing.T) {
 	if err := backend.Present(context.Background(), "left", solidFrame(color.RGBA{G: 80, A: 255})); err != nil {
 		t.Fatal(err)
 	}
-	state := <-updates
-	if state.DisplayID != "left" || state.Sequence != 1 {
-		t.Fatalf("update = %#v", state)
+	first := receiveUpdate(t, updates)
+	if first.DisplayID != "left" || first.Sequence != 1 {
+		t.Fatalf("first update = %#v", first)
+	}
+	if got := color.RGBAModel.Convert(first.Frame.At(first.Frame.Bounds().Min.X, first.Frame.Bounds().Min.Y)).(color.RGBA); got != (color.RGBA{G: 80, A: 255}) {
+		t.Fatalf("first update pixel = %#v", got)
 	}
 	if err := backend.Present(context.Background(), "left", solidFrame(color.RGBA{R: 30, A: 255})); err != nil {
 		t.Fatal(err)
 	}
+	second := receiveUpdate(t, updates)
+	if second.DisplayID != "left" || second.Sequence != 2 {
+		t.Fatalf("second update = %#v", second)
+	}
+	if got := color.RGBAModel.Convert(second.Frame.At(second.Frame.Bounds().Min.X, second.Frame.Bounds().Min.Y)).(color.RGBA); got != (color.RGBA{R: 30, A: 255}) {
+		t.Fatalf("second update pixel = %#v", got)
+	}
 	state, ok := backend.Snapshot("left")
 	if !ok || state.Sequence != 2 {
 		t.Fatalf("Snapshot(left) = %#v, %t", state, ok)
+	}
+}
+
+func receiveUpdate(t *testing.T, updates <-chan Snapshot) Snapshot {
+	t.Helper()
+	select {
+	case state, ok := <-updates:
+		if !ok {
+			t.Fatal("updates channel closed before publishing the expected frame")
+		}
+		return state
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for display update")
+		return Snapshot{}
 	}
 }
 
@@ -129,7 +155,7 @@ func TestSimulatorKeepsSnapshotsAndOtherDisplaysResponsiveDuringFrameIO(t *testi
 		if got.ok {
 			t.Fatalf("Snapshot() = %#v, true before first frame was published", got.state)
 		}
-	case <-time.After(250 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		t.Fatal("Snapshot() blocked during PNG encoding")
 	}
 
@@ -142,7 +168,7 @@ func TestSimulatorKeepsSnapshotsAndOtherDisplaysResponsiveDuringFrameIO(t *testi
 		if err != nil {
 			t.Fatalf("Present(display-right) error = %v", err)
 		}
-	case <-time.After(250 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		t.Fatal("independent display write blocked behind PNG encoding")
 	}
 

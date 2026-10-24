@@ -23,6 +23,8 @@ import (
 	"github.com/CyanAutomation/ribbonfish/agent/internal/playlist"
 )
 
+// Test suite contract sources: docs/agent-foundation.md#local-configuration-contract and #cache-behavior.
+
 func TestAgentRotatesDisplaysIndependentlyAndSkipsBadAssets(t *testing.T) {
 	dir := t.TempDir()
 	leftFirstPath := filepath.Join(dir, "left-first.png")
@@ -184,8 +186,25 @@ func TestAgentWritesTwoDisplaysThroughSoftwareBackend(t *testing.T) {
 		case state := <-updates:
 			pixel := color.RGBAModel.Convert(state.Frame.At(state.Frame.Bounds().Min.X, state.Frame.Bounds().Min.Y)).(color.RGBA)
 			seen[state.DisplayID] = pixel
-			if _, err := os.Stat(state.Path); err != nil {
+			if state.Sequence != 1 {
+				t.Errorf("first frame sequence for %s = %d, want 1", state.DisplayID, state.Sequence)
+			}
+			file, err := os.Open(state.Path)
+			if err != nil {
 				t.Errorf("simulated frame is missing at %s: %v", state.Path, err)
+				continue
+			}
+			decoded, decodeErr := png.Decode(file)
+			closeErr := file.Close()
+			if decodeErr != nil {
+				t.Errorf("decode simulated frame %s: %v", state.Path, decodeErr)
+				continue
+			}
+			if closeErr != nil {
+				t.Errorf("close simulated frame %s: %v", state.Path, closeErr)
+			}
+			if got := color.RGBAModel.Convert(decoded.At(decoded.Bounds().Min.X, decoded.Bounds().Min.Y)).(color.RGBA); got != pixel {
+				t.Errorf("simulated PNG pixel for %s = %#v, want %#v", state.DisplayID, got, pixel)
 			}
 		case <-time.After(2 * time.Second):
 			t.Fatal("timed out waiting for both simulated display frames")
@@ -202,7 +221,7 @@ func TestAgentWritesTwoDisplaysThroughSoftwareBackend(t *testing.T) {
 	_ = imageCache.Close()
 }
 
-func TestRunDisplayUsesOneClockSampleForNextBoundaryAndWait(t *testing.T) {
+func TestRunDisplayWaitsUntilNextRotationBoundary(t *testing.T) {
 	dir := t.TempDir()
 	store, err := cache.NewFileStore(filepath.Join(dir, "cache"), 1<<20)
 	if err != nil {
@@ -260,7 +279,7 @@ func TestRunDisplayUsesOneClockSampleForNextBoundaryAndWait(t *testing.T) {
 	}
 }
 
-func TestRunDisplayTreatsDeadlineAsCleanShutdown(t *testing.T) {
+func TestAgentRunReturnsCleanlyWhenDeadlineExpires(t *testing.T) {
 	dir := t.TempDir()
 	store, err := cache.NewFileStore(filepath.Join(dir, "cache"), 1<<20)
 	if err != nil {
@@ -291,23 +310,26 @@ func TestRunDisplayTreatsDeadlineAsCleanShutdown(t *testing.T) {
 		logger:    slog.New(slog.NewTextHandler(&logs, nil)),
 		clock:     clock,
 		scheduler: engine,
+		displays:  []preparedSchedule{{schedule: schedule}},
 	}
 	ctx := newDeadlineTestContext()
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		app.runDisplay(ctx, schedule)
-		close(done)
+		done <- app.Run(ctx)
 	}()
 	_ = receiveFrame(t, output.frames)
 	waitForTimers(t, clock, 1)
 	ctx.expire()
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() after deadline = %v, want clean shutdown", err)
+		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("display loop did not stop after its deadline")
+		t.Fatal("Run() did not stop after its deadline")
 	}
-	if strings.Contains(logs.String(), "playlist clock failed") {
-		t.Errorf("deadline shutdown logged a clock failure: %s", logs.String())
+	if strings.Contains(logs.String(), "level=ERROR") {
+		t.Errorf("deadline shutdown logged an error: %s", logs.String())
 	}
 }
 
