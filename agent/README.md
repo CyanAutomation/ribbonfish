@@ -49,11 +49,12 @@ sh agent/scripts/smoke-container.sh linux/arm64 pi4
 For a host-native container smoke check that does not require QEMU, use:
 
 ```sh
+sh agent/scripts/smoke-container.sh linux/amd64 pi3b
 sh agent/scripts/smoke-container.sh linux/amd64 pi4
 ```
 
-The native check exercises the container and dual-output simulator profile,
-but does not check ARM compatibility. On Agentlab, run the ARM64 profile to
+The native checks exercise both single- and dual-output simulator profiles,
+but do not check ARM compatibility. On Agentlab, run the ARM64 profile to
 exercise the Pi's native Docker Engine and kernel without a connected monitor;
 the check only writes PNG files and does not access DRM.
 
