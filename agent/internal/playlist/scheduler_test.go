@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+// Test suite contract source: docs/agent-foundation.md#local-configuration-contract.
+
 func TestSchedulerKeepsDisplayTimingIndependent(t *testing.T) {
 	anchor := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	scheduler, err := New([]Schedule{

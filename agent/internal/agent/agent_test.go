@@ -23,6 +23,8 @@ import (
 	"github.com/CyanAutomation/ribbonfish/agent/internal/playlist"
 )
 
+// Test suite contract sources: docs/agent-foundation.md#local-configuration-contract and #cache-behavior.
+
 func TestAgentRotatesDisplaysIndependentlyAndSkipsBadAssets(t *testing.T) {
 	dir := t.TempDir()
 	leftFirstPath := filepath.Join(dir, "left-first.png")
@@ -166,16 +168,19 @@ func TestAgentWritesTwoDisplaysThroughSoftwareBackend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer imageCache.Close()
 	backend, err := simulator.NewSimulator(cfg.Output.Directory)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer backend.Close()
 	app, err := New(context.Background(), cfg, imageCache, backend, slog.New(slog.NewTextHandler(io.Discard, nil)), newTestClock(time.Unix(0, 0)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	updates := backend.Updates()
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- app.Run(ctx) }()
 	seen := make(map[string]color.RGBA)
@@ -183,10 +188,30 @@ func TestAgentWritesTwoDisplaysThroughSoftwareBackend(t *testing.T) {
 		select {
 		case state := <-updates:
 			pixel := color.RGBAModel.Convert(state.Frame.At(state.Frame.Bounds().Min.X, state.Frame.Bounds().Min.Y)).(color.RGBA)
-			seen[state.DisplayID] = pixel
-			if _, err := os.Stat(state.Path); err != nil {
-				t.Errorf("simulated frame is missing at %s: %v", state.Path, err)
+			if state.Sequence != 1 {
+				t.Errorf("first frame sequence for %s = %d, want 1", state.DisplayID, state.Sequence)
 			}
+			file, err := os.Open(state.Path)
+			if err != nil {
+				t.Errorf("simulated frame is missing at %s: %v", state.Path, err)
+				continue
+			}
+			decoded, decodeErr := png.Decode(file)
+			closeErr := file.Close()
+			if decodeErr != nil {
+				t.Errorf("decode simulated frame %s: %v", state.Path, decodeErr)
+			}
+			if closeErr != nil {
+				t.Errorf("close simulated frame %s: %v", state.Path, closeErr)
+			}
+			if decodeErr != nil || closeErr != nil {
+				continue
+			}
+			if got := color.RGBAModel.Convert(decoded.At(decoded.Bounds().Min.X, decoded.Bounds().Min.Y)).(color.RGBA); got != pixel {
+				t.Errorf("simulated PNG pixel for %s = %#v, want %#v", state.DisplayID, got, pixel)
+				continue
+			}
+			seen[state.DisplayID] = pixel
 		case <-time.After(2 * time.Second):
 			t.Fatal("timed out waiting for both simulated display frames")
 		}
@@ -198,11 +223,9 @@ func TestAgentWritesTwoDisplaysThroughSoftwareBackend(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Errorf("Run() after cancellation = %v", err)
 	}
-	_ = backend.Close()
-	_ = imageCache.Close()
 }
 
-func TestRunDisplayUsesOneClockSampleForNextBoundaryAndWait(t *testing.T) {
+func TestRunDisplayWaitsUntilNextRotationBoundary(t *testing.T) {
 	dir := t.TempDir()
 	store, err := cache.NewFileStore(filepath.Join(dir, "cache"), 1<<20)
 	if err != nil {
@@ -260,7 +283,7 @@ func TestRunDisplayUsesOneClockSampleForNextBoundaryAndWait(t *testing.T) {
 	}
 }
 
-func TestRunDisplayTreatsDeadlineAsCleanShutdown(t *testing.T) {
+func TestAgentRunReturnsCleanlyWhenCanceled(t *testing.T) {
 	dir := t.TempDir()
 	store, err := cache.NewFileStore(filepath.Join(dir, "cache"), 1<<20)
 	if err != nil {
@@ -291,23 +314,27 @@ func TestRunDisplayTreatsDeadlineAsCleanShutdown(t *testing.T) {
 		logger:    slog.New(slog.NewTextHandler(&logs, nil)),
 		clock:     clock,
 		scheduler: engine,
+		displays:  []preparedSchedule{{schedule: schedule}},
 	}
-	ctx := newDeadlineTestContext()
-	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
 	go func() {
-		app.runDisplay(ctx, schedule)
-		close(done)
+		done <- app.Run(ctx)
 	}()
 	_ = receiveFrame(t, output.frames)
 	waitForTimers(t, clock, 1)
-	ctx.expire()
+	cancel()
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() after cancellation = %v, want clean shutdown", err)
+		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("display loop did not stop after its deadline")
+		t.Fatal("Run() did not stop after cancellation")
 	}
-	if strings.Contains(logs.String(), "playlist clock failed") {
-		t.Errorf("deadline shutdown logged a clock failure: %s", logs.String())
+	if strings.Contains(logs.String(), "level=ERROR") {
+		t.Errorf("cancellation logged an error: %s", logs.String())
 	}
 }
 
@@ -371,32 +398,6 @@ func (clock *sequenceClock) Wait(ctx context.Context, duration time.Duration) er
 	<-ctx.Done()
 	return ctx.Err()
 }
-
-type deadlineTestContext struct {
-	done chan struct{}
-	once sync.Once
-}
-
-func newDeadlineTestContext() *deadlineTestContext {
-	return &deadlineTestContext{done: make(chan struct{})}
-}
-
-func (ctx *deadlineTestContext) Deadline() (time.Time, bool) { return time.Time{}, true }
-
-func (ctx *deadlineTestContext) Done() <-chan struct{} { return ctx.done }
-
-func (ctx *deadlineTestContext) Err() error {
-	select {
-	case <-ctx.done:
-		return context.DeadlineExceeded
-	default:
-		return nil
-	}
-}
-
-func (*deadlineTestContext) Value(any) any { return nil }
-
-func (ctx *deadlineTestContext) expire() { ctx.once.Do(func() { close(ctx.done) }) }
 
 type recordingOutput struct{ frames chan frameEvent }
 

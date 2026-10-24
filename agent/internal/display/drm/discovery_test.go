@@ -9,6 +9,8 @@ import (
 	"testing"
 )
 
+// Test suite contract source: README.md#device-software and agent/README.md Linux display discovery.
+
 func TestDiscoverReportsConnectorsAndTheirOwningDRMCard(t *testing.T) {
 	sysfsRoot := t.TempDir()
 	devRoot := filepath.Join(t.TempDir(), "dri")

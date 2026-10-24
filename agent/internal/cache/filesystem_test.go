@@ -15,6 +15,8 @@ import (
 	"testing"
 )
 
+// Test suite contract source: docs/agent-foundation.md#cache-behavior.
+
 func pngBytes(t *testing.T, value color.RGBA) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, 4, 3))
@@ -128,18 +130,21 @@ func TestFileStoreEvictsLeastRecentlyUsedUnretainedAsset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Prune(context.Background(), []string{first.SHA256}); err != nil {
+	if err := store.Prune(context.Background(), nil); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := store.Load(context.Background(), first); err != nil {
+		t.Fatalf("refresh recently used asset: %v", err)
 	}
 	third, err := store.Put(context.Background(), bytes.NewReader(blue), "")
 	if err != nil {
 		t.Fatalf("Put() with one unretained eviction candidate: %v", err)
 	}
 	if _, err := store.Load(context.Background(), first); err != nil {
-		t.Errorf("retained first asset was evicted: %v", err)
+		t.Errorf("recently used first asset was evicted: %v", err)
 	}
 	if _, err := os.Stat(second.Path); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("unretained asset still exists, stat error = %v", err)
+		t.Errorf("least recently used second asset still exists, stat error = %v", err)
 	}
 	if _, err := store.Load(context.Background(), third); err != nil {
 		t.Errorf("new asset unavailable: %v", err)
