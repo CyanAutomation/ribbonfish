@@ -14,11 +14,10 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 image="ribbonfish:smoke-${profile}"
 container="ribbonfish-smoke-${profile}-$$"
 cache_volume="ribbonfish-smoke-cache-${profile}-$$"
-frames_volume="ribbonfish-smoke-frames-${profile}-$$"
 scratch=$(mktemp -d)
 cleanup() {
   docker rm -f "$container" >/dev/null 2>&1 || true
-  docker volume rm "$cache_volume" "$frames_volume" >/dev/null 2>&1 || true
+  docker volume rm "$cache_volume" >/dev/null 2>&1 || true
   rm -rf "$scratch"
 }
 trap cleanup EXIT INT TERM
@@ -38,49 +37,29 @@ frame_update_logged() {
     | grep -F "asset_sha256=$3" >/dev/null
 }
 
-mkdir -p "$scratch/frames" "$scratch/offline-frames" "$scratch/assets"
-cp "$repo_root"/examples/raspberry-pi/assets/*.png "$scratch/assets/"
-chmod 0755 "$scratch/assets"
-chmod 0644 "$scratch/assets"/*.png
+mkdir -p "$scratch/frames" "$scratch/offline-frames"
 
 if [ "$profile" = pi3b ]; then
-  operations_sha=$(sha256_file "$repo_root/examples/raspberry-pi/assets/operations-overview.png")
-  displays='[{"id":"display-main","playlist_id":"main","rotation_interval":"1h"}]'
-  playlists="[{\"id\":\"main\",\"assets\":[{\"path\":\"/assets/operations-overview.png\",\"sha256\":\"$operations_sha\"}]}]"
+	default_profile=simulator-pi3b
+	operations_sha=$(sha256_file "$repo_root/agent/defaults/assets/operations-overview.png")
   expected_frames='display-main'
   expected_assets="display-main:$operations_sha"
 else
-  operations_sha=$(sha256_file "$repo_root/examples/raspberry-pi/assets/operations-overview.png")
-  health_sha=$(sha256_file "$repo_root/examples/raspberry-pi/assets/service-health.png")
-  displays='[{"id":"display-left","playlist_id":"left","rotation_interval":"1h"},{"id":"display-right","playlist_id":"right","rotation_interval":"1h"}]'
-  playlists="[{\"id\":\"left\",\"assets\":[{\"path\":\"/assets/operations-overview.png\",\"sha256\":\"$operations_sha\"}]},{\"id\":\"right\",\"assets\":[{\"path\":\"/assets/service-health.png\",\"sha256\":\"$health_sha\"}]}]"
+	default_profile=simulator-pi4
+	operations_sha=$(sha256_file "$repo_root/agent/defaults/assets/operations-overview.png")
+	platform_sha=$(sha256_file "$repo_root/agent/defaults/assets/platform-status.png")
   expected_frames='display-left display-right'
-  expected_assets="display-left:$operations_sha display-right:$health_sha"
+	expected_assets="display-left:$operations_sha display-right:$platform_sha"
 fi
-
-cat >"$scratch/config.json" <<EOF
-{
-  "version": 1,
-  "log_level": "info",
-  "cache": {"directory": "/var/lib/ribbonfish/cache", "max_bytes": 52428800},
-  "output": {"directory": "/var/lib/ribbonfish/frames"},
-  "playlists": $playlists,
-  "displays": $displays
-}
-EOF
-chmod 0644 "$scratch/config.json"
 
 docker buildx build --platform "$platform" --load --tag "$image" "$repo_root/agent"
 docker volume create "$cache_volume" >/dev/null
-docker volume create "$frames_volume" >/dev/null
 docker run --detach --platform "$platform" --name "$container" \
 	  --init --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
 	  --user 65532:65532 \
-  --mount "type=bind,src=$scratch/config.json,dst=/config.json,readonly" \
-  --mount "type=bind,src=$scratch/assets,dst=/assets,readonly" \
-  --mount "type=volume,src=$cache_volume,dst=/var/lib/ribbonfish/cache" \
-  --mount "type=volume,src=$frames_volume,dst=/var/lib/ribbonfish/frames" \
-  "$image" -config /config.json >/dev/null
+  --env "RIBBONFISH_PROFILE=$default_profile" \
+  --mount "type=volume,src=$cache_volume,dst=/var/lib/ribbonfish" \
+  "$image" >/dev/null
 
 ready=false
 attempt=0
@@ -145,10 +124,9 @@ docker rm "$container" >/dev/null
 docker run --detach --platform "$platform" --name "$container" \
 	  --init --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
 	  --user 65532:65532 \
-  --mount "type=bind,src=$scratch/config.json,dst=/config.json,readonly" \
-  --mount "type=volume,src=$cache_volume,dst=/var/lib/ribbonfish/cache" \
-  --mount "type=volume,src=$frames_volume,dst=/var/lib/ribbonfish/frames" \
-  "$image" -config /config.json >/dev/null
+  --env "RIBBONFISH_PROFILE=$default_profile" \
+  --mount "type=volume,src=$cache_volume,dst=/var/lib/ribbonfish" \
+  "$image" >/dev/null
 
 ready=false
 attempt=0

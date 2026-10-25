@@ -1,0 +1,12 @@
+name = "ribbonfish-device-sync"
+main = "src/index.js"
+compatibility_date = "2026-10-25"
+
+[[r2_buckets]]
+binding = "ASSETS"
+bucket_name = "ribbonfish-assets"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ribbonfish-devices"
+database_id = "replace-with-cloudflare-d1-database-id"
