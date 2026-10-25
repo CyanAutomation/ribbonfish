@@ -1,8 +1,8 @@
 # Ribbonfish
 
-[![Go agent](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml/badge.svg)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml) [![ARM container smoke test](https://github.com/CyanAutomation/ribbonfish/actions/workflows/arm-container-smoke.yml/badge.svg?branch=main)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/arm-container-smoke.yml)
+[![Go agent](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml/badge.svg)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml) [![Worker tests](https://github.com/CyanAutomation/ribbonfish/actions/workflows/device-sync.yml/badge.svg?branch=main)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/device-sync.yml) [![ARM container smoke test](https://github.com/CyanAutomation/ribbonfish/actions/workflows/arm-container-smoke.yml/badge.svg?branch=main)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/arm-container-smoke.yml)
 
-> **Project status:** The Go agent supports offline playlists/cache, a software simulator, and an experimental Linux DRM/KMS output backend. The backend and hardened Pi Compose setup are implemented, but HDMI scanout has not yet been accepted on physical Pi hardware. Cloudflare services and remote device synchronization remain proposed.
+> **Project status:** The Go agent supports bundled offline profiles, a verified persistent image cache, optional authenticated Worker/R2 content sync, a software simulator, and an experimental Linux DRM/KMS output backend. Single-display KMS output has been accepted on a Pi 3 A+; Pi 3B and Pi 4 dual-output acceptance remain open. The broader screenshot capture and management platform is still proposed.
 
 ## Render Once. Display Anywhere.
 
@@ -16,12 +16,14 @@ The initial use case is a fleet of Raspberry Pis showing company websites and Up
 
 ## How It Works
 
-1. Cloudflare captures each due render variant and stores a versioned screenshot in R2.
-2. Each enrolled device retrieves authenticated configuration and image manifests.
-3. The local Go agent caches images and independently rotates playlists on physical HDMI outputs using DRM/KMS.
-4. Displays continue showing last-known-good content when the network or control plane is unavailable.
+1. The container starts from a bundled, hardware-specific default config and starter images.
+2. An enrolled device can poll an authenticated Worker for a versioned content manifest and images held in R2.
+3. The Go agent verifies image hashes, caches content, and rotates local playlists through the simulator or DRM/KMS output.
+4. It keeps the active snapshot and continues displaying it when sync is disabled or the network is unavailable.
 
-**Implementation status:** The local agent can load configured image files, cache them, rotate independent playlists, and either write mode-sized PNG frames or send frames to an experimental Linux DRM/KMS backend. The backend configures named connectors, selects advertised modes, and uses XRGB8888 dumb buffers with page flips. It has automated tests and ARM cross-compilation, but has not yet been tested with HDMI connected; the control plane and remote synchronization remain proposed.
+**Implementation status:** The agent ships Pi 3 A+, Pi 3B, Pi 4, and simulator profiles with sample images. Optional sync is implemented in the Go agent and the Worker under [`workers/device-sync`](workers/device-sync/README.md): one-time codes enroll devices, D1 stores token hashes, and the Worker uses an R2 binding to serve only a device's manifest and assigned image hashes. Candidate snapshots are validated and applied atomically; failed sync leaves the previous snapshot active. The Worker and Go client are tested locally, but a deployed Cloudflare account and end-to-end Cloudflare credentials are not part of this repository setup.
+
+The DRM backend configures named connectors, selects advertised modes, and uses XRGB8888 dumb buffers with page flips. It is experimental: one single-display Pi 3 A+ has passed physical KMS and visible-frame acceptance, while Pi 3B and Pi 4 dual-output behavior remain open.
 
 The agent can also list Linux DRM connector metadata from sysfs with
 `ribbonfish -list-displays`. This reads sysfs only and reports whether the
@@ -97,12 +99,12 @@ Ribbonfish deliberately supports **no screenshot capture interval shorter than 6
 
 ## Cloud Services
 
-| Component | Proposed Responsibility |
+| Component | Responsibility and implementation status |
 |------------|-------------------------|
-| Workers | Management UI/API, authenticated device endpoints, configuration and image manifests |
-| D1 | Sites, render variants, playlists, devices, outputs, assignments, capture status, and audit records |
+| Workers | The authenticated device sync and enrollment endpoints are implemented in `workers/device-sync`; the management UI, renderer API, and capture pipeline remain proposed |
+| D1 | The sync Worker uses D1 for per-device credential hashes and one-time enrollment codes; broader capture and management state remains proposed |
 | Browser Run | Headless page rendering and screenshot capture, with explicit viewport and load/wait policies |
-| R2 | Versioned screenshot objects with a hard per-variant retention limit of 10 captures or 30 days, whichever is sooner |
+| R2 | The sync Worker reads private manifests and content-addressed images through an R2 binding; screenshot retention and capture publication remain proposed |
 | Queues | Single-consumer, single-message capture execution, bounded retries, and backlog control |
 | Scheduled Worker (Cron Trigger) | Run every minute, check D1 for due variants, and enqueue deduplicated capture jobs |
 
@@ -114,19 +116,21 @@ Cloudflare Browser Run supports screenshot Quick Actions and browser sessions. T
 
 ### Deployment model
 
-The experimental deployment is **Docker Compose on Raspberry Pi OS Lite**, with no graphical desktop, Chromium, X11, or Wayland session. The hardware Compose file runs a local JSON config and bundled image assets with one explicitly mapped DRM card, a persistent cache, a non-root user, a read-only root filesystem, no added capabilities, and no network. GitHub Actions publishes an ARMv7/ARM64 GHCR release image when a `v*` tag is pushed and a multi-architecture Docker Hub image (`amd64`, `arm64`, and `arm/v7`) after a PR merges into `main`, tagged as both `latest` and the immutable merge SHA (`sha-<SHA>`). The `latest` tag advances after the verification job passes; use a SHA tag for repeatable deployments. This local deployment has no enrollment, control-plane API, or remote synchronization; a native Go binary remains an optional distribution method.
+The experimental deployment is **Docker Compose on Raspberry Pi OS Lite**, with no graphical desktop, Chromium, X11, or Wayland session. The container includes its default profile and starter images, so the offline Compose setup needs no host-mounted config or asset files. It maps one DRM card, persists cache, last-good manifest, and the per-device credential in a state volume, and runs non-root with a read-only root filesystem and no added capabilities. Networking defaults to `none`; set it to `bridge` only for enrollment or optional sync. GitHub Actions publishes an ARMv7/ARM64 GHCR release image for `v*` tags and a multi-architecture Docker Hub image (`amd64`, `arm64`, and `arm/v7`) after a PR merges into `main`, tagged `latest` and with the immutable merge SHA (`sha-<SHA>`). Use a SHA tag for repeatable deployments. The image must already be present on the Pi for a fully offline first start.
 
-The Compose deployment maps only the selected DRM card and its numeric device group. The agent requests DRM master, configures the selected connector(s), and takes over their scanout; it requires the host's display manager or compositor not to own that card. Device access does not guarantee DRM master ownership or multi-output support. The current image tag and connector names are examples, and all display behavior remains subject to physical Pi acceptance. The Docker Hub `latest` tag tracks the newest merge after verification passes; use an immutable SHA tag or digest for repeatable deployments and rollback. Avoid `privileged: true`.
+The Compose deployment maps only the selected DRM card and its numeric device group. The agent requests DRM master, configures the selected connector(s), and takes over scanout; the host display manager or compositor must release that card. Device access does not guarantee DRM master ownership or multi-output support. Select the bundled profile and verify the device path, group, and connector on each Pi. Avoid `privileged: true`.
 
 
-A small Go agent, packaged as a multi-architecture OCI image and deployed primarily with Docker Compose on Raspberry Pi OS Lite or another compatible Linux distribution, will:
+A small Go agent, packaged as a multi-architecture OCI image and deployed primarily with Docker Compose on Raspberry Pi OS Lite or another compatible Linux distribution:
 
 1. Identify available DRM/KMS connectors, supported modes, and output identities.
-2. Authenticate to the control plane and retrieve versioned configuration.
-3. Download changed screenshots with integrity checks and atomic cache replacement.
+2. Start from a bundled profile and optionally authenticate to the sync Worker with a per-device token.
+3. Poll for a complete versioned content snapshot and download changed images with SHA-256 checks.
 4. Decode and present images through a DRM/KMS display backend, without X11, Wayland, or Chromium.
 5. Independently rotate playlists on each physical output.
-6. Report bounded health telemetry and recover after reboot or disconnection.
+6. Keep the last-good snapshot through reboots and disconnections.
+
+Remote manifests update playlists and rotation intervals only. Hardware output, cache paths, and DRM device mappings remain local to the Pi.
 
 > The direct DRM/KMS code is an experimental implementation. Single-display 1920x1080 KMS state and frame updates have been verified over SSH on a Pi 3 Model A Plus, and the user confirmed the sample slides were visible. Physical proof is still required for Pi 3B scanout, simultaneous distinct frames on Pi 4 HDMI outputs, hotplug/recovery, and other kernel/display combinations.
 
@@ -150,7 +154,7 @@ How long an image remains visible before the device advances to the next playlis
 
 ### Device Sync Interval
 
-How frequently the agent checks for configuration and updated image manifests.
+How frequently the agent checks for updated image manifests. The Go agent defaults to one minute; Compose can override this with `RIBBONFISH_SYNC_INTERVAL`.
 
 These are separate settings. A display can rotate between two cached screenshots every 20 seconds even when one screenshot is captured daily and another every 60 seconds. The 60-second minimum applies **only to screenshot capture**, not to local playlist dwell times or device synchronisation.
 
@@ -489,13 +493,13 @@ Add:
 
 ### Phase 3 — Fleet Management
 
-Add:
+The device-side fleet slice is implemented: one-time enrollment, per-device
+credentials, authenticated manifest and asset delivery, local playlists, and
+output assignments. Remaining fleet-management work includes:
 
-- Device enrollment
-- Secure synchronization
-- Playlists
-- Output assignments
 - Basic management UI
+- Device registry and assignment management
+- Credential rotation and operator audit events
 
 ### Phase 4 — Operational Hardening
 
@@ -554,9 +558,11 @@ The repository should ultimately include:
 2. Stable physical display identity across reboot and connector reordering.
 3. Cron-based due-job claim strategy, handling of missed minutes, and acceptable capture timing drift.
 4. Browser Run Quick Actions versus persistent sessions for complex or authenticated pages.
-5. Device authentication, enrollment, and credential rotation.
+5. Device authentication, enrollment, and per-device asset delivery are
+   implemented in the sync Worker; credential rotation remains open.
 6. Image format, compression, scaling, storage retention, and delivery method.
 7. Whether a shared 60-second screenshot is sufficiently fresh for operational monitoring.
 8. Container permissions and DRM master ownership on Pi 3B and Pi 4.
 9. Capture concurrency limits, missed-job reconciliation, and capture cost ceilings.
-10. Administrator authentication and device-scoped asset delivery.
+10. Administrator authentication; device-scoped asset delivery is implemented
+    in the sync Worker.

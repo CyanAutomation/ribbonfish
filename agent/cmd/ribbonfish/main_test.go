@@ -3,10 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,8 +20,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/CyanAutomation/ribbonfish/agent/internal/agent"
+	"github.com/CyanAutomation/ribbonfish/agent/internal/cache"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/config"
 	displaySimulator "github.com/CyanAutomation/ribbonfish/agent/internal/display/simulator"
+	"github.com/CyanAutomation/ribbonfish/agent/internal/syncer"
 )
 
 // Test suite contract sources: agent/README.md and README.md#device-software.
@@ -131,6 +138,137 @@ func TestDefaultConfigPathUsesEnvironmentOverride(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigPathSelectsBundledProfile(t *testing.T) {
+	t.Setenv("RIBBONFISH_CONFIG_FILE", "")
+	t.Setenv("RIBBONFISH_DEFAULTS_DIR", "/usr/share/ribbonfish/defaults")
+	t.Setenv("RIBBONFISH_PROFILE", "pi3a-plus")
+	if got := defaultConfigPath(); got != "/usr/share/ribbonfish/defaults/pi3a-plus.json" {
+		t.Fatalf("defaultConfigPath() = %q", got)
+	}
+	t.Setenv("RIBBONFISH_PROFILE", "../../tmp/evil")
+	if got := defaultConfigPath(); got != "/usr/share/ribbonfish/defaults/pi4.json" {
+		t.Fatalf("invalid profile path = %q, want safe Pi 4 fallback", got)
+	}
+}
+
+func TestRunSyncLoopPersistsAndActivatesVerifiedContent(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.png")
+	newPath := filepath.Join(dir, "new.png")
+	writeMainPNG(t, oldPath, color.RGBA{R: 170, A: 255})
+	writeMainPNG(t, newPath, color.RGBA{G: 190, A: 255})
+	cfg := config.Config{
+		Version:   1,
+		LogLevel:  "info",
+		Cache:     config.CacheConfig{Directory: filepath.Join(dir, "cache"), MaxBytes: 1 << 20},
+		Output:    config.OutputConfig{Backend: "simulator", Directory: filepath.Join(dir, "frames"), Fit: "contain"},
+		Playlists: []config.PlaylistConfig{{ID: "welcome", Assets: []config.AssetConfig{{Path: oldPath}}}},
+		Displays:  []config.DisplayConfig{{ID: "screen-main", PlaylistID: "welcome", Mode: "4x4", RotationInterval: "1h"}},
+	}
+	store, err := cache.NewFileStore(cfg.Cache.Directory, cfg.Cache.MaxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	output, err := newDisplayOutput(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	playback, err := agent.New(context.Background(), cfg, store, output, slog.New(slog.NewTextHandler(io.Discard, nil)), agent.RealClock{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() { runDone <- playback.Run(ctx) }()
+	waitForPNGColor(t, filepath.Join(cfg.Output.Directory, "screen-main.png"), color.RGBA{R: 170, A: 255})
+
+	newBytes, err := os.ReadFile(newPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset, err := store.Put(ctx, bytes.NewReader(newBytes), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digestBytes := sha256.Sum256(newBytes)
+	if asset.SHA256 != hex.EncodeToString(digestBytes[:]) {
+		t.Fatalf("cache digest = %q, want calculated digest", asset.SHA256)
+	}
+	candidate := cfg
+	candidate.Playlists = []config.PlaylistConfig{{ID: "welcome", Assets: []config.AssetConfig{{Path: asset.Path, SHA256: asset.SHA256}}}}
+	manifest := syncer.Manifest{
+		Version:   1,
+		Revision:  "remote-3",
+		Playlists: []syncer.ManifestPlaylist{{ID: "welcome", Assets: []syncer.ManifestAsset{{SHA256: asset.SHA256, Size: asset.Bytes}}}},
+		Displays:  []syncer.ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "1h"}},
+	}
+	snapshotPath := filepath.Join(cfg.Cache.Directory, "last-good.json")
+	remote := &oneShotSynchronizer{update: syncer.Update{Config: candidate, Manifest: manifest, ETag: `"remote-3"`, Changed: true}}
+	syncDone := make(chan error, 1)
+	go func() {
+		syncDone <- runSyncLoop(ctx, remote, cfg, playback, snapshotPath, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}()
+
+	deadline := time.After(3 * time.Second)
+	for playback.CurrentConfig().Playlists[0].Assets[0].SHA256 != asset.SHA256 {
+		select {
+		case <-deadline:
+			t.Fatal("remote content was not activated")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if _, err := os.Stat(snapshotPath); err != nil {
+		t.Fatalf("last-good snapshot was not persisted: %v", err)
+	}
+	waitForPNGColor(t, filepath.Join(cfg.Output.Directory, "screen-main.png"), color.RGBA{G: 190, A: 255})
+
+	cancel()
+	if err := <-runDone; err != nil {
+		t.Fatalf("playback Run() = %v", err)
+	}
+	if err := <-syncDone; err != nil {
+		t.Fatalf("sync loop = %v", err)
+	}
+}
+
+type oneShotSynchronizer struct {
+	update syncer.Update
+	calls  int
+}
+
+func (s *oneShotSynchronizer) Synchronize(context.Context, config.Config, config.Config) (syncer.Update, error) {
+	if s.calls == 0 {
+		s.calls++
+		return s.update, nil
+	}
+	return syncer.Update{}, nil
+}
+
+func waitForPNGColor(t *testing.T, filename string, want color.RGBA) {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for {
+		file, err := os.Open(filename)
+		if err == nil {
+			frame, decodeErr := png.Decode(file)
+			_ = file.Close()
+			if decodeErr == nil {
+				got := color.RGBAModel.Convert(frame.At(frame.Bounds().Min.X, frame.Bounds().Min.Y)).(color.RGBA)
+				if got == want {
+					return
+				}
+			}
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("frame %s did not become color %#v", filename, want)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
 func TestExampleConfigsLoadAndValidate(t *testing.T) {
 	t.Setenv("RIBBONFISH_CACHE_DIR", "")
 	t.Setenv("RIBBONFISH_DRM_DEVICE", "")
@@ -174,6 +312,34 @@ func TestExampleConfigsLoadAndValidate(t *testing.T) {
 			}
 			if tt.firstMode != "" && cfg.Displays[0].Mode != tt.firstMode {
 				t.Errorf("first mode = %q, want %q", cfg.Displays[0].Mode, tt.firstMode)
+			}
+		})
+	}
+}
+
+func TestBundledDefaultsLoadWithContentHashes(t *testing.T) {
+	t.Setenv("RIBBONFISH_CACHE_DIR", "")
+	t.Setenv("RIBBONFISH_DRM_DEVICE", "")
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller() could not locate test source")
+	}
+	defaults := filepath.Clean(filepath.Join(filepath.Dir(source), "../../defaults"))
+	for _, name := range []string{"pi3a-plus.json", "pi3b.json", "pi4.json", "simulator.json", "simulator-pi3b.json", "simulator-pi4.json"} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := config.Load(filepath.Join(defaults, name))
+			if err != nil {
+				t.Fatalf("config.Load() = %v", err)
+			}
+			for _, playlist := range cfg.Playlists {
+				for _, asset := range playlist.Assets {
+					if len(asset.SHA256) != 64 {
+						t.Errorf("asset %q has no SHA-256 digest", asset.Path)
+					}
+					if _, err := os.Stat(asset.Path); err != nil {
+						t.Errorf("bundled asset %q is unavailable: %v", asset.Path, err)
+					}
+				}
 			}
 		})
 	}

@@ -338,6 +338,83 @@ func TestAgentRunReturnsCleanlyWhenCanceled(t *testing.T) {
 	}
 }
 
+func TestApplyConfigSwitchesContentWithoutChangingLocalOutput(t *testing.T) {
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "first.png")
+	secondPath := filepath.Join(dir, "second.png")
+	writePNG(t, firstPath, color.RGBA{R: 180, A: 255})
+	secondData := writePNG(t, secondPath, color.RGBA{G: 190, A: 255})
+	cfg := testConfig(dir, config.PlaylistConfig{ID: "welcome", Assets: []config.AssetConfig{{Path: firstPath}}})
+	store, err := cache.NewFileStore(cfg.Cache.Directory, cfg.Cache.MaxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	output := &recordingOutput{frames: make(chan frameEvent, 4)}
+	app, err := New(context.Background(), cfg, store, output, slog.New(slog.NewTextHandler(io.Discard, nil)), newTestClock(time.Unix(0, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- app.Run(ctx) }()
+	if got := receiveFrame(t, output.frames).pixel; got != (color.RGBA{R: 180, A: 255}) {
+		t.Fatalf("initial frame = %#v", got)
+	}
+
+	secondDigest := sha256.Sum256(secondData)
+	secondHash := hex.EncodeToString(secondDigest[:])
+	if _, err := store.Put(context.Background(), bytes.NewReader(secondData), secondHash); err != nil {
+		t.Fatalf("cache candidate content: %v", err)
+	}
+	candidate := testConfig(dir, config.PlaylistConfig{ID: "welcome", Assets: []config.AssetConfig{{Path: "cached:" + secondHash, SHA256: secondHash}}})
+	candidate.Output.Directory = cfg.Output.Directory
+	if err := app.ApplyConfig(context.Background(), candidate); err != nil {
+		t.Fatalf("ApplyConfig() error = %v", err)
+	}
+	if got := receiveFrame(t, output.frames).pixel; got != (color.RGBA{G: 190, A: 255}) {
+		t.Fatalf("updated frame = %#v, want new content without waiting for rotation", got)
+	}
+
+	unsafe := candidate
+	unsafe.Output.Directory = filepath.Join(dir, "different-output")
+	if err := app.ApplyConfig(context.Background(), unsafe); err == nil {
+		t.Fatal("ApplyConfig accepted a remote change to local output settings")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run() after cancellation = %v", err)
+	}
+}
+
+func TestApplyConfigRejectsMissingSnapshotAssets(t *testing.T) {
+	dir := t.TempDir()
+	starter := filepath.Join(dir, "starter.png")
+	writePNG(t, starter, color.RGBA{R: 180, A: 255})
+	cfg := testConfig(dir, config.PlaylistConfig{ID: "welcome", Assets: []config.AssetConfig{{Path: starter}}})
+	store, err := cache.NewFileStore(cfg.Cache.Directory, cfg.Cache.MaxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	app, err := New(context.Background(), cfg, store, &recordingOutput{frames: make(chan frameEvent, 2)}, slog.New(slog.NewTextHandler(io.Discard, nil)), newTestClock(time.Unix(0, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	missingDigest := sha256.Sum256(pngData(t, color.RGBA{G: 190, A: 255}))
+	digest := hex.EncodeToString(missingDigest[:])
+	candidate := testConfig(dir, config.PlaylistConfig{ID: "welcome", Assets: []config.AssetConfig{{Path: "cached:" + digest, SHA256: digest}}})
+	candidate.Output.Directory = cfg.Output.Directory
+	if err := app.ApplyConfig(context.Background(), candidate); err == nil {
+		t.Fatal("ApplyConfig accepted a snapshot with an unavailable image")
+	}
+	if got := app.CurrentConfig().Playlists[0].Assets[0].Path; got != starter {
+		t.Fatalf("active content changed after failed update: path = %q, want %q", got, starter)
+	}
+}
+
 func testConfig(dir string, playlists ...config.PlaylistConfig) config.Config {
 	return config.Config{
 		Version:   1,

@@ -2,34 +2,35 @@ name: ribbonfish
 
 services:
   agent:
-    image: cyanautomation/ribbonfish:${RIBBONFISH_VERSION:?Set RIBBONFISH_VERSION}
+    image: cyanautomation/ribbonfish:${RIBBONFISH_VERSION:-latest}
     restart: unless-stopped
     init: true
     stop_grace_period: 15s
-    command: ["-config", "${RIBBONFISH_CONFIG_FILE:-/etc/ribbonfish/config.json}"]
     user: "65532:65532"
     read_only: true
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
-    network_mode: none
+    network_mode: ${RIBBONFISH_NETWORK_MODE:-none}
 
     environment:
-      RIBBONFISH_CONFIG_FILE: ${RIBBONFISH_CONFIG_FILE:-/etc/ribbonfish/config.json}
-      RIBBONFISH_DRM_DEVICE: ${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE}
+      RIBBONFISH_PROFILE: ${RIBBONFISH_PROFILE:-pi4}
+      RIBBONFISH_DRM_DEVICE: ${RIBBONFISH_DRM_DEVICE:-/dev/dri/card1}
       RIBBONFISH_CACHE_DIR: ${RIBBONFISH_CACHE_DIR:-/var/lib/ribbonfish/cache}
+      RIBBONFISH_SYNC_URL: ${RIBBONFISH_SYNC_URL:-}
+      RIBBONFISH_SYNC_INTERVAL: ${RIBBONFISH_SYNC_INTERVAL:-1m}
+      RIBBONFISH_DEVICE_ID: ${RIBBONFISH_DEVICE_ID:-}
+      RIBBONFISH_DEVICE_TOKEN_FILE: /var/lib/ribbonfish/device-token
 
     devices:
-      - "${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE}:${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE}"
+      - "${RIBBONFISH_DRM_DEVICE:-/dev/dri/card1}:${RIBBONFISH_DRM_DEVICE:-/dev/dri/card1}"
 
     group_add:
-      - "${RIBBONFISH_DRM_GID:?Set RIBBONFISH_DRM_GID}"
+      - "${RIBBONFISH_DRM_GID:-44}"
 
     volumes:
-      - ribbonfish-cache:/var/lib/ribbonfish/cache
-      - ${RIBBONFISH_LOCAL_CONFIG:-./hardware-config.pi4.json}:/etc/ribbonfish/config.json:ro
-      - ./assets:/assets:ro
+      - ribbonfish-state:/var/lib/ribbonfish
 
 volumes:
-  ribbonfish-cache:
+  ribbonfish-state:

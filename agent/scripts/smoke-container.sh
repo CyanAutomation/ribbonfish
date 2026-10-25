@@ -14,11 +14,10 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 image="ribbonfish:smoke-${profile}"
 container="ribbonfish-smoke-${profile}-$$"
 cache_volume="ribbonfish-smoke-cache-${profile}-$$"
-frames_volume="ribbonfish-smoke-frames-${profile}-$$"
 scratch=$(mktemp -d)
 cleanup() {
   docker rm -f "$container" >/dev/null 2>&1 || true
-  docker volume rm "$cache_volume" "$frames_volume" >/dev/null 2>&1 || true
+  docker volume rm "$cache_volume" >/dev/null 2>&1 || true
   rm -rf "$scratch"
 }
 trap cleanup EXIT INT TERM
@@ -38,49 +37,49 @@ frame_update_logged() {
     | grep -F "asset_sha256=$3" >/dev/null
 }
 
-mkdir -p "$scratch/frames" "$scratch/offline-frames" "$scratch/assets"
-cp "$repo_root"/examples/raspberry-pi/assets/*.png "$scratch/assets/"
-chmod 0755 "$scratch/assets"
-chmod 0644 "$scratch/assets"/*.png
+frame_update_for_display() {
+  display_id=$1
+  case "$profile:$display_id" in
+    pi3b:display-main)
+      frame_update_logged "$container_logs" "$display_id" "$operations_sha" \
+        || frame_update_logged "$container_logs" "$display_id" "$service_sha"
+      ;;
+    pi4:display-left)
+      frame_update_logged "$container_logs" "$display_id" "$operations_sha" \
+        || frame_update_logged "$container_logs" "$display_id" "$service_sha"
+      ;;
+    pi4:display-right)
+      frame_update_logged "$container_logs" "$display_id" "$platform_sha" \
+        || frame_update_logged "$container_logs" "$display_id" "$deployment_sha"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+mkdir -p "$scratch/frames" "$scratch/offline-frames"
 
 if [ "$profile" = pi3b ]; then
-  operations_sha=$(sha256_file "$repo_root/examples/raspberry-pi/assets/operations-overview.png")
-  displays='[{"id":"display-main","playlist_id":"main","rotation_interval":"1h"}]'
-  playlists="[{\"id\":\"main\",\"assets\":[{\"path\":\"/assets/operations-overview.png\",\"sha256\":\"$operations_sha\"}]}]"
+	default_profile=simulator-pi3b
+	operations_sha=$(sha256_file "$repo_root/agent/defaults/assets/operations-overview.png")
+  service_sha=$(sha256_file "$repo_root/agent/defaults/assets/service-health.png")
   expected_frames='display-main'
-  expected_assets="display-main:$operations_sha"
 else
-  operations_sha=$(sha256_file "$repo_root/examples/raspberry-pi/assets/operations-overview.png")
-  health_sha=$(sha256_file "$repo_root/examples/raspberry-pi/assets/service-health.png")
-  displays='[{"id":"display-left","playlist_id":"left","rotation_interval":"1h"},{"id":"display-right","playlist_id":"right","rotation_interval":"1h"}]'
-  playlists="[{\"id\":\"left\",\"assets\":[{\"path\":\"/assets/operations-overview.png\",\"sha256\":\"$operations_sha\"}]},{\"id\":\"right\",\"assets\":[{\"path\":\"/assets/service-health.png\",\"sha256\":\"$health_sha\"}]}]"
+	default_profile=simulator-pi4
+	operations_sha=$(sha256_file "$repo_root/agent/defaults/assets/operations-overview.png")
+	service_sha=$(sha256_file "$repo_root/agent/defaults/assets/service-health.png")
+	platform_sha=$(sha256_file "$repo_root/agent/defaults/assets/platform-status.png")
+	deployment_sha=$(sha256_file "$repo_root/agent/defaults/assets/deployment-pipeline.png")
   expected_frames='display-left display-right'
-  expected_assets="display-left:$operations_sha display-right:$health_sha"
 fi
-
-cat >"$scratch/config.json" <<EOF
-{
-  "version": 1,
-  "log_level": "info",
-  "cache": {"directory": "/var/lib/ribbonfish/cache", "max_bytes": 52428800},
-  "output": {"directory": "/var/lib/ribbonfish/frames"},
-  "playlists": $playlists,
-  "displays": $displays
-}
-EOF
-chmod 0644 "$scratch/config.json"
 
 docker buildx build --platform "$platform" --load --tag "$image" "$repo_root/agent"
 docker volume create "$cache_volume" >/dev/null
-docker volume create "$frames_volume" >/dev/null
 docker run --detach --platform "$platform" --name "$container" \
 	  --init --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
 	  --user 65532:65532 \
-  --mount "type=bind,src=$scratch/config.json,dst=/config.json,readonly" \
-  --mount "type=bind,src=$scratch/assets,dst=/assets,readonly" \
-  --mount "type=volume,src=$cache_volume,dst=/var/lib/ribbonfish/cache" \
-  --mount "type=volume,src=$frames_volume,dst=/var/lib/ribbonfish/frames" \
-  "$image" -config /config.json >/dev/null
+  --env "RIBBONFISH_PROFILE=$default_profile" \
+  --mount "type=volume,src=$cache_volume,dst=/var/lib/ribbonfish" \
+  "$image" >/dev/null
 
 ready=false
 attempt=0
@@ -91,10 +90,8 @@ while [ "$attempt" -lt 30 ]; do
   docker cp "$container:/var/lib/ribbonfish/frames/." "$scratch/frames/" >/dev/null 2>&1 || true
   container_logs=$(docker logs "$container" 2>&1 || true)
   ready=true
-  for asset in $expected_assets; do
-    display_id=${asset%%:*}
-    digest=${asset#*:}
-    if [ ! -s "$scratch/frames/$display_id.png" ] || ! frame_update_logged "$container_logs" "$display_id" "$digest"; then
+  for display_id in $expected_frames; do
+    if [ ! -s "$scratch/frames/$display_id.png" ] || ! frame_update_for_display "$display_id"; then
       ready=false
       break
     fi
@@ -145,10 +142,9 @@ docker rm "$container" >/dev/null
 docker run --detach --platform "$platform" --name "$container" \
 	  --init --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
 	  --user 65532:65532 \
-  --mount "type=bind,src=$scratch/config.json,dst=/config.json,readonly" \
-  --mount "type=volume,src=$cache_volume,dst=/var/lib/ribbonfish/cache" \
-  --mount "type=volume,src=$frames_volume,dst=/var/lib/ribbonfish/frames" \
-  "$image" -config /config.json >/dev/null
+  --env "RIBBONFISH_PROFILE=$default_profile" \
+  --mount "type=volume,src=$cache_volume,dst=/var/lib/ribbonfish" \
+  "$image" >/dev/null
 
 ready=false
 attempt=0
@@ -156,10 +152,8 @@ while [ "$attempt" -lt 30 ]; do
   docker cp "$container:/var/lib/ribbonfish/frames/." "$scratch/offline-frames/" >/dev/null 2>&1 || true
   container_logs=$(docker logs "$container" 2>&1 || true)
   ready=true
-  for asset in $expected_assets; do
-    display_id=${asset%%:*}
-    digest=${asset#*:}
-    if [ ! -s "$scratch/offline-frames/$display_id.png" ] || ! frame_update_logged "$container_logs" "$display_id" "$digest"; then
+  for display_id in $expected_frames; do
+    if [ ! -s "$scratch/offline-frames/$display_id.png" ] || ! frame_update_for_display "$display_id"; then
       ready=false
       break
     fi
