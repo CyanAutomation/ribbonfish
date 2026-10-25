@@ -26,8 +26,8 @@ Options:
   --version TAG         Published sha-<40-character-commit> image tag
   --drm-device PATH     DRM card device (default follows the profile)
   --drm-gid GID         Numeric group owning the DRM card (default: detected)
-  --sync-url URL        Enable authenticated Cloudflare sync over HTTPS
-  --device-id ID        Stable device ID assigned in the Worker
+  --sync-url URL        Cloudflare Worker URL (requires --device-id)
+  --device-id ID        Stable Worker device ID (requires --sync-url)
   --replace-env         Back up and replace an existing .env
   -h, --help            Show this help
 
@@ -135,11 +135,21 @@ case "$drm_gid" in
 esac
 [ "$drm_gid" = "$device_gid" ] || fail "DRM GID $drm_gid does not own '$drm_device' (actual GID: $device_gid)"
 
-if [ -n "$sync_url" ] || [ -n "$device_id" ]; then
+if [ -n "$sync_url" ] && [ -z "$device_id" ]; then
+	fail '--device-id is required when --sync-url is set'
+fi
+if [ -n "$device_id" ] && [ -z "$sync_url" ]; then
+	fail '--sync-url is required when --device-id is set'
+fi
+
+if [ -n "$sync_url" ]; then
 	case "$sync_url" in
 		https://*) ;;
 		*) fail '--sync-url must use HTTPS' ;;
 	esac
+fi
+
+if [ -n "$device_id" ]; then
 	case "$device_id" in
 		[A-Za-z0-9]*) ;;
 		*) fail '--device-id must start with a letter or digit' ;;
