@@ -64,7 +64,7 @@ the check only writes PNG files and does not access DRM.
 GitHub Actions runs both checks on changes to the agent, simulator, or Pi
 examples, validates the Pi configs and Compose files, and publishes an ARMv7/
 ARM64 release image to GHCR when a `v*` tag is pushed. A separate workflow
-publishes `cyanautomation/ribbonfish-agent` to Docker Hub for AMD64, ARM64, and
+publishes `cyanautomation/ribbonfish` to Docker Hub for AMD64, ARM64, and
 ARMv7 after PRs merge into `main`, tagged as both `latest` and the full
 merge SHA (`sha-<merge-commit-SHA>`). Use the immutable SHA tag to pin a
 deployment; `latest` moves after verification passes. The published-image

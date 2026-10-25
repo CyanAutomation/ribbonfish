@@ -5,7 +5,7 @@ name: ribbonfish-published-simulator
 
 services:
   agent:
-    image: cyanautomation/ribbonfish-agent:${RIBBONFISH_VERSION:-latest}
+    image: cyanautomation/ribbonfish:${RIBBONFISH_VERSION:-latest}
     command: ["-config", "/etc/ribbonfish/config.json"]
     user: "65532:65532"
     init: true

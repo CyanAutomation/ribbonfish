@@ -11,10 +11,10 @@ case "$platform:$profile" in
 esac
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-image="ribbonfish-agent:smoke-${profile}"
-container="ribbonfish-agent-smoke-${profile}-$$"
-cache_volume="ribbonfish-agent-smoke-cache-${profile}-$$"
-frames_volume="ribbonfish-agent-smoke-frames-${profile}-$$"
+image="ribbonfish:smoke-${profile}"
+container="ribbonfish-smoke-${profile}-$$"
+cache_volume="ribbonfish-smoke-cache-${profile}-$$"
+frames_volume="ribbonfish-smoke-frames-${profile}-$$"
 scratch=$(mktemp -d)
 cleanup() {
   docker rm -f "$container" >/dev/null 2>&1 || true
