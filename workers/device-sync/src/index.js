@@ -259,7 +259,7 @@ function jsonResponse(value, status, extraHeaders = {}) {
 
 function privateHeaders(values = {}) {
   const headers = new Headers(values);
-  headers.set("Cache-Control", "private, no-store");
+  headers.set("Cache-Control", "private, no-store, no-transform");
   headers.set("X-Content-Type-Options", "nosniff");
   return headers;
 }
