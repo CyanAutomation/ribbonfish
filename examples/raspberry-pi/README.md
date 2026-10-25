@@ -19,38 +19,59 @@ Pi 4 dual-display acceptance remain open.
 - `docker-compose.published.yaml`: published-image simulation
 - `.env.example`: image tag, profile, DRM device/group, and optional sync
   settings
-- `prepare-deployment.sh`: stages Compose and environment files under
+- `prepare-deployment.sh`: detects the Pi profile and DRM group, pins the
+  published image, and stages the complete deployment kit under
   `~/containers/ribbonfish`
+- `verify-deployment.sh`: checks configuration before start and confirms the
+  running container has displayed a frame
 - `assets/` and `hardware-config.*.json`: source examples; the container
   profiles and starter images are bundled from `agent/defaults/`
 
 ## Install and start
 
-From a repository checkout on the Pi, stage the deployment files:
+From a clean, verified repository checkout on the Pi, stage the deployment
+files:
 
 ```sh
 sh examples/raspberry-pi/prepare-deployment.sh
 cd ~/containers/ribbonfish
+./verify-deployment.sh --preflight
+docker compose -p ribbonfish pull
+docker compose -p ribbonfish up -d
+./verify-deployment.sh
 ```
 
-The script copies the Compose file and `.env.example`, creates `.env` on first
-setup, and preserves an existing `.env`. It does not copy config or image
-assets. Edit `.env` to choose the hardware profile and confirm the DRM device
-and numeric group for the target Pi:
+The script detects Pi 3 A+, Pi 3 B, or Pi 4, reads the numeric group from the
+selected DRM card, and writes an immutable `sha-<commit>` image pin into `.env`.
+It starts in offline mode (`network_mode: none`). The generated environment is
+mode `0600`; existing `.env` files are preserved by default. To replace a
+legacy `.env`, the script makes a private timestamped backup first:
+
+```sh
+sh examples/raspberry-pi/prepare-deployment.sh --profile pi3a-plus \
+  --version sha-<published-commit> --replace-env
+```
+
+The script stages `docker-compose.yaml`, `.env`, `.env.example`, both helper
+scripts, `.gitignore`, and this README in the deployment directory. It does not
+copy config or image assets. Use `--profile`, `--version`, `--drm-device`, or
+`--drm-gid` to override detection. The Pi profile mapping is:
 
 - Pi 4 defaults to profile `pi4`, `/dev/dri/card1`, and GID `44` for Agentlab.
 - The tested Pi 3 A+ uses profile `pi3a-plus`, `/dev/dri/card0`, and GID `44`.
 - For Pi 3B, select `pi3b` and inspect the actual card and group first.
 
-Use `-list-displays` to inspect connector state, then pull the container and
-start it:
+If `~/containers/ribbonfish` exists but is not writable, the script stops and
+reports that directly. Make the deployment directory user-owned once, then
+rerun the script. `verify-deployment.sh --preflight` checks the device and
+GID, sync/network consistency, pinned image, and resolved Compose
+configuration. After `up -d`, the full verifier also checks the running image,
+network mode, loaded display config, and successful frame output. Use
+`docker compose -p ribbonfish run --rm agent -list-displays` to inspect
+connector state:
 
 ```sh
-docker compose config
-docker compose run --rm agent -list-displays
-docker compose pull
-docker compose up -d
-docker compose logs -f agent
+docker compose -p ribbonfish logs -f agent
 ```
 
 The service defaults to `network_mode: none`. Pulling the image needs a network
@@ -63,8 +84,8 @@ capabilities.
 After a PR merges into `main` and verification passes,
 `.github/workflows/docker-publish.yml` publishes
 `cyanautomation/ribbonfish` for AMD64, ARM64, and ARMv7, tagged `latest` and
-`sha-<merge-commit-SHA>`. `latest` advances to the newest verified merge; use
-the immutable SHA tag to pin a deployment. The separate
+`sha-<merge-commit-SHA>`. `latest` advances to the newest verified merge; the
+deployment helper pins the immutable SHA tag automatically. The separate
 `.github/workflows/publish-agent.yml` publishes ARMv7 and ARM64 images to
 `ghcr.io/cyanautomation/ribbonfish` when a `v*` tag is pushed. GHCR package
 visibility must allow Pi pulls, or the Pi must log in with a token that can
@@ -79,12 +100,24 @@ image contains no Cloudflare account credential. Worker setup, publishing a
 manifest, enrollment-code generation, and revocation instructions are in
 [`../../workers/device-sync/README.md`](../../workers/device-sync/README.md).
 
-Set the Worker URL, device ID, and network mode in `.env` before enrollment:
+Sync is an explicit opt-in. Set the Worker URL and device ID to generate a
+`bridge` network configuration; the verifier rejects sync without bridge
+networking or bridge networking without sync. The helper can write those
+settings directly:
+
+```sh
+sh examples/raspberry-pi/prepare-deployment.sh \
+  --profile pi3a-plus --version sha-<published-commit> \
+  --sync-url https://ribbonfish.scheimann.workers.dev \
+  --device-id ribbonfish-01 --replace-env
+```
+
+Or set these values in `.env`:
 
 ```dotenv
 RIBBONFISH_NETWORK_MODE=bridge
-RIBBONFISH_SYNC_URL=https://ribbonfish-sync.example.workers.dev
-RIBBONFISH_DEVICE_ID=pi-office
+RIBBONFISH_SYNC_URL=https://ribbonfish.scheimann.workers.dev
+RIBBONFISH_DEVICE_ID=ribbonfish-01
 RIBBONFISH_SYNC_INTERVAL=1m
 ```
 
@@ -94,9 +127,9 @@ same named volume used by the service and does not print the token:
 ```sh
 read -r -s -p 'One-time code: ' enrollment_code
 printf '\n'
-printf '%s' "$enrollment_code" | docker compose run --rm -T agent -enroll
+printf '%s' "$enrollment_code" | docker compose -p ribbonfish run --rm -T agent -enroll
 unset enrollment_code
-docker compose up -d
+docker compose -p ribbonfish up -d
 ```
 
 The agent starts local playback before polling. It verifies the manifest and
