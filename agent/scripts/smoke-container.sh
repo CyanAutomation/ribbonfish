@@ -37,19 +37,39 @@ frame_update_logged() {
     | grep -F "asset_sha256=$3" >/dev/null
 }
 
+frame_update_for_display() {
+  display_id=$1
+  case "$profile:$display_id" in
+    pi3b:display-main)
+      frame_update_logged "$container_logs" "$display_id" "$operations_sha" \
+        || frame_update_logged "$container_logs" "$display_id" "$service_sha"
+      ;;
+    pi4:display-left)
+      frame_update_logged "$container_logs" "$display_id" "$operations_sha" \
+        || frame_update_logged "$container_logs" "$display_id" "$service_sha"
+      ;;
+    pi4:display-right)
+      frame_update_logged "$container_logs" "$display_id" "$platform_sha" \
+        || frame_update_logged "$container_logs" "$display_id" "$deployment_sha"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 mkdir -p "$scratch/frames" "$scratch/offline-frames"
 
 if [ "$profile" = pi3b ]; then
 	default_profile=simulator-pi3b
 	operations_sha=$(sha256_file "$repo_root/agent/defaults/assets/operations-overview.png")
+  service_sha=$(sha256_file "$repo_root/agent/defaults/assets/service-health.png")
   expected_frames='display-main'
-  expected_assets="display-main:$operations_sha"
 else
 	default_profile=simulator-pi4
 	operations_sha=$(sha256_file "$repo_root/agent/defaults/assets/operations-overview.png")
+	service_sha=$(sha256_file "$repo_root/agent/defaults/assets/service-health.png")
 	platform_sha=$(sha256_file "$repo_root/agent/defaults/assets/platform-status.png")
+	deployment_sha=$(sha256_file "$repo_root/agent/defaults/assets/deployment-pipeline.png")
   expected_frames='display-left display-right'
-	expected_assets="display-left:$operations_sha display-right:$platform_sha"
 fi
 
 docker buildx build --platform "$platform" --load --tag "$image" "$repo_root/agent"
@@ -70,10 +90,8 @@ while [ "$attempt" -lt 30 ]; do
   docker cp "$container:/var/lib/ribbonfish/frames/." "$scratch/frames/" >/dev/null 2>&1 || true
   container_logs=$(docker logs "$container" 2>&1 || true)
   ready=true
-  for asset in $expected_assets; do
-    display_id=${asset%%:*}
-    digest=${asset#*:}
-    if [ ! -s "$scratch/frames/$display_id.png" ] || ! frame_update_logged "$container_logs" "$display_id" "$digest"; then
+  for display_id in $expected_frames; do
+    if [ ! -s "$scratch/frames/$display_id.png" ] || ! frame_update_for_display "$display_id"; then
       ready=false
       break
     fi
@@ -134,10 +152,8 @@ while [ "$attempt" -lt 30 ]; do
   docker cp "$container:/var/lib/ribbonfish/frames/." "$scratch/offline-frames/" >/dev/null 2>&1 || true
   container_logs=$(docker logs "$container" 2>&1 || true)
   ready=true
-  for asset in $expected_assets; do
-    display_id=${asset%%:*}
-    digest=${asset#*:}
-    if [ ! -s "$scratch/offline-frames/$display_id.png" ] || ! frame_update_logged "$container_logs" "$display_id" "$digest"; then
+  for display_id in $expected_frames; do
+    if [ ! -s "$scratch/offline-frames/$display_id.png" ] || ! frame_update_for_display "$display_id"; then
       ready=false
       break
     fi
