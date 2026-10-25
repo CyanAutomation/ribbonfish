@@ -39,7 +39,7 @@ and writes valid output frames. They do not emulate Raspberry Pi OS or validate
 DRM/KMS, GPIO, display timing, or physical hardware behavior. CI runs the same
 checks for both profiles.
 
-The four sample PNGs are local files under `assets/`; no URLs are fetched.
+The four sample PNGs are local files under `examples/raspberry-pi/assets/`; no URLs are fetched.
 Missing or corrupt playlist items are logged and skipped, and a display keeps
 its last successfully written frame if none of its configured assets can be
 loaded. A cache directory that cannot be opened prevents startup. If the cache

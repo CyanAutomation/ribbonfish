@@ -6,6 +6,8 @@ This directory has three Compose examples: a source-built simulator, a published
 
 - `docker-compose.simulator.yaml`: isolated software simulation with PNG frames and persistent volumes
 - `docker-compose.published.yaml`: runs the Docker Hub image in simulator mode without building from source
+- `assets/`: sample PNG files used by the deployment and simulator examples
+- `prepare-deployment.sh`: stages the deployment files in `~/containers/ribbonfish`
 - `simulator-config.json`: two logical simulator displays rendered at 1920x1080
 - `simulator-config.pi3a-plus.json`: one simulator display matching the tested Pi 3 A+ connector and observed 1920x1080@60 mode
 - `docker-compose.yaml`: local-file DRM/KMS deployment, using sample images and no control-plane connection
@@ -13,6 +15,29 @@ This directory has three Compose examples: a source-built simulator, a published
 - `hardware-config.pi3a-plus.json`: tested one-display Pi 3 A+ profile using card0 and HDMI-A-1
 - `hardware-config.pi3b.json`: one-display Pi 3B profile using HDMI-A-1
 - `.env.example`: image tag, config path, cache path, DRM device, and numeric DRM group
+
+## Install under `~/containers/ribbonfish`
+
+From a repository checkout on the Raspberry Pi, prepare a self-contained deployment directory:
+
+```sh
+sh examples/raspberry-pi/prepare-deployment.sh
+cd ~/containers/ribbonfish
+```
+
+The script copies `docker-compose.yaml`, `.env.example`, `.gitignore`, the hardware profiles, and sample assets into the target directory. It creates `.env` from `.env.example` on first setup and preserves an existing `.env`. Existing hardware profiles and assets are also preserved, so local edits survive if you run the script again. The Compose file only references files inside this directory.
+
+Edit `.env` to choose the profile and confirm the DRM device and numeric group for this Pi. For the tested Pi 3 A+, use `./hardware-config.pi3a-plus.json`, `/dev/dri/card0`, and GID `44`. For Pi 3B, choose `./hardware-config.pi3b.json` and inspect the actual device and group. The default is the Pi 4 profile.
+
+Start the service from `~/containers/ribbonfish`:
+
+```sh
+docker compose config
+docker compose run --rm agent -list-displays
+docker compose pull
+docker compose up -d
+docker compose logs -f agent
+```
 
 The agent has no enrollment or remote synchronization yet. The hardware service therefore uses local config/assets and `network_mode: none`. After a PR merges into `main` and the verification job passes, `.github/workflows/docker-publish.yml` publishes `cyanautomation/ribbonfish` to Docker Hub for AMD64, ARM64, and ARMv7 with both `latest` and immutable `sha-<merge-commit-SHA>` tags. The `latest` tag moves to the newest verified merge; use a SHA tag to pin a deployment. The separate `.github/workflows/publish-agent.yml` publishes ARMv7 and ARM64 images to `ghcr.io/cyanautomation/ribbonfish` when a `v*` tag is pushed. The Pi `.env.example` defaults to `latest`.
 
@@ -94,18 +119,6 @@ ls /sys/class/drm
 
 On Agentlab, the previous inspection found both card nodes owned by `root:video` (GID 44), with `vc4-drm` on card1. Recheck after reboot and on each different model/kernel. The tested Pi 3 A+ uses card0 and GID 44. Pi 3B uses `hardware-config.pi3b.json`; confirm its actual card and group before deploying.
 
-From `examples/raspberry-pi`, prepare the Compose settings. For the tested Pi 3 A+, choose `./hardware-config.pi3a-plus.json`, `/dev/dri/card0`, and GID 44. For Pi 3B, choose `./hardware-config.pi3b.json` and confirm the actual DRM card/GID instead.
-
-```sh
-cp .env.example .env
-# Edit .env: set a published RIBBONFISH_VERSION and confirm DRM device/GID.
-docker compose config
-docker compose run --rm agent -list-displays
-docker compose pull
-docker compose up -d
-docker compose logs -f agent
-```
-
 The tested Pi has Docker Engine but no Compose plugin. For a Docker-only deployment, set `IMAGE` to a published agent image, then run:
 
 ```sh
@@ -116,7 +129,7 @@ docker run --detach --name ribbonfish --restart unless-stopped --stop-timeout 15
   --security-opt no-new-privileges:true --user 65532:65532 \
   --device /dev/dri/card0:/dev/dri/card0 --group-add 44 \
   --mount "type=bind,src=$PWD/hardware-config.pi3a-plus.json,dst=/etc/ribbonfish/config.json,readonly" \
-  --mount "type=bind,src=$PWD/../agent/simulator/assets,dst=/assets,readonly" \
+  --mount "type=bind,src=$PWD/assets,dst=/assets,readonly" \
   --mount type=volume,src=ribbonfish-cache,dst=/var/lib/ribbonfish/cache \
   "$IMAGE" -config /etc/ribbonfish/config.json
 ```
@@ -125,7 +138,7 @@ Confirm the configured connector reports `connected`, startup selects the expect
 
 `-list-displays` reads sysfs and reports connector metadata plus whether the mapped card node exists. It does not test permissions, DRM master acquisition, mode-setting, or actual pixels. A successful Compose config check or QEMU smoke run is not hardware acceptance either.
 
-The Compose file maps only one DRM card, runs as UID 65532 with its numeric DRM group, drops all capabilities, uses a read-only root filesystem, and grants no network. It mounts the config and sample assets read-only and stores cache data in a named volume. Do not add `privileged: true` to work around a DRM permission or ownership failure; inspect the card owner, group, and active display services.
+The Compose file maps only one DRM card, runs as UID 65532 with its numeric DRM group, drops all capabilities, uses a read-only root filesystem, and grants no network. It mounts the config and sample assets from `~/containers/ribbonfish` read-only and stores cache data in a named volume. Do not add `privileged: true` to work around a DRM permission or ownership failure; inspect the card owner, group, and active display services.
 
 ## Current hardware limitations
 
