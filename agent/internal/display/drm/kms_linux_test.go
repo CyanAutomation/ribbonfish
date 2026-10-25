@@ -20,6 +20,7 @@ func TestDRMModeStructSizesMatchLinuxUAPI(t *testing.T) {
 		{name: "mode info", got: unsafe.Sizeof(drmModeModeInfo{}), want: 68},
 		{name: "resource list", got: unsafe.Sizeof(drmModeCardResources{}), want: 64},
 		{name: "connector", got: unsafe.Sizeof(drmModeGetConnector{}), want: 80},
+		{name: "encoder", got: unsafe.Sizeof(drmModeGetEncoder{}), want: 20},
 		{name: "CRTC", got: unsafe.Sizeof(drmModeCRTC{}), want: 104},
 		{name: "create dumb", got: unsafe.Sizeof(drmModeCreateDumb{}), want: 32},
 		{name: "map dumb", got: unsafe.Sizeof(drmModeMapDumb{}), want: 16},
