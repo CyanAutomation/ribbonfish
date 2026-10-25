@@ -74,6 +74,7 @@ jobs:
         run: |
           docker buildx build \
             --platform linux/amd64,linux/arm64,linux/arm/v7 \
+            --tag "docker.io/${DOCKERHUB_USERNAME}/ribbonfish-agent:latest" \
             --tag "docker.io/${DOCKERHUB_USERNAME}/ribbonfish-agent:sha-${MERGE_COMMIT_SHA}" \
             --push \
             ./agent
