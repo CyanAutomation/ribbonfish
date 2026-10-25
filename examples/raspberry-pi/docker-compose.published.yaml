@@ -1,10 +1,11 @@
 # Run the published multi-architecture image in software simulator mode.
+# Defaults to latest; set RIBBONFISH_VERSION to a sha tag to pin a run.
 # This pulls from Docker Hub and writes PNG frames; it does not access DRM/HDMI.
 name: ribbonfish-published-simulator
 
 services:
   agent:
-    image: cyanautomation/ribbonfish-agent:${RIBBONFISH_VERSION:?Set RIBBONFISH_VERSION to a published sha tag}
+    image: cyanautomation/ribbonfish-agent:${RIBBONFISH_VERSION:-latest}
     command: ["-config", "/etc/ribbonfish/config.json"]
     user: "65532:65532"
     init: true
