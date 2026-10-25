@@ -39,19 +39,19 @@ frame_update_logged() {
 }
 
 mkdir -p "$scratch/frames" "$scratch/offline-frames" "$scratch/assets"
-cp "$repo_root"/examples/agent/simulator/assets/*.png "$scratch/assets/"
+cp "$repo_root"/examples/raspberry-pi/assets/*.png "$scratch/assets/"
 chmod 0755 "$scratch/assets"
 chmod 0644 "$scratch/assets"/*.png
 
 if [ "$profile" = pi3b ]; then
-  operations_sha=$(sha256_file "$repo_root/examples/agent/simulator/assets/operations-overview.png")
+  operations_sha=$(sha256_file "$repo_root/examples/raspberry-pi/assets/operations-overview.png")
   displays='[{"id":"display-main","playlist_id":"main","rotation_interval":"1h"}]'
   playlists="[{\"id\":\"main\",\"assets\":[{\"path\":\"/assets/operations-overview.png\",\"sha256\":\"$operations_sha\"}]}]"
   expected_frames='display-main'
   expected_assets="display-main:$operations_sha"
 else
-  operations_sha=$(sha256_file "$repo_root/examples/agent/simulator/assets/operations-overview.png")
-  health_sha=$(sha256_file "$repo_root/examples/agent/simulator/assets/service-health.png")
+  operations_sha=$(sha256_file "$repo_root/examples/raspberry-pi/assets/operations-overview.png")
+  health_sha=$(sha256_file "$repo_root/examples/raspberry-pi/assets/service-health.png")
   displays='[{"id":"display-left","playlist_id":"left","rotation_interval":"1h"},{"id":"display-right","playlist_id":"right","rotation_interval":"1h"}]'
   playlists="[{\"id\":\"left\",\"assets\":[{\"path\":\"/assets/operations-overview.png\",\"sha256\":\"$operations_sha\"}]},{\"id\":\"right\",\"assets\":[{\"path\":\"/assets/service-health.png\",\"sha256\":\"$health_sha\"}]}]"
   expected_frames='display-left display-right'

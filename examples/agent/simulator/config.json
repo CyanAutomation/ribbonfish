@@ -14,15 +14,15 @@
     {
       "id": "operations",
       "assets": [
-        { "path": "./assets/operations-overview.png" },
-        { "path": "./assets/service-health.png" }
+        { "path": "../../raspberry-pi/assets/operations-overview.png" },
+        { "path": "../../raspberry-pi/assets/service-health.png" }
       ]
     },
     {
       "id": "platform",
       "assets": [
-        { "path": "./assets/platform-status.png" },
-        { "path": "./assets/deployment-pipeline.png" }
+        { "path": "../../raspberry-pi/assets/platform-status.png" },
+        { "path": "../../raspberry-pi/assets/deployment-pipeline.png" }
       ]
     }
   ],
