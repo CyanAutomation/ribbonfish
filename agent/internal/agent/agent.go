@@ -49,6 +49,15 @@ type preparedSchedule struct {
 	schedule playlist.Schedule
 }
 
+type playbackState struct {
+	config    config.Config
+	scheduler playlist.Scheduler
+	displays  map[string]playlist.Schedule
+	retained  []string
+	readers   int
+	idle      chan struct{}
+}
+
 // Agent owns the local playback loop and does not require network access.
 type Agent struct {
 	cache     cache.Store
@@ -57,6 +66,9 @@ type Agent struct {
 	clock     Clock
 	scheduler playlist.Scheduler
 	displays  []preparedSchedule
+	mu        sync.Mutex
+	state     *playbackState
+	changed   chan struct{}
 }
 
 // New verifies configured assets into the local cache and prepares independent
@@ -81,36 +93,68 @@ func New(ctx context.Context, cfg config.Config, imageCache cache.Store, output 
 	if clock == nil {
 		clock = RealClock{}
 	}
-	agent := &Agent{cache: imageCache, output: output, logger: logger, clock: clock}
-	if ctx.Err() != nil {
-		return agent, nil
+	state, err := prepareState(ctx, cfg, imageCache, logger, true, false)
+	if err != nil {
+		return nil, err
 	}
+	agent := &Agent{cache: imageCache, output: output, logger: logger, clock: clock, state: state, changed: make(chan struct{})}
+	agent.scheduler = state.scheduler
+	for _, schedule := range state.displays {
+		agent.displays = append(agent.displays, preparedSchedule{schedule: schedule})
+	}
+	return agent, nil
+}
 
-	// Protect manifest-pinned content before any cache writes can evict it.
-	expected := make(map[string]struct{})
-	for _, playlistConfig := range cfg.Playlists {
-		for _, asset := range playlistConfig.Assets {
-			if asset.SHA256 != "" {
-				expected[strings.ToLower(asset.SHA256)] = struct{}{}
+func prepareState(ctx context.Context, cfg config.Config, imageCache cache.Store, logger *slog.Logger, pruneBefore, requireCachedAssets bool) (*playbackState, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("validate agent config: %w", err)
+	}
+	if ctx.Err() != nil {
+		idle := make(chan struct{})
+		close(idle)
+		return &playbackState{config: cloneConfig(cfg), displays: map[string]playlist.Schedule{}, idle: idle}, nil
+	}
+	if pruneBefore {
+		expected := make(map[string]struct{})
+		for _, playlistConfig := range cfg.Playlists {
+			for _, asset := range playlistConfig.Assets {
+				if asset.SHA256 != "" {
+					expected[strings.ToLower(asset.SHA256)] = struct{}{}
+				}
+			}
+		}
+		if len(expected) > 0 {
+			if err := imageCache.Prune(ctx, sortedKeys(expected)); err != nil && ctx.Err() == nil {
+				logger.Warn("could not prune cache before loading playlist assets", "error", err)
 			}
 		}
 	}
-	if len(expected) > 0 {
-		if err := imageCache.Prune(ctx, sortedKeys(expected)); err != nil && ctx.Err() == nil {
-			logger.Warn("could not prune cache before loading playlist assets", "error", err)
-		}
-	}
 
+	normalized := cloneConfig(cfg)
 	playlistEntries := make(map[string][]playlist.Entry, len(cfg.Playlists))
 	retained := make(map[string]struct{})
-	for _, playlistConfig := range cfg.Playlists {
-		for _, source := range playlistConfig.Assets {
+	for playlistIndex, playlistConfig := range cfg.Playlists {
+		for assetIndex, source := range playlistConfig.Assets {
 			if ctx.Err() != nil {
 				break
+			}
+			if requireCachedAssets {
+				if source.SHA256 == "" {
+					return nil, fmt.Errorf("snapshot asset %q has no SHA-256 digest", source.Path)
+				}
+				digest := strings.ToLower(source.SHA256)
+				if _, err := imageCache.Load(ctx, cache.Asset{SHA256: digest}); err != nil {
+					return nil, fmt.Errorf("snapshot asset %s is unavailable or invalid: %w", digest, err)
+				}
+				normalized.Playlists[playlistIndex].Assets[assetIndex].SHA256 = digest
+				playlistEntries[playlistConfig.ID] = append(playlistEntries[playlistConfig.ID], playlist.Entry{SHA256: digest, Path: source.Path})
+				retained[digest] = struct{}{}
+				continue
 			}
 			if source.SHA256 != "" {
 				digest := strings.ToLower(source.SHA256)
 				if _, err := imageCache.Load(ctx, cache.Asset{SHA256: digest}); err == nil {
+					normalized.Playlists[playlistIndex].Assets[assetIndex].SHA256 = digest
 					playlistEntries[playlistConfig.ID] = append(playlistEntries[playlistConfig.ID], playlist.Entry{SHA256: digest, Path: source.Path})
 					retained[digest] = struct{}{}
 					continue
@@ -134,17 +178,19 @@ func New(ctx context.Context, cfg config.Config, imageCache cache.Store, output 
 			if closeErr != nil {
 				logger.Warn("could not close playlist source image", "playlist_id", playlistConfig.ID, "path", source.Path, "error", closeErr)
 			}
+			normalized.Playlists[playlistIndex].Assets[assetIndex].SHA256 = asset.SHA256
 			playlistEntries[playlistConfig.ID] = append(playlistEntries[playlistConfig.ID], playlist.Entry{SHA256: asset.SHA256, Path: source.Path})
 			retained[asset.SHA256] = struct{}{}
 		}
 	}
-	if ctx.Err() == nil {
+	if pruneBefore && ctx.Err() == nil {
 		if err := imageCache.Prune(ctx, sortedKeys(retained)); err != nil {
 			return nil, fmt.Errorf("protect configured playlist assets in cache: %w", err)
 		}
 	}
 
-	var schedules []playlist.Schedule
+	schedules := make(map[string]playlist.Schedule)
+	var scheduleList []playlist.Schedule
 	for _, displayConfig := range cfg.Displays {
 		entries := playlistEntries[displayConfig.PlaylistID]
 		if len(entries) == 0 {
@@ -155,26 +201,23 @@ func New(ctx context.Context, cfg config.Config, imageCache cache.Store, output 
 		if err != nil {
 			return nil, err
 		}
-		schedules = append(schedules, playlist.Schedule{
-			DisplayID: displayConfig.ID,
-			Interval:  interval,
-			Entries:   entries,
-			Anchor:    time.Unix(0, 0).UTC(),
-		})
+		schedule := playlist.Schedule{DisplayID: displayConfig.ID, Interval: interval, Entries: entries, Anchor: time.Unix(0, 0).UTC()}
+		schedules[displayConfig.ID] = schedule
+		scheduleList = append(scheduleList, schedule)
 	}
-	if len(schedules) == 0 {
+	var scheduler playlist.Scheduler
+	var err error
+	if len(scheduleList) == 0 {
 		logger.Warn("no displays have playable playlist images; waiting for shutdown")
-		return agent, nil
+	} else {
+		scheduler, err = playlist.New(scheduleList)
+		if err != nil {
+			return nil, fmt.Errorf("create playlist scheduler: %w", err)
+		}
 	}
-	scheduler, err := playlist.New(schedules)
-	if err != nil {
-		return nil, fmt.Errorf("create playlist scheduler: %w", err)
-	}
-	agent.scheduler = scheduler
-	for _, schedule := range schedules {
-		agent.displays = append(agent.displays, preparedSchedule{schedule: schedule})
-	}
-	return agent, nil
+	idle := make(chan struct{})
+	close(idle)
+	return &playbackState{config: normalized, scheduler: scheduler, displays: schedules, retained: sortedKeys(retained), idle: idle}, nil
 }
 
 // Run starts one independent playback loop per configured display and waits
@@ -188,17 +231,195 @@ func (a *Agent) Run(ctx context.Context) error {
 		return nil
 	}
 	var wait sync.WaitGroup
-	for _, item := range a.displays {
-		item := item
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			a.runDisplay(ctx, item.schedule)
-		}()
+	a.mu.Lock()
+	state := a.state
+	if state != nil {
+		for _, displayConfig := range state.config.Displays {
+			displayID := displayConfig.ID
+			wait.Add(1)
+			go func() {
+				defer wait.Done()
+				a.runDynamicDisplay(ctx, displayID)
+			}()
+		}
+		a.mu.Unlock()
+	} else {
+		displays := append([]preparedSchedule(nil), a.displays...)
+		a.mu.Unlock()
+		for _, item := range displays {
+			item := item
+			wait.Add(1)
+			go func() {
+				defer wait.Done()
+				a.runDisplay(ctx, item.schedule)
+			}()
+		}
 	}
 	<-ctx.Done()
 	wait.Wait()
 	return nil
+}
+
+// CurrentConfig returns the local settings combined with the active content
+// snapshot. The returned slices are independent of the live agent state.
+func (a *Agent) CurrentConfig() config.Config {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.state == nil {
+		return config.Config{}
+	}
+	return cloneConfig(a.state.config)
+}
+
+// ApplyConfig switches playlists after all referenced content is available in
+// the cache. The output and hardware mapping cannot be changed by a remote
+// snapshot. Old cache entries remain pinned until playback leaves the prior
+// snapshot, then normal cache pruning removes them.
+func (a *Agent) ApplyConfig(ctx context.Context, cfg config.Config) error {
+	if ctx == nil {
+		return errors.New("agent context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	candidate, err := prepareState(ctx, cfg, a.cache, a.logger, false, true)
+	if err != nil {
+		return err
+	}
+	a.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		a.mu.Unlock()
+		return err
+	}
+	previous := a.state
+	if previous == nil {
+		a.mu.Unlock()
+		return errors.New("agent has no active playback state")
+	}
+	if !sameHardware(previous.config, candidate.config) {
+		a.mu.Unlock()
+		return errors.New("content update attempted to change local hardware settings")
+	}
+	a.state = candidate
+	if a.changed == nil {
+		a.changed = make(chan struct{})
+	}
+	close(a.changed)
+	a.changed = make(chan struct{})
+	previousIdle := previous.idle
+	a.mu.Unlock()
+
+	select {
+	case <-previousIdle:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := a.cache.Prune(ctx, candidate.retained); err != nil {
+		// Playback is already on the new snapshot. Keeping extra cache entries is
+		// safe; the bounded cache will report a failure if future assets cannot fit.
+		a.logger.Warn("could not prune images from the previous snapshot", "error", err)
+	}
+	return nil
+}
+
+func (a *Agent) acquireState(displayID string) (*playbackState, playlist.Schedule, <-chan struct{}) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	state := a.state
+	if state == nil {
+		return nil, playlist.Schedule{}, a.changed
+	}
+	schedule, ok := state.displays[displayID]
+	if !ok {
+		return state, playlist.Schedule{}, a.changed
+	}
+	if state.readers == 0 {
+		state.idle = make(chan struct{})
+	}
+	state.readers++
+	return state, schedule, a.changed
+}
+
+func (a *Agent) releaseState(state *playbackState) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	state.readers--
+	if state.readers == 0 {
+		close(state.idle)
+	}
+}
+
+func (a *Agent) runDynamicDisplay(ctx context.Context, displayID string) {
+	lastDisplayed := ""
+	for ctx.Err() == nil {
+		state, schedule, changed := a.acquireState(displayID)
+		if state == nil {
+			return
+		}
+		if schedule.DisplayID == "" {
+			select {
+			case <-changed:
+				continue
+			case <-ctx.Done():
+				return
+			}
+		}
+		now := a.clock.Now()
+		entry, frame, available := a.currentFrameFor(ctx, state.scheduler, schedule, now)
+		if available && entry.SHA256 != lastDisplayed {
+			if err := a.output.Present(ctx, displayID, frame); err != nil {
+				if ctx.Err() == nil {
+					a.logger.Error("could not present display frame; keeping last good output", "display_id", displayID, "error", err)
+				}
+			} else {
+				lastDisplayed = entry.SHA256
+				a.logger.Info("display frame updated", "display_id", displayID, "asset_sha256", entry.SHA256)
+			}
+		}
+		now = a.clock.Now()
+		next, err := state.scheduler.NextChange(displayID, now)
+		if err != nil {
+			a.releaseState(state)
+			a.logger.Error("could not calculate playlist rotation", "display_id", displayID, "error", err)
+			return
+		}
+		wait := next.Sub(now)
+		if wait <= 0 {
+			wait = time.Millisecond
+		}
+		a.releaseState(state)
+		if err := waitForChange(ctx, changed, a.clock, wait); err != nil && ctx.Err() == nil {
+			a.logger.Error("playlist clock failed", "display_id", displayID, "error", err)
+			return
+		}
+	}
+}
+
+func waitForChange(ctx context.Context, changed <-chan struct{}, clock Clock, duration time.Duration) error {
+	waitCtx, cancel := context.WithCancel(ctx)
+	finished := make(chan struct{})
+	go func() {
+		select {
+		case <-changed:
+			cancel()
+		case <-finished:
+		}
+	}()
+	err := clock.Wait(waitCtx, duration)
+	close(finished)
+	cancel()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	select {
+	case <-changed:
+		return nil
+	default:
+	}
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
 }
 
 func (a *Agent) runDisplay(ctx context.Context, schedule playlist.Schedule) {
@@ -237,7 +458,11 @@ func (a *Agent) runDisplay(ctx context.Context, schedule playlist.Schedule) {
 }
 
 func (a *Agent) currentFrame(ctx context.Context, schedule playlist.Schedule, at time.Time) (playlist.Entry, image.Image, bool) {
-	current, err := a.scheduler.Current(schedule.DisplayID, at)
+	return a.currentFrameFor(ctx, a.scheduler, schedule, at)
+}
+
+func (a *Agent) currentFrameFor(ctx context.Context, scheduler playlist.Scheduler, schedule playlist.Schedule, at time.Time) (playlist.Entry, image.Image, bool) {
+	current, err := scheduler.Current(schedule.DisplayID, at)
 	if err != nil {
 		a.logger.Error("could not select playlist asset", "display_id", schedule.DisplayID, "error", err)
 		return playlist.Entry{}, nil, false
@@ -261,6 +486,36 @@ func (a *Agent) currentFrame(ctx context.Context, schedule playlist.Schedule, at
 		return entry, frame, true
 	}
 	return playlist.Entry{}, nil, false
+}
+
+func sameHardware(left, right config.Config) bool {
+	if left.Cache.Directory != right.Cache.Directory || left.Cache.MaxBytes != right.Cache.MaxBytes ||
+		left.Output.EffectiveBackend() != right.Output.EffectiveBackend() || left.Output.Directory != right.Output.Directory ||
+		left.Output.Device != right.Output.Device || left.Output.EffectiveFit() != right.Output.EffectiveFit() ||
+		len(left.Displays) != len(right.Displays) {
+		return false
+	}
+	rightDisplays := make(map[string]config.DisplayConfig, len(right.Displays))
+	for _, item := range right.Displays {
+		rightDisplays[item.ID] = item
+	}
+	for _, item := range left.Displays {
+		other, ok := rightDisplays[item.ID]
+		if !ok || item.Connector != other.Connector || item.Mode != other.Mode {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneConfig(source config.Config) config.Config {
+	clone := source
+	clone.Playlists = append([]config.PlaylistConfig(nil), source.Playlists...)
+	for i := range clone.Playlists {
+		clone.Playlists[i].Assets = append([]config.AssetConfig(nil), source.Playlists[i].Assets...)
+	}
+	clone.Displays = append([]config.DisplayConfig(nil), source.Displays...)
+	return clone
 }
 
 func sortedKeys(values map[string]struct{}) []string {
