@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: publish-agent-${{ github.ref }}
+  group: publish-ribbonfish-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -68,7 +68,7 @@ jobs:
         id: metadata
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/cyanautomation/ribbonfish-agent
+          images: ghcr.io/cyanautomation/ribbonfish
           flavor: latest=false
           tags: |
             type=semver,pattern={{version}}

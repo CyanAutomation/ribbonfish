@@ -4,7 +4,7 @@ name: ribbonfish-pi-simulator
 
 services:
   agent:
-    image: ribbonfish-agent:agentlab-simulator
+    image: ribbonfish:agentlab-simulator
     platform: linux/arm64
     build:
       context: ../../agent
