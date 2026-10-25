@@ -216,6 +216,7 @@ func TestPi3APlusSimulatorUsesObservedHDMIMode(t *testing.T) {
 
 func TestListDRMDisplaysReportsConnectorOwningDevice(t *testing.T) {
 	sysfsRoot := t.TempDir()
+	devRoot := filepath.Join(t.TempDir(), "dri")
 	cardDevice := filepath.Join(sysfsRoot, "card1", "device")
 	if err := os.MkdirAll(cardDevice, 0o755); err != nil {
 		t.Fatal(err)
@@ -239,7 +240,7 @@ func TestListDRMDisplaysReportsConnectorOwningDevice(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	if err := listDRMDisplays(sysfsRoot, "/dev/dri", &output); err != nil {
+	if err := listDRMDisplays(sysfsRoot, devRoot, &output); err != nil {
 		t.Fatalf("listDRMDisplays() error = %v", err)
 	}
 	var got []struct {
@@ -263,7 +264,7 @@ func TestListDRMDisplaysReportsConnectorOwningDevice(t *testing.T) {
 		Driver            string   `json:"driver"`
 		Status            string   `json:"status"`
 		Modes             []string `json:"modes"`
-	}{Name: "HDMI-A-1", Device: "/dev/dri/card1", DeviceNodePresent: false, Driver: "vc4-drm", Status: "disconnected", Modes: []string{"1920x1080", "1280x720"}}
+	}{Name: "HDMI-A-1", Device: filepath.Join(devRoot, "card1"), DeviceNodePresent: false, Driver: "vc4-drm", Status: "disconnected", Modes: []string{"1920x1080", "1280x720"}}
 	if !reflect.DeepEqual(got[0], want) {
 		t.Fatalf("listDRMDisplays() connector = %#v, want %#v", got[0], want)
 	}
