@@ -145,6 +145,11 @@ func (c *HTTPClient) Synchronize(ctx context.Context, hardware, active config.Co
 	if err := validateManifest(manifest, hardware); err != nil {
 		return Update{}, fmt.Errorf("validate manifest: %w", err)
 	}
+	etag := strings.TrimSpace(response.Header.Get("ETag"))
+	if etag != "" && !manifestETagMatchesRevision(etag, manifest.Revision) {
+		return Update{}, fmt.Errorf("manifest ETag %q does not match revision %q", etag, manifest.Revision)
+	}
+	expectedETag := `"` + manifest.Revision + `"`
 
 	activeDigests := configDigests(active)
 	candidateDigests := manifestDigests(manifest)
@@ -183,11 +188,6 @@ func (c *HTTPClient) Synchronize(ctx context.Context, hardware, active config.Co
 	candidate, err := mergeManifest(hardware, manifest, assets)
 	if err != nil {
 		return Update{}, err
-	}
-	etag := strings.TrimSpace(response.Header.Get("ETag"))
-	expectedETag := `"` + manifest.Revision + `"`
-	if etag != "" && etag != expectedETag {
-		return Update{}, errors.New("manifest ETag does not match its revision")
 	}
 	etag = expectedETag
 	c.etag = etag
@@ -480,6 +480,14 @@ func validID(value string) bool {
 		}
 	}
 	return true
+}
+
+func manifestETagMatchesRevision(etag, revision string) bool {
+	etag = strings.TrimSpace(etag)
+	if strings.HasPrefix(etag, "W/") {
+		etag = strings.TrimSpace(strings.TrimPrefix(etag, "W/"))
+	}
+	return etag == `"`+revision+`"`
 }
 
 func isAlphaNumeric(c byte) bool {
