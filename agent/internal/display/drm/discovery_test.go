@@ -19,6 +19,12 @@ func TestDiscoverReportsConnectorsAndTheirOwningDRMCard(t *testing.T) {
 	fixture.addCard(1, "vc4-drm")
 	fixture.addConnector(1, "HDMI-A-1", "disconnected", nil)
 	fixture.addConnector(1, "HDMI-A-2", "connected", []string{"1920x1080", "1280x720"})
+	if err := os.MkdirAll(devRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(os.DevNull, filepath.Join(devRoot, "card1")); err != nil {
+		t.Fatal(err)
+	}
 
 	connectors, err := Discover(sysfsRoot, devRoot)
 	if err != nil {
@@ -30,24 +36,48 @@ func TestDiscoverReportsConnectorsAndTheirOwningDRMCard(t *testing.T) {
 
 	want := []Connector{
 		{
-			Card:   1,
-			Name:   "HDMI-A-1",
-			Device: filepath.Join(devRoot, "card1"),
-			Driver: "vc4-drm",
-			Status: "disconnected",
-			Modes:  []string{},
+			Card:              1,
+			Name:              "HDMI-A-1",
+			Device:            filepath.Join(devRoot, "card1"),
+			DeviceNodePresent: true,
+			Driver:            "vc4-drm",
+			Status:            "disconnected",
+			Modes:             []string{},
 		},
 		{
-			Card:   1,
-			Name:   "HDMI-A-2",
-			Device: filepath.Join(devRoot, "card1"),
-			Driver: "vc4-drm",
-			Status: "connected",
-			Modes:  []string{"1920x1080", "1280x720"},
+			Card:              1,
+			Name:              "HDMI-A-2",
+			Device:            filepath.Join(devRoot, "card1"),
+			DeviceNodePresent: true,
+			Driver:            "vc4-drm",
+			Status:            "connected",
+			Modes:             []string{"1920x1080", "1280x720"},
 		},
 	}
 	if !reflect.DeepEqual(connectors, want) {
 		t.Fatalf("Discover() = %#v, want %#v", connectors, want)
+	}
+}
+
+func TestDiscoverDoesNotTreatRegularFileAsDRMCardNode(t *testing.T) {
+	sysfsRoot := t.TempDir()
+	devRoot := filepath.Join(t.TempDir(), "dri")
+	fixture := newDRMFixture(t, sysfsRoot, devRoot)
+	fixture.addCard(0, "vc4-drm")
+	fixture.addConnector(0, "HDMI-A-1", "connected", []string{"1920x1080"})
+	if err := os.MkdirAll(devRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(devRoot, "card0"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	connectors, err := Discover(sysfsRoot, devRoot)
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	if len(connectors) != 1 || connectors[0].DeviceNodePresent {
+		t.Fatalf("Discover() device node presence = %#v, want false for a regular file", connectors)
 	}
 }
 

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "log_level": "info",
+  "cache": {
+    "directory": "/var/lib/ribbonfish/cache",
+    "max_bytes": 52428800
+  },
+  "output": {
+    "backend": "simulator",
+    "directory": "/var/lib/ribbonfish/frames",
+    "fit": "contain"
+  },
+  "playlists": [
+    {
+      "id": "operations",
+      "assets": [
+        { "path": "/assets/operations-overview.png" },
+        { "path": "/assets/service-health.png" }
+      ]
+    }
+  ],
+  "displays": [
+    {
+      "id": "display-main",
+      "playlist_id": "operations",
+      "connector": "HDMI-A-1",
+      "mode": "1920x1080@60",
+      "rotation_interval": "15s"
+    }
+  ]
+}

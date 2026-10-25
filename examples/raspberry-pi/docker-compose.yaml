@@ -1,5 +1,3 @@
-# Hardware proof-of-concept template: NOT a tested or deployable release.
-# Requires a published Ribbonfish agent image and matching agent configuration contract.
 name: ribbonfish
 
 services:
@@ -8,30 +6,30 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 15s
+    command: ["-config", "${RIBBONFISH_CONFIG_FILE:-/etc/ribbonfish/config.json}"]
+    user: "65532:65532"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    network_mode: none
 
     environment:
-      # Proposed environment interface; not implemented or verified.
-      RIBBONFISH_API_URL: ${RIBBONFISH_API_URL:?Set RIBBONFISH_API_URL}
-      RIBBONFISH_DEVICE_ID: ${RIBBONFISH_DEVICE_ID:?Set RIBBONFISH_DEVICE_ID}
-      RIBBONFISH_TOKEN_FILE: /run/secrets/device-token
-      RIBBONFISH_CACHE_DIR: /var/lib/ribbonfish/cache
+      RIBBONFISH_CONFIG_FILE: ${RIBBONFISH_CONFIG_FILE:-/etc/ribbonfish/config.json}
+      RIBBONFISH_DRM_DEVICE: ${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE}
+      RIBBONFISH_CACHE_DIR: ${RIBBONFISH_CACHE_DIR:-/var/lib/ribbonfish/cache}
 
-    # PoC assumption, not a universal Pi 3B / Pi 4 mapping.
-    # Inspect /dev/dri and /sys/class/drm on the target host first.
     devices:
       - "${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE}:${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE}"
 
-    # Set to the actual host group ID with access to the DRM card device.
     group_add:
       - "${RIBBONFISH_DRM_GID:?Set RIBBONFISH_DRM_GID}"
-      - "${RIBBONFISH_TOKEN_GID:?Set RIBBONFISH_TOKEN_GID}"
 
     volumes:
       - ribbonfish-cache:/var/lib/ribbonfish/cache
-      - ./secrets/device-token:/run/secrets/device-token:ro
-
-    security_opt:
-      - no-new-privileges:true
+      - ${RIBBONFISH_LOCAL_CONFIG:-./hardware-config.pi4.json}:/etc/ribbonfish/config.json:ro
+      - ../agent/simulator/assets:/assets:ro
 
 volumes:
   ribbonfish-cache:

@@ -1,10 +1,10 @@
 # Ribbonfish agent foundation
 
-This directory contains the hardware-independent Go agent. It defines a
-versioned local JSON contract, structured logging, cancellation-aware process
-lifecycle, deterministic per-display playlist scheduling, and a persistent
-content-verified image cache. Display output and synchronization remain
-replaceable interfaces.
+This directory contains the Go display agent. It defines a versioned local
+JSON contract, structured logging, cancellation-aware process lifecycle,
+deterministic per-display playlist scheduling, and a persistent
+content-verified image cache. It includes a PNG simulator and an experimental
+Linux DRM/KMS output backend.
 
 The runnable two-display demo and its instructions are in
 [`../examples/agent/simulator/README.md`](../examples/agent/simulator/README.md).
@@ -12,13 +12,16 @@ For a native ARM64 Docker host such as Agentlab, see the Pi simulator Compose
 example in [`../examples/raspberry-pi/README.md`](../examples/raspberry-pi/README.md).
 The agent module uses the Go standard library only. See
 [`../docs/agent-foundation.md`](../docs/agent-foundation.md) for architecture
-decisions and hardware questions. The simulator is a software backend; it is
-not evidence of physical display support.
+decisions and hardware questions. The DRM backend uses named DRM connectors,
+the connector's preferred or requested mode, linear XRGB8888 dumb buffers, and
+page flips. It requires exclusive DRM master access to the chosen card and
+may take over scanout from a host display server.
 
 On Linux, `ribbonfish -list-displays` reports DRM connectors from sysfs,
-including the owning `/dev/dri/cardN`, driver, connector status, and modes. It
-does not open the device or test modesetting, permissions, or scanout. Use it
-to check host discovery only; physical output remains unimplemented.
+including the owning `/dev/dri/cardN`, whether that device node exists, driver,
+connector status, and modes. It does not open the device or test modesetting,
+permissions, or scanout. Use it to select a card and connector before testing
+the actual DRM backend.
 
 Build and test the module with:
 
@@ -59,10 +62,10 @@ exercise the Pi's native Docker Engine and kernel without a connected monitor;
 the check only writes PNG files and does not access DRM.
 
 GitHub Actions runs both checks on changes to the agent, simulator, or Pi
-examples, and validates both Raspberry Pi Compose files. GitHub Releases and
-version tags are managed manually through the GitHub UI. This repository does
-not automatically build or publish an image to GHCR; a compatible ARMv7 or
-ARM64 image must be made available separately before using the hardware
-template. The image is a software compatibility artifact; it does not
-implement the proposed hardware environment interface or physical display
-output. Pi acceptance remains separate work.
+examples, validates the Pi configs and Compose files, and builds/publishes a
+multi-architecture ARM image when a `v*` tag is pushed. The hardware Compose
+example runs the bundled local image playlists with no network or control
+plane. Single-display 1080p KMS mode-setting and frame updates have been
+verified over SSH on a Pi 3 Model A Plus, and the user confirmed the sample
+slides were visible. Pi 3B and Pi 4 dual-display behavior still need physical
+acceptance. Emulated tests and the Agentlab simulator do not prove KMS scanout.
