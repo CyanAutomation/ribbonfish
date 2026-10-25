@@ -70,10 +70,10 @@ Agentlab Pi 4 device path/group; verify those values per host. The publishing
 workflow creates ARMv7/ARM64 images from `v*` tags.
 
 DRM output has passed a single-display KMS mode-setting and frame-update check
-over SSH on a Pi 3 Model A Plus; visual monitor confirmation is still pending.
-The host display manager must release the selected DRM card. A Compose config
-check, sysfs discovery, QEMU smoke test, or simulator PNG does not prove
-modesetting or scanout.
+over SSH on a Pi 3 Model A Plus, and the user confirmed that the sample slides
+were visible on the monitor. The host display manager must release the selected
+DRM card. A Compose config check, sysfs discovery, QEMU smoke test, or simulator
+PNG does not prove modesetting or scanout.
 
 ## Assumptions and unresolved hardware questions
 
@@ -83,10 +83,10 @@ modesetting or scanout.
 - Display IDs are stable logical names from local configuration; connector
   names map them to DRM outputs. Connector identity and ordering across reboot
   still need target testing.
-- Single-display 1920x1080 KMS state, frame updates, and least-privilege DRM
-  access were verified on a Pi 3 Model A Plus. Visual monitor confirmation,
-  Pi 3B, Pi 4 dual-output, hotplug recovery, and cross-kernel DRM ownership
-  behavior remain unverified.
+- Single-display 1920x1080 KMS state, frame updates, visible sample slides, and
+  least-privilege DRM access were verified on a Pi 3 Model A Plus. Pi 3B, Pi 4
+  dual-output, hotplug recovery, and cross-kernel DRM ownership behavior remain
+  unverified.
 - Cache capacity defaults, filesystem durability across power loss, and
   practical image-size limits need device measurements before production
   deployment.

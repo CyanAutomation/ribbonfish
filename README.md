@@ -128,7 +128,7 @@ A small Go agent, packaged as a multi-architecture OCI image and deployed primar
 5. Independently rotate playlists on each physical output.
 6. Report bounded health telemetry and recover after reboot or disconnection.
 
-> The direct DRM/KMS code is an experimental implementation. Single-display 1920x1080 KMS state and frame updates have been verified over SSH on a Pi 3 Model A Plus; visual monitor confirmation is still pending. Physical proof is still required for Pi 3B scanout, simultaneous distinct frames on Pi 4 HDMI outputs, hotplug/recovery, and other kernel/display combinations.
+> The direct DRM/KMS code is an experimental implementation. Single-display 1920x1080 KMS state and frame updates have been verified over SSH on a Pi 3 Model A Plus, and the user confirmed the sample slides were visible. Physical proof is still required for Pi 3B scanout, simultaneous distinct frames on Pi 4 HDMI outputs, hotplug/recovery, and other kernel/display combinations.
 
 An alternative display backend may be provided if necessary; the core agent must not depend on any specific renderer.
 
