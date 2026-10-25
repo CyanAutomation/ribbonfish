@@ -2,7 +2,7 @@
 
 [![Go agent](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml/badge.svg)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml) [![ARM container smoke test](https://github.com/CyanAutomation/ribbonfish/actions/workflows/arm-container-smoke.yml/badge.svg?branch=main)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/arm-container-smoke.yml)
 
-> **Project status:** A hardware-independent Go agent foundation, offline playlist/cache, and software display simulator are implemented. Cloudflare services and Raspberry Pi DRM/KMS output remain proposed and unvalidated.
+> **Project status:** The Go agent supports offline playlists/cache, a software simulator, and an experimental Linux DRM/KMS output backend. The backend and hardened Pi Compose setup are implemented, but HDMI scanout has not yet been accepted on physical Pi hardware. Cloudflare services and remote device synchronization remain proposed.
 
 ## Render Once. Display Anywhere.
 
@@ -21,11 +21,12 @@ The initial use case is a fleet of Raspberry Pis showing company websites and Up
 3. The local Go agent caches images and independently rotates playlists on physical HDMI outputs using DRM/KMS.
 4. Displays continue showing last-known-good content when the network or control plane is unavailable.
 
-**Implementation status:** The local agent can load configured image files, cache them, rotate independent playlists, and write simulated display frames without network access. The control plane, remote synchronization, and physical DRM/KMS output described below remain proposed; hardware feasibility and Cloudflare timing/cost assumptions remain unverified.
+**Implementation status:** The local agent can load configured image files, cache them, rotate independent playlists, and either write mode-sized PNG frames or send frames to an experimental Linux DRM/KMS backend. The backend configures named connectors, selects advertised modes, and uses XRGB8888 dumb buffers with page flips. It has automated tests and ARM cross-compilation, but has not yet been tested with HDMI connected; the control plane and remote synchronization remain proposed.
 
 The agent can also list Linux DRM connector metadata from sysfs with
-`ribbonfish -list-displays`. This is discovery only and does not verify DRM
-permissions or drive a display.
+`ribbonfish -list-displays`. This reads sysfs only and reports whether the
+corresponding device node exists; it does not verify device permissions,
+acquire DRM master, or drive a display.
 
 ## Local Agent Demonstration
 
@@ -113,9 +114,9 @@ Cloudflare Browser Run supports screenshot Quick Actions and browser sessions. T
 
 ### Deployment model
 
-The default deployment is **Docker Compose on Raspberry Pi OS Lite**, with no graphical desktop, Chromium, X11, or Wayland session. The Raspberry Pi hardware Compose template expects a multi-architecture OCI image for ARM64 and ARMv7, but this repository has no automated container-publishing workflow. Create GitHub Releases and version tags manually through the GitHub UI; creating a tag does not build or publish an image. The agent remains a software compatibility artifact: the hardware environment interface, agent enrollment, and DRM/KMS output are not implemented. A native Go binary remains an optional future distribution method.
+The experimental deployment is **Docker Compose on Raspberry Pi OS Lite**, with no graphical desktop, Chromium, X11, or Wayland session. The hardware Compose file runs a local JSON config and bundled image assets with one explicitly mapped DRM card, a persistent cache, a non-root user, a read-only root filesystem, no added capabilities, and no network. The agent image publishing workflow builds ARMv7 and ARM64 images when a `v*` tag is pushed. This local deployment has no enrollment, control-plane API, or remote synchronization; a native Go binary remains an optional distribution method.
 
-The Compose deployment should mount only the required DRM/KMS devices (typically under `/dev/dri`), grant the minimum required graphics permissions, persist an image cache, and configure restart-on-failure behaviour. Device access does not guarantee DRM master ownership or multi-output support: validate both on real hardware. Avoid `privileged: true` as a production default. Updates should use pinned image versions or digests, explicit health checks, and rollback procedures; do not depend on mutable `latest` tags.
+The Compose deployment maps only the selected DRM card and its numeric device group. The agent requests DRM master, configures the selected connector(s), and takes over their scanout; it requires the host's display manager or compositor not to own that card. Device access does not guarantee DRM master ownership or multi-output support. The current image tag and connector names are examples, and all display behavior remains subject to physical Pi acceptance. Avoid `privileged: true`; pin image versions and retain a rollback version.
 
 
 A small Go agent, packaged as a multi-architecture OCI image and deployed primarily with Docker Compose on Raspberry Pi OS Lite or another compatible Linux distribution, will:
@@ -127,7 +128,7 @@ A small Go agent, packaged as a multi-architecture OCI image and deployed primar
 5. Independently rotate playlists on each physical output.
 6. Report bounded health telemetry and recover after reboot or disconnection.
 
-> Direct DRM/KMS display is a technical hypothesis requiring a hardware proof of concept, particularly for Raspberry Pi 3B, Pi 4 dual-HDMI, display hotplug, image scaling, and graphics permissions.
+> The direct DRM/KMS code is an experimental implementation. Single-display 1920x1080 KMS state and frame updates have been verified over SSH on a Pi 3 Model A Plus; visual monitor confirmation is still pending. Physical proof is still required for Pi 3B scanout, simultaneous distinct frames on Pi 4 HDMI outputs, hotplug/recovery, and other kernel/display combinations.
 
 An alternative display backend may be provided if necessary; the core agent must not depend on any specific renderer.
 

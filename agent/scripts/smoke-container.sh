@@ -74,6 +74,8 @@ docker buildx build --platform "$platform" --load --tag "$image" "$repo_root/age
 docker volume create "$cache_volume" >/dev/null
 docker volume create "$frames_volume" >/dev/null
 docker run --detach --platform "$platform" --name "$container" \
+	  --init --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+	  --user 65532:65532 \
   --mount "type=bind,src=$scratch/config.json,dst=/config.json,readonly" \
   --mount "type=bind,src=$scratch/assets,dst=/assets,readonly" \
   --mount "type=volume,src=$cache_volume,dst=/var/lib/ribbonfish/cache" \
@@ -141,6 +143,8 @@ fi
 
 docker rm "$container" >/dev/null
 docker run --detach --platform "$platform" --name "$container" \
+	  --init --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+	  --user 65532:65532 \
   --mount "type=bind,src=$scratch/config.json,dst=/config.json,readonly" \
   --mount "type=volume,src=$cache_volume,dst=/var/lib/ribbonfish/cache" \
   --mount "type=volume,src=$frames_volume,dst=/var/lib/ribbonfish/frames" \

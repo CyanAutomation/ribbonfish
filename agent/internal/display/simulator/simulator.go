@@ -35,6 +35,8 @@ type Snapshot struct {
 type Simulator struct {
 	mu           sync.Mutex
 	root         string
+	profiles     map[string]display.ModeSpec
+	fit          display.FitMode
 	states       map[string]Snapshot
 	displayLocks map[string]*sync.Mutex
 	updates      chan Snapshot
@@ -47,8 +49,28 @@ var _ display.Output = (*Simulator)(nil)
 
 // NewSimulator creates the output directory and returns a ready simulator.
 func NewSimulator(outputDir string) (*Simulator, error) {
+	return NewSimulatorWithProfiles(outputDir, nil, display.FitContain)
+}
+
+// NewSimulatorWithProfiles creates the software backend with optional target
+// mode sizes. A configured mode exercises the same fit and resampling path as
+// DRM scanout while still producing inspectable PNG files.
+func NewSimulatorWithProfiles(outputDir string, profiles map[string]display.ModeSpec, fit display.FitMode) (*Simulator, error) {
 	if strings.TrimSpace(outputDir) == "" {
 		return nil, errors.New("simulator output directory is required")
+	}
+	if fit == "" {
+		fit = display.FitContain
+	}
+	if fit != display.FitContain && fit != display.FitCover && fit != display.FitStretch {
+		return nil, fmt.Errorf("unsupported simulator image fit mode %q", fit)
+	}
+	resolvedProfiles := make(map[string]display.ModeSpec, len(profiles))
+	for id, mode := range profiles {
+		if id == "" || mode.Preferred || mode.Width == 0 || mode.Height == 0 {
+			return nil, fmt.Errorf("simulator display profile %q requires explicit positive dimensions", id)
+		}
+		resolvedProfiles[id] = mode
 	}
 	absolute, err := filepath.Abs(outputDir)
 	if err != nil {
@@ -59,6 +81,8 @@ func NewSimulator(outputDir string) (*Simulator, error) {
 	}
 	return &Simulator{
 		root:         absolute,
+		profiles:     resolvedProfiles,
+		fit:          fit,
 		states:       make(map[string]Snapshot),
 		displayLocks: make(map[string]*sync.Mutex),
 		updates:      make(chan Snapshot, 64),
@@ -102,13 +126,21 @@ func (s *Simulator) Present(ctx context.Context, displayID string, frame image.I
 		return err
 	}
 	path := filepath.Join(s.root, displayID+".png")
+	outputFrame := frame
+	if mode, ok := s.profiles[displayID]; ok {
+		rendered, err := display.FitImage(frame, int(mode.Width), int(mode.Height), s.fit)
+		if err != nil {
+			return fmt.Errorf("render display %q at %dx%d: %w", displayID, mode.Width, mode.Height, err)
+		}
+		outputFrame = rendered
+	}
 	temporary, err := os.CreateTemp(s.root, ".ribbonfish-frame-")
 	if err != nil {
 		return fmt.Errorf("create temporary frame: %w", err)
 	}
 	tempPath := temporary.Name()
 	defer os.Remove(tempPath)
-	if err := png.Encode(temporary, frame); err != nil {
+	if err := png.Encode(temporary, outputFrame); err != nil {
 		_ = temporary.Close()
 		return fmt.Errorf("encode display frame: %w", err)
 	}
@@ -131,7 +163,7 @@ func (s *Simulator) Present(ctx context.Context, displayID string, frame image.I
 		DisplayID: displayID,
 		Path:      path,
 		UpdatedAt: time.Now().UTC(),
-		Frame:     clone(frame),
+		Frame:     clone(outputFrame),
 	}
 	update := cloneSnapshot(snapshot)
 	s.mu.Lock()

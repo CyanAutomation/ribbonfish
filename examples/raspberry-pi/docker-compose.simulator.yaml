@@ -13,9 +13,14 @@ services:
     init: true
     restart: unless-stopped
     stop_grace_period: 15s
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     network_mode: none
     volumes:
-      - ./simulator-config.json:/etc/ribbonfish/config.json:ro
+      - ${RIBBONFISH_SIMULATOR_CONFIG:-./simulator-config.json}:/etc/ribbonfish/config.json:ro
       - ../agent/simulator/assets:/assets:ro
       - simulator-cache:/var/lib/ribbonfish/cache
       - simulator-frames:/var/lib/ribbonfish/frames

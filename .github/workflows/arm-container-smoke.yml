@@ -45,13 +45,17 @@ jobs:
       - name: Validate Raspberry Pi Compose examples
         env:
           RIBBONFISH_VERSION: ci
-          RIBBONFISH_API_URL: https://example.invalid
-          RIBBONFISH_DEVICE_ID: ci
           RIBBONFISH_DRM_DEVICE: /dev/dri/card1
           RIBBONFISH_DRM_GID: "44"
-          RIBBONFISH_TOKEN_GID: "1001"
         run: |
+          python3 -m json.tool examples/raspberry-pi/hardware-config.pi3b.json >/dev/null
+          python3 -m json.tool examples/raspberry-pi/hardware-config.pi3a-plus.json >/dev/null
+          python3 -m json.tool examples/raspberry-pi/hardware-config.pi4.json >/dev/null
+          python3 -m json.tool examples/raspberry-pi/simulator-config.pi3a-plus.json >/dev/null
           docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml config --quiet
-          docker compose -f examples/raspberry-pi/docker-compose.yaml config --quiet
+          RIBBONFISH_SIMULATOR_CONFIG=./simulator-config.pi3a-plus.json docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml config --quiet
+          RIBBONFISH_LOCAL_CONFIG=./hardware-config.pi3a-plus.json RIBBONFISH_DRM_DEVICE=/dev/dri/card0 docker compose -f examples/raspberry-pi/docker-compose.yaml config --quiet
+          RIBBONFISH_LOCAL_CONFIG=./hardware-config.pi3b.json RIBBONFISH_DRM_DEVICE=/dev/dri/card0 docker compose -f examples/raspberry-pi/docker-compose.yaml config --quiet
+          RIBBONFISH_LOCAL_CONFIG=./hardware-config.pi4.json RIBBONFISH_DRM_DEVICE=/dev/dri/card1 docker compose -f examples/raspberry-pi/docker-compose.yaml config --quiet
       - name: Build and run the emulated agent container
         run: sh agent/scripts/smoke-container.sh "${{ matrix.platform }}" "${{ matrix.profile }}"
