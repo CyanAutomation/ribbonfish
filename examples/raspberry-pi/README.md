@@ -1,6 +1,6 @@
 # Raspberry Pi deployment
 
-This directory has two deployment modes. The simulator writes PNG frames without touching HDMI. The experimental hardware Compose service uses Linux DRM/KMS to present the same local playlists through one or more configured connectors. Pi 3 A+ KMS mode-setting and frame updates have been verified over SSH; visual confirmation from the monitor is still pending. Pi 3B and Pi 4 dual-display acceptance remain open.
+This directory has two deployment modes. The simulator writes PNG frames without touching HDMI. The experimental hardware Compose service uses Linux DRM/KMS to present the same local playlists through one or more configured connectors. Pi 3 A+ KMS mode-setting, frame updates, and visible sample slides have been confirmed. Pi 3B and Pi 4 dual-display acceptance remain open.
 
 ## Files
 
@@ -58,7 +58,7 @@ The backend and its config/selection logic have automated tests and cross-compil
 - `docker stats` reported 0B/0B, and Docker discarded an attempted 128 MiB limit because this kernel does not provide usable memory-controller cgroups. Do not rely on Docker memory limits or `docker stats` for memory accounting on this host.
 - The container exited cleanly. `kmsprint` then showed the original active 1920x1080 RGB16 framebuffer (FB 671), consistent with the framebuffer console resuming scanout.
 
-This verifies active KMS state and frame updates through SSH; it does not capture the monitor's pixels or measure visual quality. Agentlab still has no connected HDMI monitor. Before another hardware acceptance run, inspect the target's device nodes, group IDs, connectors, and modes:
+SSH verified active KMS state and frame updates; the user also confirmed the bundled sample slides were visible on the monitor. This did not measure visual quality or scaling. Agentlab still has no connected HDMI monitor. Before another hardware acceptance run, inspect the target's device nodes, group IDs, connectors, and modes:
 
 ```sh
 ls -l /dev/dri
@@ -103,7 +103,7 @@ The Compose file maps only one DRM card, runs as UID 65532 with its numeric DRM 
 
 ## Current hardware limitations
 
-- Pi 3 A+ single-display KMS state and frame updates are verified; visual confirmation is still needed. Pi 3B scanout and Pi 4 simultaneous dual-HDMI scanout still need direct testing.
+- Pi 3 A+ single-display KMS state, frame updates, and visible sample slides are confirmed. Pi 3B scanout and Pi 4 simultaneous dual-HDMI scanout still need direct testing.
 - HDMI hotplug recovery is not implemented; a failed page flip faults that surface until restart.
 - The agent does not save and restore the previous CRTC mode itself. The tested Pi 3 A+ framebuffer console resumed scanout after shutdown; this should be checked on each target kernel.
 - Connector naming, mode availability, card numbering, and DRM master behavior can vary across kernel and boot settings.

@@ -66,6 +66,6 @@ examples, validates the Pi configs and Compose files, and builds/publishes a
 multi-architecture ARM image when a `v*` tag is pushed. The hardware Compose
 example runs the bundled local image playlists with no network or control
 plane. Single-display 1080p KMS mode-setting and frame updates have been
-verified over SSH on a Pi 3 Model A Plus; visual monitor confirmation, Pi 3B,
-and Pi 4 dual-display behavior still need physical acceptance. Emulated tests
-and the Agentlab simulator do not prove KMS scanout.
+verified over SSH on a Pi 3 Model A Plus, and the user confirmed the sample
+slides were visible. Pi 3B and Pi 4 dual-display behavior still need physical
+acceptance. Emulated tests and the Agentlab simulator do not prove KMS scanout.
