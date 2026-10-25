@@ -93,6 +93,28 @@ grep -Fx 'RIBBONFISH_NETWORK_MODE=bridge' "$target_dir/.env"
 grep -Fx 'RIBBONFISH_DEVICE_ID=ribbonfish-01' "$target_dir/.env"
 PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" --preflight
 
+if output=$(sh "$script_dir/prepare-deployment.sh" \
+	--profile pi3a-plus --version "$version" --drm-device /dev/null --drm-gid 0 \
+	--sync-url https://ribbonfish.scheimann.workers.dev 2>&1); then
+	echo 'sync URL without a device ID unexpectedly succeeded' >&2
+	exit 1
+fi
+case "$output" in
+	*'--device-id is required when --sync-url is set'*) ;;
+	*) echo "sync URL without device ID returned an unclear error: $output" >&2; exit 1 ;;
+esac
+
+if output=$(sh "$script_dir/prepare-deployment.sh" \
+	--profile pi3a-plus --version "$version" --drm-device /dev/null --drm-gid 0 \
+	--device-id ribbonfish-01 2>&1); then
+	echo 'device ID without a sync URL unexpectedly succeeded' >&2
+	exit 1
+fi
+case "$output" in
+	*'--sync-url is required when --device-id is set'*) ;;
+	*) echo "device ID without sync URL returned an unclear error: $output" >&2; exit 1 ;;
+esac
+
 if sh "$script_dir/prepare-deployment.sh" \
 	--profile pi3a-plus --version "$version" --drm-device /dev/null --drm-gid 0 \
 	--sync-url http://insecure.example --device-id ribbonfish-01 >/dev/null 2>&1; then

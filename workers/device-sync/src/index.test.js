@@ -79,9 +79,8 @@ class FakeDatabase {
   }
 }
 
-function testEnvironment({ manifestValue = manifest, tokenValue = token, assetBytes = new Uint8Array([1, 2, 3, 4]) } = {}) {
+function testEnvironment({ manifestValue = manifest, assetBytes = new Uint8Array([1, 2, 3, 4]) } = {}) {
   const db = new FakeDatabase();
-  db.device.token_hash = tokenValue ? "" : "";
   const r2Gets = [];
   const env = {
     DB: db,
