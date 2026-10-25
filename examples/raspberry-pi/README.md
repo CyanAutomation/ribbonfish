@@ -14,7 +14,7 @@ This directory has three Compose examples: a source-built simulator, a published
 - `hardware-config.pi3b.json`: one-display Pi 3B profile using HDMI-A-1
 - `.env.example`: image tag, config path, cache path, DRM device, and numeric DRM group
 
-The agent has no enrollment or remote synchronization yet. The hardware service therefore uses local config/assets and `network_mode: none`. After a PR merges into `main`, `.github/workflows/docker-publish.yml` publishes `cyanautomation/ribbonfish-agent` to Docker Hub for AMD64, ARM64, and ARMv7 using the immutable tag `sha-<merge-commit-SHA>`. The separate `.github/workflows/publish-agent.yml` continues to publish ARMv7 and ARM64 images to GHCR when a `v*` tag is pushed. Set `RIBBONFISH_VERSION` to a Docker Hub SHA tag for the Compose hardware and published-simulator examples.
+The agent has no enrollment or remote synchronization yet. The hardware service therefore uses local config/assets and `network_mode: none`. After a PR merges into `main` and the verification job passes, `.github/workflows/docker-publish.yml` publishes `cyanautomation/ribbonfish-agent` to Docker Hub for AMD64, ARM64, and ARMv7 with both `latest` and immutable `sha-<merge-commit-SHA>` tags. The `latest` tag moves to the newest verified merge; use a SHA tag to pin a deployment. The separate `.github/workflows/publish-agent.yml` continues to publish ARMv7 and ARM64 images to GHCR when a `v*` tag is pushed. The Pi `.env.example` defaults to `latest`.
 
 The GHCR release workflow does not change package visibility. Make its package public for unauthenticated GHCR pulls, or sign in on the Pi with an account/token that can read GHCR packages before using a `v*` image tag.
 
@@ -48,12 +48,18 @@ RIBBONFISH_SIMULATOR_CONFIG=./simulator-config.pi3a-plus.json \
 
 ## Run the published Docker Hub image in simulator mode
 
-After a merged pull request publishes an image, check out the corresponding commit on `main`. From the repository root, set the image tag from that commit and start the example:
+The published-image Compose example defaults to `latest`, which advances to the newest merge after its verification job passes. From the repository root, run:
+
+```sh
+docker compose -f examples/raspberry-pi/docker-compose.published.yaml up -d
+docker compose -f examples/raspberry-pi/docker-compose.published.yaml logs -f agent
+```
+
+To pin a specific published merge instead, check out that commit on `main` and set its SHA tag before starting Compose:
 
 ```sh
 export RIBBONFISH_VERSION="sha-$(git rev-parse HEAD)"
 docker compose -f examples/raspberry-pi/docker-compose.published.yaml up -d
-docker compose -f examples/raspberry-pi/docker-compose.published.yaml logs -f agent
 ```
 
 The multi-architecture manifest selects the host architecture. The example uses the sample config and PNG assets, disables container network access, and stores frames and cache data in named volumes. Copy frames to the current directory with:
@@ -104,7 +110,7 @@ The tested Pi has Docker Engine but no Compose plugin. For a Docker-only deploym
 
 ```sh
 docker volume create ribbonfish-cache
-IMAGE=cyanautomation/ribbonfish-agent:YOUR_PUBLISHED_VERSION
+IMAGE=cyanautomation/ribbonfish-agent:latest
 docker run --detach --name ribbonfish-agent --restart unless-stopped --stop-timeout 15 \
   --init --network none --read-only --cap-drop ALL \
   --security-opt no-new-privileges:true --user 65532:65532 \
