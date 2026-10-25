@@ -26,6 +26,7 @@ const (
 )
 
 var digestPattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
+var errAssetSizeMismatch = errors.New("image body size does not match manifest")
 
 // Manifest is a complete desired content snapshot. It intentionally contains
 // no filesystem paths, output devices, DRM connectors, or cache settings.
@@ -137,7 +138,7 @@ func (c *HTTPClient) Synchronize(ctx context.Context, hardware, active config.Co
 	if response.StatusCode != http.StatusOK {
 		return Update{}, responseError("fetch manifest", response)
 	}
-	manifest, err := decodeManifest(io.LimitReader(response.Body, manifestLimit+1))
+	manifest, err := decodeManifest(response.Body)
 	if err != nil {
 		return Update{}, fmt.Errorf("decode manifest: %w", err)
 	}
@@ -168,7 +169,7 @@ func (c *HTTPClient) Synchronize(ctx context.Context, hardware, active config.Co
 			if _, exists := assets[digest]; exists {
 				continue
 			}
-			if _, err := c.store.Load(ctx, cache.Asset{SHA256: digest}); err == nil {
+			if _, err := c.store.Load(ctx, cache.Asset{SHA256: digest, Bytes: item.Size}); err == nil {
 				assets[digest] = cache.Asset{SHA256: digest, Path: "cached:" + digest, Bytes: item.Size}
 				continue
 			}
@@ -216,7 +217,7 @@ func (c *HTTPClient) fetchAsset(ctx context.Context, digest string, expectedSize
 	if response.ContentLength >= 0 && response.ContentLength != expectedSize {
 		return cache.Asset{}, fmt.Errorf("image %s length mismatch: manifest says %d bytes, server says %d", digest, expectedSize, response.ContentLength)
 	}
-	asset, err := c.store.Put(ctx, io.LimitReader(response.Body, expectedSize+1), digest)
+	asset, err := c.store.Put(ctx, &assetSizeReader{source: response.Body, remaining: expectedSize}, digest)
 	if err != nil {
 		return cache.Asset{}, fmt.Errorf("verify and cache image %s: %w", digest, err)
 	}
@@ -224,6 +225,37 @@ func (c *HTTPClient) fetchAsset(ctx context.Context, digest string, expectedSize
 		return cache.Asset{}, fmt.Errorf("image %s length mismatch: manifest says %d bytes, received %d", digest, expectedSize, asset.Bytes)
 	}
 	return asset, nil
+}
+
+// assetSizeReader lets exactly the declared number of bytes reach Put, then
+// probes for excess data. Any size mismatch becomes a read error, so Put never
+// publishes a truncated or oversized object into the cache.
+type assetSizeReader struct {
+	source    io.Reader
+	remaining int64
+}
+
+func (r *assetSizeReader) Read(buffer []byte) (int, error) {
+	if len(buffer) == 0 {
+		return 0, nil
+	}
+	if r.remaining == 0 {
+		var extra [1]byte
+		n, err := r.source.Read(extra[:])
+		if n > 0 {
+			return 0, errAssetSizeMismatch
+		}
+		return 0, err
+	}
+	if int64(len(buffer)) > r.remaining {
+		buffer = buffer[:r.remaining]
+	}
+	n, err := r.source.Read(buffer)
+	r.remaining -= int64(n)
+	if err == io.EOF && r.remaining > 0 {
+		return n, errAssetSizeMismatch
+	}
+	return n, err
 }
 
 func (c *HTTPClient) endpoint(endpointPath string) string {
@@ -323,6 +355,8 @@ func validateManifest(manifest Manifest, hardware config.Config) error {
 	}
 	var totalAssetBytes int64
 	for _, size := range assets {
+		// Manifest limits keep size bounded, so this subtraction cannot underflow;
+		// it also avoids overflowing a sum before comparing with the cache limit.
 		if totalAssetBytes > hardware.Cache.MaxBytes-size {
 			return errors.New("manifest assets exceed the device cache budget")
 		}
