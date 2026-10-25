@@ -10,7 +10,7 @@ Run the Worker unit tests with Node.js (no package install is required):
 npm test
 ```
 
-Create the Cloudflare resources, update `wrangler.toml` with the D1 database ID, and apply the schema to a new database:
+Create the Cloudflare resources and apply the schema to the D1 database referenced in `wrangler.toml`:
 
 ```sh
 npx wrangler r2 bucket create ribbonfish-assets
@@ -26,6 +26,18 @@ npx wrangler d1 execute ribbonfish-devices --remote --file=migrations/0001_add_e
 ```
 
 The Worker has no write endpoint for R2. Publish images and manifests through Wrangler or a separate trusted release process. Image keys are `assets/<lowercase-sha256>` and manifests are `devices/<device-id>/manifest.json`.
+
+For the Raspberry Pi 3 A+ device `ribbonfish-01`, the profile-matched manifest
+contains the two bundled operations images for `display-main`:
+
+```sh
+for file in ../../agent/defaults/assets/operations-overview.png ../../agent/defaults/assets/service-health.png; do
+  digest=$(sha256sum "$file" | cut -d ' ' -f 1)
+  npx wrangler r2 object put "ribbonfish-assets/assets/$digest" --file "$file"
+done
+npx wrangler r2 object put ribbonfish-assets/devices/ribbonfish-01/manifest.json \
+  --file examples/manifest.pi3a-plus.json
+```
 
 For a Pi 4 device, upload the sample content with:
 

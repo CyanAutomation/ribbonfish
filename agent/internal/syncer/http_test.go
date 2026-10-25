@@ -94,6 +94,63 @@ func TestHTTPClientDownloadsVerifiedContentAndUsesETag(t *testing.T) {
 	}
 }
 
+func TestHTTPClientAcceptsWeakManifestETag(t *testing.T) {
+	pngBytes := syncerPNG(t, color.RGBA{R: 140, B: 180, A: 255})
+	digest := fmt.Sprintf("%x", sha256.Sum256(pngBytes))
+	manifest := Manifest{
+		Version:   1,
+		Revision:  "revision-weak",
+		Playlists: []ManifestPlaylist{{ID: "welcome", Assets: []ManifestAsset{{SHA256: digest, Size: int64(len(pngBytes))}}}},
+		Displays:  []ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "30s"}},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testDeviceToken {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/v1/devices/pi-office/manifest":
+			if r.Header.Get("If-None-Match") == `"revision-weak"` {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+			w.Header().Set("ETag", `W/"revision-weak"`)
+			_, _ = w.Write(manifestBytes)
+		case "/v1/assets/" + digest:
+			_, _ = w.Write(pngBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	store := syncerStore(t)
+	client, err := NewHTTPClient(server.URL, "pi-office", testDeviceToken, store, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hardware := syncerConfig()
+	update, err := client.Synchronize(context.Background(), hardware, hardware)
+	if err != nil {
+		t.Fatalf("Synchronize() with weak ETag error = %v", err)
+	}
+	if update.ETag != `"revision-weak"` {
+		t.Fatalf("canonical ETag = %q, want %q", update.ETag, `"revision-weak"`)
+	}
+	client.SetETag(update.ETag)
+	unchanged, err := client.Synchronize(context.Background(), hardware, update.Config)
+	if err != nil {
+		t.Fatalf("Synchronize() with canonical conditional ETag = %v", err)
+	}
+	if unchanged.Changed {
+		t.Fatal("Synchronize() changed content after the matching conditional request")
+	}
+}
+
 func TestHTTPClientRejectsImageDigestMismatchAndRestoresActivePins(t *testing.T) {
 	pngBytes := syncerPNG(t, color.RGBA{R: 220, A: 255})
 	wrongDigest := strings.Repeat("0", 64)

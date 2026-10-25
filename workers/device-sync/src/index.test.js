@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { fetchHandler, sha256Hex } from "./index.js";
 
 const token = "a-secure-device-token-with-at-least-32-characters";
@@ -77,9 +79,8 @@ class FakeDatabase {
   }
 }
 
-function testEnvironment({ manifestValue = manifest, tokenValue = token, assetBytes = new Uint8Array([1, 2, 3, 4]) } = {}) {
+function testEnvironment({ manifestValue = manifest, assetBytes = new Uint8Array([1, 2, 3, 4]) } = {}) {
   const db = new FakeDatabase();
-  db.device.token_hash = tokenValue ? "" : "";
   const r2Gets = [];
   const env = {
     DB: db,
@@ -113,6 +114,7 @@ test("manifest endpoint authenticates the device and returns a revision ETag", a
   }), env);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("etag"), '"revision-1"');
+  assert.equal(response.headers.get("cache-control"), "private, no-store, no-transform");
   assert.deepEqual(await response.json(), manifest);
 
   const unchanged = await fetchHandler(new Request("https://worker.test/v1/devices/pi-office/manifest", {
@@ -191,4 +193,31 @@ test("manifest validation rejects arbitrary asset URLs and invalid digests", asy
     headers: { Authorization: `Bearer ${token}` },
   }), env);
   assert.equal(response.status, 502);
+});
+
+test("Pi 3 A+ sync manifest matches the bundled profile and image bytes", async () => {
+  const profile = JSON.parse(await readFile(new URL("../../../agent/defaults/pi3a-plus.json", import.meta.url), "utf8"));
+  const piManifest = JSON.parse(await readFile(new URL("../examples/manifest.pi3a-plus.json", import.meta.url), "utf8"));
+  assert.deepEqual(piManifest.displays, [{ id: "display-main", playlist_id: "operations", rotation_interval: "15s" }]);
+
+  const configured = profile.playlists.find((playlist) => playlist.id === "operations");
+  const synced = piManifest.playlists.find((playlist) => playlist.id === "operations");
+  assert.ok(configured);
+  assert.ok(synced);
+  assert.equal(configured.assets.length, synced.assets.length);
+  for (let index = 0; index < configured.assets.length; index++) {
+    const source = configured.assets[index];
+    const assetPath = new URL(`../../../agent/defaults/${source.path}`, import.meta.url);
+    const bytes = await readFile(assetPath);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    assert.deepEqual(synced.assets[index], { sha256, size: bytes.byteLength });
+  }
+
+  const { env, db } = testEnvironment({ manifestValue: piManifest });
+  await authorize(db);
+  const response = await fetchHandler(new Request("https://worker.test/v1/devices/pi-office/manifest", {
+    headers: { Authorization: `Bearer ${token}` },
+  }), env);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), piManifest);
 });
