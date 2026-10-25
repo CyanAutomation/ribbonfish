@@ -17,12 +17,13 @@ var connectorNamePattern = regexp.MustCompile(`^card([0-9]+)-(.+)$`)
 // Connector describes one sysfs DRM connector and the primary device node
 // that owns it. Modes is empty when the connector has no advertised modes.
 type Connector struct {
-	Card   int      `json:"card"`
-	Name   string   `json:"name"`
-	Device string   `json:"device"`
-	Driver string   `json:"driver"`
-	Status string   `json:"status"`
-	Modes  []string `json:"modes"`
+	Card              int      `json:"card"`
+	Name              string   `json:"name"`
+	Device            string   `json:"device"`
+	DeviceNodePresent bool     `json:"device_node_present"`
+	Driver            string   `json:"driver"`
+	Status            string   `json:"status"`
+	Modes             []string `json:"modes"`
 }
 
 // Discover lists DRM connectors by reading sysfs. It does not open DRM
@@ -59,13 +60,17 @@ func Discover(sysfsRoot, devRoot string) ([]Connector, error) {
 			modes = []string{}
 		}
 		connectorName := match[2]
+		device := filepath.Join(devRoot, "card"+strconv.Itoa(cardNumber))
+		deviceInfo, statErr := os.Stat(device)
+		deviceNodePresent := statErr == nil && deviceInfo.Mode()&os.ModeDevice != 0 && deviceInfo.Mode()&os.ModeCharDevice != 0
 		connectors = append(connectors, Connector{
-			Card:   cardNumber,
-			Name:   connectorName,
-			Device: filepath.Join(devRoot, "card"+strconv.Itoa(cardNumber)),
-			Driver: readDriver(filepath.Join(sysfsRoot, "card"+strconv.Itoa(cardNumber), "device", "driver")),
-			Status: status,
-			Modes:  modes,
+			Card:              cardNumber,
+			Name:              connectorName,
+			Device:            device,
+			DeviceNodePresent: deviceNodePresent,
+			Driver:            readDriver(filepath.Join(sysfsRoot, "card"+strconv.Itoa(cardNumber), "device", "driver")),
+			Status:            status,
+			Modes:             modes,
 		})
 	}
 

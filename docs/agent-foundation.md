@@ -9,7 +9,10 @@ depending on Cloudflare or Linux graphics libraries:
 - `internal/config` owns the versioned local JSON contract and validation.
 - `internal/agent` composes the offline cache, playlist runner, and output.
 - `internal/display` accepts decoded frames through one output interface.
-- `internal/display/simulator` writes one atomic PNG per logical display.
+- `internal/display/simulator` writes one atomic PNG per logical display,
+  optionally resized to the configured output mode.
+- `internal/display/drm` configures Linux DRM/KMS connectors and scans out
+  images using XRGB8888 dumb buffers and page flips.
 - `internal/cache` implements verified, bounded persistent image storage.
 - `internal/playlist` schedules deterministic per-display rotation.
 - `internal/syncer` is the replaceable synchronization boundary.
@@ -17,17 +20,19 @@ depending on Cloudflare or Linux graphics libraries:
 
 The current CLI loads and validates configuration, emits structured startup
 and shutdown records, and exits cleanly on SIGINT or SIGTERM. The local runtime
-loads images into the cache, rotates each configured display independently,
-and writes PNG frames through the software simulator. The module has no
+loads images into the cache and rotates each configured display independently.
+It can write mode-sized PNG frames through the software simulator or present
+them through an experimental Linux DRM/KMS backend. The module has no
 third-party dependencies.
 
 ## Local configuration contract
 
-The initial config format is strict JSON, version 1. It describes a bounded
-cache, simulator output directory, ordered playlist assets, and a playlist
-plus rotation interval for each logical display. Relative paths are anchored
-to the config file, so the same config works when launched from another
-working directory. Unknown fields and invalid references fail at startup.
+The config format is strict JSON, version 1. It describes a bounded cache,
+simulator or DRM output, image fitting, ordered playlist assets, and a playlist
+plus rotation interval for each logical display. DRM outputs map logical IDs
+to connector names and preferred or explicit modes. Relative paths are
+anchored to the config file, so the same config works when launched from
+another working directory. Unknown fields and invalid references fail at startup.
 At startup, source files are checked and valid images are cached. Each frame
 is verified again when loaded for presentation, so one missing or corrupt
 asset does not make other displays or assets unavailable.
@@ -53,28 +58,35 @@ checked, or stored because the cache is full, that item is skipped; displays
 continue with other verified cached items and preserve their last written
 frame when no valid item remains.
 
-## Compose review
+## Raspberry Pi deployment
 
-The Raspberry Pi Compose file from PR #4 is a hardware deployment template,
-not a supported interface for this local agent. It proposes API URL, device
-identity, token-file, cache-directory, and `/dev/dri` settings. The current
-foundation does not enroll with a control plane, read those environment
-variables, or implement DRM/KMS. The template already labels those values as
-proposed and says that the image is hypothetical. It must remain clearly
-separate from the local simulator instructions until remote synchronization
-and a hardware backend are implemented and validated.
+`examples/raspberry-pi/docker-compose.simulator.yaml` runs the software
+simulator with no network or DRM access. `docker-compose.yaml` runs the DRM
+backend using local JSON config and bundled assets, maps one DRM card, mounts a
+persistent cache, and runs non-root with a read-only root filesystem and no
+added capabilities. It intentionally has no network because control-plane
+enrollment and synchronization are not implemented. `.env.example` shows the
+Agentlab Pi 4 device path/group; verify those values per host. The publishing
+workflow creates ARMv7/ARM64 images from `v*` tags.
+
+DRM output has passed a single-display KMS mode-setting and frame-update check
+over SSH on a Pi 3 Model A Plus; visual monitor confirmation is still pending.
+The host display manager must release the selected DRM card. A Compose config
+check, sysfs discovery, QEMU smoke test, or simulator PNG does not prove
+modesetting or scanout.
 
 ## Assumptions and unresolved hardware questions
 
 - PNG, JPEG, and GIF are the initial image formats supported by the
   standard-library decoders.
-- The software simulator writes PNG output; physical output backends consume
-  the same decoded `image.Image` frame interface.
-- Display IDs are stable logical names from local configuration. Mapping them
-  to physical connectors is deferred until device behavior is measured.
-- DRM/KMS library choice, connector identity across reboot, scaling and
-  rotation behavior, DRM master ownership, container permissions, and Pi 4
-  dual-HDMI operation remain unverified hardware questions.
+- Both backends consume the same decoded `image.Image` frame interface.
+- Display IDs are stable logical names from local configuration; connector
+  names map them to DRM outputs. Connector identity and ordering across reboot
+  still need target testing.
+- Single-display 1920x1080 KMS state, frame updates, and least-privilege DRM
+  access were verified on a Pi 3 Model A Plus. Visual monitor confirmation,
+  Pi 3B, Pi 4 dual-output, hotplug recovery, and cross-kernel DRM ownership
+  behavior remain unverified.
 - Cache capacity defaults, filesystem durability across power loss, and
   practical image-size limits need device measurements before production
   deployment.

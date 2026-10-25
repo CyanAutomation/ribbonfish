@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/CyanAutomation/ribbonfish/agent/internal/display"
 )
 
 // Test suite contract source: docs/agent-foundation.md#architecture.
@@ -73,6 +75,40 @@ func TestSimulatorWritesIndependentAtomicFrames(t *testing.T) {
 		if strings.HasPrefix(entry.Name(), ".ribbonfish-frame-") {
 			t.Errorf("temporary frame remains after presentation: %s", entry.Name())
 		}
+	}
+}
+
+func TestSimulatorRendersFramesAtConfiguredDisplayModes(t *testing.T) {
+	profiles := map[string]display.ModeSpec{
+		"display-left": {Width: 4, Height: 2},
+	}
+	backend, err := NewSimulatorWithProfiles(t.TempDir(), profiles, display.FitContain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+
+	if err := backend.Present(context.Background(), "display-left", solidFrame(color.RGBA{G: 120, A: 255})); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, ok := backend.Snapshot("display-left")
+	if !ok {
+		t.Fatal("Snapshot(display-left) is missing")
+	}
+	if got := snapshot.Frame.Bounds(); got != image.Rect(0, 0, 4, 2) {
+		t.Fatalf("simulated frame bounds = %v, want 4x2 mode", got)
+	}
+	file, err := os.Open(snapshot.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := png.Decode(file)
+	_ = file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decoded.Bounds(); got != image.Rect(0, 0, 4, 2) {
+		t.Fatalf("PNG bounds = %v, want 4x2 mode", got)
 	}
 }
 
