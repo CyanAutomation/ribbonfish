@@ -192,7 +192,6 @@ it does not satisfy physical hardware acceptance criteria.
 - Don't send protected screenshot pixels to JEV without explicit opt-in
 - Don't delete current manifest pointers before verifying replacement writes to R2
 - Don't commit secrets, device tokens, or screenshot content to the repository
-- Don't use mutable `latest` image tags in production deployments
 
 ## Links
 
