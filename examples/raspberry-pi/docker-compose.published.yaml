@@ -19,7 +19,7 @@ services:
     network_mode: none
     volumes:
       - ./simulator-config.json:/etc/ribbonfish/config.json:ro
-      - ../agent/simulator/assets:/assets:ro
+      - ./assets:/assets:ro
       - published-simulator-cache:/var/lib/ribbonfish/cache
       - published-simulator-frames:/var/lib/ribbonfish/frames
 

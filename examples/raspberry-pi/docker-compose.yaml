@@ -29,7 +29,7 @@ services:
     volumes:
       - ribbonfish-cache:/var/lib/ribbonfish/cache
       - ${RIBBONFISH_LOCAL_CONFIG:-./hardware-config.pi4.json}:/etc/ribbonfish/config.json:ro
-      - ../agent/simulator/assets:/assets:ro
+      - ./assets:/assets:ro
 
 volumes:
   ribbonfish-cache:
