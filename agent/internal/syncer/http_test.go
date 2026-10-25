@@ -160,6 +160,96 @@ func TestManifestCannotExceedDeviceCacheBudget(t *testing.T) {
 	}
 }
 
+func TestManifestRejectsSingleAssetLargerThanDeviceCache(t *testing.T) {
+	hardware := syncerConfig()
+	manifest := Manifest{
+		Version:   1,
+		Revision:  "over-cache-limit",
+		Playlists: []ManifestPlaylist{{ID: "welcome", Assets: []ManifestAsset{{SHA256: strings.Repeat("1", 64), Size: hardware.Cache.MaxBytes + 1}}}},
+		Displays:  []ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "30s"}},
+	}
+	if err := validateManifest(manifest, hardware); err == nil || !strings.Contains(err.Error(), "cache budget") {
+		t.Fatalf("validateManifest() error = %v, want cache budget rejection", err)
+	}
+}
+
+func TestDecodeManifestRejectsInputOverSizeLimit(t *testing.T) {
+	_, err := decodeManifest(strings.NewReader(strings.Repeat(" ", manifestLimit+1)))
+	if err == nil || !strings.Contains(err.Error(), "1 MiB limit") {
+		t.Fatalf("decodeManifest() error = %v, want manifest size-limit rejection", err)
+	}
+}
+
+func TestHTTPClientRejectsChunkedOversizedAssetWithoutCaching(t *testing.T) {
+	pngData := syncerPNG(t, color.RGBA{R: 150, A: 255})
+	digest := fmt.Sprintf("%x", sha256.Sum256(pngData))
+	manifestBytes, err := json.Marshal(Manifest{
+		Version:   1,
+		Revision:  "wrong-size",
+		Playlists: []ManifestPlaylist{{ID: "welcome", Assets: []ManifestAsset{{SHA256: digest, Size: int64(len(pngData) - 1)}}}},
+		Displays:  []ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "30s"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/devices/pi-office/manifest" {
+			_, _ = w.Write(manifestBytes)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		_, _ = w.Write(pngData)
+	}))
+	defer server.Close()
+
+	store := syncerStore(t)
+	client, err := NewHTTPClient(server.URL, "pi-office", testDeviceToken, store, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Synchronize(context.Background(), syncerConfig(), syncerConfig()); err == nil || !strings.Contains(err.Error(), "size") {
+		t.Fatalf("Synchronize() error = %v, want declared-size rejection", err)
+	}
+	if _, err := store.Load(context.Background(), cache.Asset{SHA256: digest}); err == nil {
+		t.Fatal("oversized response was committed to the cache")
+	}
+}
+
+func TestHTTPClientRejectsCachedAssetWithWrongManifestSize(t *testing.T) {
+	pngData := syncerPNG(t, color.RGBA{G: 150, A: 255})
+	digest := fmt.Sprintf("%x", sha256.Sum256(pngData))
+	manifestBytes, err := json.Marshal(Manifest{
+		Version:   1,
+		Revision:  "cached-wrong-size",
+		Playlists: []ManifestPlaylist{{ID: "welcome", Assets: []ManifestAsset{{SHA256: digest, Size: int64(len(pngData) - 1)}}}},
+		Displays:  []ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "30s"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/devices/pi-office/manifest" {
+			_, _ = w.Write(manifestBytes)
+			return
+		}
+		_, _ = w.Write(pngData)
+	}))
+	defer server.Close()
+
+	store := syncerStore(t)
+	if _, err := store.Put(context.Background(), strings.NewReader(string(pngData)), digest); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewHTTPClient(server.URL, "pi-office", testDeviceToken, store, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Synchronize(context.Background(), syncerConfig(), syncerConfig()); err == nil || !strings.Contains(err.Error(), "length mismatch") {
+		t.Fatalf("Synchronize() error = %v, want manifest size mismatch", err)
+	}
+}
+
 func TestEnrollWritesDeviceTokenWithPrivatePermissions(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/enroll" {
@@ -235,6 +325,68 @@ func TestSaveAndLoadSnapshotRequiresEveryPinnedImage(t *testing.T) {
 	if _, err := LoadSnapshot(filename, hardware, store); err == nil {
 		t.Fatal("LoadSnapshot accepted a snapshot with a missing image")
 	}
+}
+
+func TestLoadSnapshotPinsImagesBeforeValidatingAndMerging(t *testing.T) {
+	pngData := syncerPNG(t, color.RGBA{R: 120, A: 255})
+	digest := fmt.Sprintf("%x", sha256.Sum256(pngData))
+	fileStore := syncerStore(t)
+	asset, err := fileStore.Put(context.Background(), strings.NewReader(string(pngData)), digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hardware := syncerConfig()
+	manifest := Manifest{
+		Version:   1,
+		Revision:  "restore-pin-order",
+		Playlists: []ManifestPlaylist{{ID: "welcome", Assets: []ManifestAsset{{SHA256: digest, Size: asset.Bytes}}}},
+		Displays:  []ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "30s"}},
+	}
+	candidate, err := mergeManifest(hardware, manifest, map[string]cache.Asset{digest: asset})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filename := filepath.Join(t.TempDir(), "last-good.json")
+	if err := SaveSnapshot(filename, Update{Config: candidate, Manifest: manifest, ETag: `"restore-pin-order"`, Changed: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &observingStore{FileStore: fileStore}
+	if _, err := LoadSnapshot(filename, hardware, store); err != nil {
+		t.Fatalf("LoadSnapshot() error = %v", err)
+	}
+	if len(store.events) < 2 || store.events[0] != "prune" || store.events[1] != "load" {
+		t.Fatalf("store operation order = %v, want prune before load", store.events)
+	}
+	if len(store.retained) == 0 || !containsDigest(store.retained[0], digest) {
+		t.Fatalf("initial retained cache keys = %v, want snapshot digest %s", store.retained, digest)
+	}
+}
+
+type observingStore struct {
+	*cache.FileStore
+	events   []string
+	retained [][]string
+}
+
+func (s *observingStore) Load(ctx context.Context, asset cache.Asset) (image.Image, error) {
+	s.events = append(s.events, "load")
+	return s.FileStore.Load(ctx, asset)
+}
+
+func (s *observingStore) Prune(ctx context.Context, digests []string) error {
+	s.events = append(s.events, "prune")
+	s.retained = append(s.retained, append([]string(nil), digests...))
+	return s.FileStore.Prune(ctx, digests)
+}
+
+func containsDigest(digests []string, expected string) bool {
+	for _, digest := range digests {
+		if digest == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func syncerStore(t *testing.T) *cache.FileStore {

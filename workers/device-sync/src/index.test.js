@@ -21,6 +21,8 @@ class FakeDatabase {
     };
     this.enrollment = { code_hash: "", expires_at: Date.now() + 60_000, consumed_at: null };
     this.insertedDevice = null;
+    this.enrollments = [this.enrollment];
+    this.devices = new Map();
   }
 
   prepare(sql) {
@@ -29,34 +31,49 @@ class FakeDatabase {
       bind(...values) {
         return {
           async first() {
-            if (sql.startsWith("SELECT device_id FROM devices")) return database.insertedDevice;
+            if (sql.startsWith("SELECT device_id FROM devices")) {
+              if (database.enrollmentReadBarrier) {
+                const barrier = database.enrollmentReadBarrier;
+                barrier.reads++;
+                if (barrier.reads === 2) barrier.release();
+                await barrier.promise;
+              }
+              return database.devices.get(values[0]) ?? null;
+            }
             if (sql.includes("FROM devices")) return database.device;
-            if (sql.includes("FROM enrollments")) return database.enrollment;
+            if (sql.includes("FROM enrollments")) return database.enrollments.find((item) => item.code_hash === values[0]) ?? null;
             return null;
           },
-          async run() {
-            if (sql.startsWith("UPDATE enrollments")) {
-              if (!database.enrollment || database.enrollment.consumed_at !== null || database.enrollment.expires_at <= values[2]) {
-                return { meta: { changes: 0 } };
-              }
-              database.enrollment.consumed_at = values[0];
-              return { meta: { changes: 1 } };
-            }
-            if (sql.startsWith("INSERT INTO devices")) {
-              database.insertedDevice = {
-                device_id: values[0],
-                token_hash: values[1],
-                manifest_key: values[2],
-                enabled: 1,
-              };
-              database.device = database.insertedDevice;
-              return { meta: { changes: 1 } };
-            }
-            return { meta: { changes: 1 } };
-          },
+          values,
         };
       },
     };
+  }
+
+  async batch(statements) {
+    const [claim, insert] = statements;
+    const [now, claimID, codeHash, expiresAt, deviceID] = claim.values;
+    const enrollment = this.enrollments.find((item) => item.code_hash === codeHash);
+    if (enrollment && enrollment.consumed_at === null && enrollment.expires_at > expiresAt && !this.devices.has(deviceID)) {
+      enrollment.consumed_at = now;
+      enrollment.claim_id = claimID;
+    }
+
+    const [insertDeviceID, tokenHash, manifestKey, createdAt, insertCodeHash, consumedAt, insertClaimID, insertDeviceIDAgain] = insert.values;
+    const claimedEnrollment = this.enrollments.find((item) => item.code_hash === insertCodeHash);
+    let insertChanges = 0;
+    if (claimedEnrollment?.consumed_at === consumedAt && claimedEnrollment.claim_id === insertClaimID &&
+        insertDeviceID === insertDeviceIDAgain && !this.devices.has(insertDeviceID)) {
+      const device = { device_id: insertDeviceID, token_hash: tokenHash, manifest_key: manifestKey, enabled: 1, created_at: createdAt };
+      this.devices.set(insertDeviceID, device);
+      this.insertedDevice = device;
+      this.device = device;
+      insertChanges = 1;
+    }
+    return [
+      { meta: { changes: enrollment?.claim_id === claimID ? 1 : 0 } },
+      { meta: { changes: insertChanges } },
+    ];
   }
 }
 
@@ -143,6 +160,25 @@ test("enrollment consumes a one-time code and stores only the device token hash"
   assert.equal(db.insertedDevice.token_hash, await sha256Hex(result.device_token));
   assert.notEqual(db.insertedDevice.token_hash, result.device_token);
   assert.equal(db.enrollment.consumed_at !== null, true);
+});
+
+test("concurrent enrollment for the same device consumes only the winning code", async () => {
+  const { env, db } = testEnvironment();
+  const codes = ["first-one-time-code", "second-one-time-code"];
+  let releaseChecks;
+  db.enrollmentReadBarrier = { reads: 0, promise: new Promise((resolve) => { releaseChecks = resolve; }), release: () => releaseChecks() };
+  db.enrollment.code_hash = await sha256Hex(codes[0]);
+  db.enrollments.push({ code_hash: await sha256Hex(codes[1]), expires_at: Date.now() + 60_000, consumed_at: null });
+  const enroll = (enrollment_code) => fetchHandler(new Request("https://worker.test/v1/enroll", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ device_id: "pi-office", enrollment_code }),
+  }), env);
+
+  const responses = await Promise.all(codes.map(enroll));
+  assert.deepEqual(responses.map((response) => response.status).sort(), [201, 409]);
+  assert.equal(db.devices.size, 1);
+  assert.equal(db.enrollments.filter((item) => item.consumed_at !== null).length, 1);
 });
 
 test("manifest validation rejects arbitrary asset URLs and invalid digests", async () => {

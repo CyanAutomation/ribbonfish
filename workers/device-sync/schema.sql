@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS devices (
 CREATE TABLE IF NOT EXISTS enrollments (
   code_hash TEXT PRIMARY KEY,
   expires_at INTEGER NOT NULL,
-  consumed_at INTEGER
+  consumed_at INTEGER,
+  claim_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS devices_enabled_idx ON devices(enabled);

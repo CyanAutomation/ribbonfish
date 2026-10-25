@@ -92,15 +92,30 @@ async function enroll(request, env) {
   ).bind(data.device_id).first();
   if (existing) throw new HTTPError(409, "device is already enrolled");
 
-  const claim = await env.DB.prepare(
-    "UPDATE enrollments SET consumed_at = ? WHERE code_hash = ? AND consumed_at IS NULL AND expires_at > ?",
-  ).bind(now, codeHash, now).run();
-  if (claim.meta?.changes !== 1) throw new HTTPError(401, "enrollment code is invalid or expired");
-
   const token = randomToken();
-  await env.DB.prepare(
-    "INSERT INTO devices (device_id, token_hash, manifest_key, enabled, created_at) VALUES (?, ?, ?, 1, ?)",
-  ).bind(data.device_id, await sha256Hex(token), manifestKey(data.device_id), now).run();
+  const claimID = randomToken();
+  const tokenHash = await sha256Hex(token);
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE enrollments SET consumed_at = ?, claim_id = ?
+       WHERE code_hash = ? AND consumed_at IS NULL AND expires_at > ?
+         AND NOT EXISTS (SELECT 1 FROM devices WHERE device_id = ?)`,
+    ).bind(now, claimID, codeHash, now, data.device_id),
+    env.DB.prepare(
+      `INSERT INTO devices (device_id, token_hash, manifest_key, enabled, created_at)
+       SELECT ?, ?, ?, 1, ?
+       WHERE EXISTS (
+         SELECT 1 FROM enrollments WHERE code_hash = ? AND consumed_at = ? AND claim_id = ?
+       ) AND NOT EXISTS (SELECT 1 FROM devices WHERE device_id = ?)`,
+    ).bind(data.device_id, tokenHash, manifestKey(data.device_id), now, codeHash, now, claimID, data.device_id),
+  ]);
+  if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) {
+    const existingAfterClaim = await env.DB.prepare(
+      "SELECT device_id FROM devices WHERE device_id = ?",
+    ).bind(data.device_id).first();
+    if (existingAfterClaim) throw new HTTPError(409, "device is already enrolled");
+    throw new HTTPError(401, "enrollment code is invalid or expired");
+  }
   return jsonResponse({ device_token: token }, 201);
 }
 

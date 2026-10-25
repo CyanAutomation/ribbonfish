@@ -110,25 +110,25 @@ func LoadSnapshot(filename string, hardware config.Config, store cache.Store) (U
 		return Update{}, fmt.Errorf("validate last-good manifest: %w", err)
 	}
 	assets := make(map[string]cache.Asset)
-	for _, digest := range manifestDigests(saved.Manifest) {
-		if _, err := store.Load(context.Background(), cache.Asset{SHA256: digest}); err != nil {
-			return Update{}, fmt.Errorf("last-good image %s is unavailable: %w", digest, err)
+	for _, playlist := range saved.Manifest.Playlists {
+		for _, item := range playlist.Assets {
+			digest := strings.ToLower(item.SHA256)
+			assets[digest] = cache.Asset{SHA256: digest, Path: "cached:" + digest, Bytes: item.Size}
 		}
-		for _, playlist := range saved.Manifest.Playlists {
-			for _, item := range playlist.Assets {
-				if strings.EqualFold(item.SHA256, digest) {
-					assets[digest] = cache.Asset{SHA256: digest, Path: "cached:" + digest, Bytes: item.Size}
-					break
-				}
-			}
+	}
+	retained := append(configDigests(hardware), manifestDigests(saved.Manifest)...)
+	if err := store.Prune(context.Background(), retained); err != nil {
+		return Update{}, fmt.Errorf("protect restored images: %w", err)
+	}
+	for _, digest := range manifestDigests(saved.Manifest) {
+		asset := assets[digest]
+		if _, err := store.Load(context.Background(), cache.Asset{SHA256: digest, Bytes: asset.Bytes}); err != nil {
+			return Update{}, fmt.Errorf("last-good image %s is unavailable: %w", digest, err)
 		}
 	}
 	candidate, err := mergeManifest(hardware, saved.Manifest, assets)
 	if err != nil {
 		return Update{}, err
-	}
-	if err := store.Prune(context.Background(), manifestDigests(saved.Manifest)); err != nil {
-		return Update{}, fmt.Errorf("protect restored images: %w", err)
 	}
 	return Update{Config: candidate, Manifest: saved.Manifest, ETag: saved.ETag, Changed: true}, nil
 }
