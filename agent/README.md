@@ -65,8 +65,10 @@ GitHub Actions runs both checks on changes to the agent, simulator, or Pi
 examples, validates the Pi configs and Compose files, and publishes an ARMv7/
 ARM64 release image to GHCR when a `v*` tag is pushed. A separate workflow
 publishes `cyanautomation/ribbonfish-agent` to Docker Hub for AMD64, ARM64, and
-ARMv7 after PRs merge into `main`, tagged with the full merge SHA as
-`sha-<merge-commit-SHA>`. The published-image simulator Compose example is in
+ARMv7 after PRs merge into `main`, tagged as both `latest` and the full
+merge SHA (`sha-<merge-commit-SHA>`). Use the immutable SHA tag to pin a
+deployment; `latest` moves after verification passes. The published-image
+simulator Compose example is in
 `examples/raspberry-pi/docker-compose.published.yaml`. The hardware Compose
 example runs the bundled local image playlists with no network or control
 plane. Single-display 1080p KMS mode-setting and frame updates have been
