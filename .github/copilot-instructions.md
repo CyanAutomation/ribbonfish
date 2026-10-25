@@ -108,8 +108,8 @@ Variants are **keyed by rendering inputs + access permissions**; reuse across di
 
 ### Deployment Model
 - **Default:** Docker Compose on Raspberry Pi OS Lite (no desktop, Chromium, X11, Wayland)
-- **Images:** Hardware template targets multi-architecture OCI images (ARM64 and ARMv7); no automated GHCR publishing workflow is configured
-- **Releases:** Create GitHub Releases and version tags manually through the GitHub UI
+- **Images:** Merged PRs to `main` publish `cyanautomation/ribbonfish-agent` to Docker Hub for AMD64, ARM64, and ARMv7, tagged with the merge SHA (`sha-<SHA>`); `v*` tags also publish ARMv7 and ARM64 release images to GHCR
+- **Releases:** GitHub Releases and version tags remain managed manually through the GitHub UI; pushing a `v*` tag also publishes a GHCR image
 - **Updates:** Pinned image versions/digests, explicit health checks, rollback procedures; avoid mutable `latest` tags
 
 ### Agent Responsibilities

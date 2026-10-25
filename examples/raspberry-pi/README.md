@@ -1,10 +1,11 @@
 # Raspberry Pi deployment
 
-This directory has two deployment modes. The simulator writes PNG frames without touching HDMI. The experimental hardware Compose service uses Linux DRM/KMS to present the same local playlists through one or more configured connectors. Pi 3 A+ KMS mode-setting, frame updates, and visible sample slides have been confirmed. Pi 3B and Pi 4 dual-display acceptance remain open.
+This directory has three Compose examples: a source-built simulator, a published-image simulator, and an experimental Linux DRM/KMS hardware service. The simulators write PNG frames without touching HDMI. Pi 3 A+ KMS mode-setting, frame updates, and visible sample slides have been confirmed; Pi 3B and Pi 4 dual-display acceptance remain open.
 
 ## Files
 
 - `docker-compose.simulator.yaml`: isolated software simulation with PNG frames and persistent volumes
+- `docker-compose.published.yaml`: runs the Docker Hub image in simulator mode without building from source
 - `simulator-config.json`: two logical simulator displays rendered at 1920x1080
 - `simulator-config.pi3a-plus.json`: one simulator display matching the tested Pi 3 A+ connector and observed 1920x1080@60 mode
 - `docker-compose.yaml`: local-file DRM/KMS deployment, using sample images and no control-plane connection
@@ -13,9 +14,9 @@ This directory has two deployment modes. The simulator writes PNG frames without
 - `hardware-config.pi3b.json`: one-display Pi 3B profile using HDMI-A-1
 - `.env.example`: image tag, config path, cache path, DRM device, and numeric DRM group
 
-The agent has no enrollment or remote synchronization yet. The hardware service therefore uses local config/assets and `network_mode: none`. The publishing workflow builds ARMv7 and ARM64 images when a `v*` Git tag is pushed. The version in `.env.example` is an example; set it to a published version.
+The agent has no enrollment or remote synchronization yet. The hardware service therefore uses local config/assets and `network_mode: none`. After a PR merges into `main`, `.github/workflows/docker-publish.yml` publishes `cyanautomation/ribbonfish-agent` to Docker Hub for AMD64, ARM64, and ARMv7 using the immutable tag `sha-<merge-commit-SHA>`. The separate `.github/workflows/publish-agent.yml` continues to publish ARMv7 and ARM64 images to GHCR when a `v*` tag is pushed. Set `RIBBONFISH_VERSION` to a Docker Hub SHA tag for the Compose hardware and published-simulator examples.
 
-The workflow publishes to GHCR but does not change package visibility. Make the package public in GitHub Packages for unauthenticated pulls, or sign in on the Pi with an account/token that can read the package before running `docker compose pull`.
+The GHCR release workflow does not change package visibility. Make its package public for unauthenticated GHCR pulls, or sign in on the Pi with an account/token that can read GHCR packages before using a `v*` image tag.
 
 ## Software simulator on Agentlab
 
@@ -44,6 +45,25 @@ RIBBONFISH_SIMULATOR_CONFIG=./simulator-config.pi3a-plus.json \
 ```
 
 `fit` supports `contain` (black bars), `cover` (center crop), and `stretch` (change aspect ratio). The DRM backend selects a requested mode from the connector's advertised modes or uses its preferred mode.
+
+## Run the published Docker Hub image in simulator mode
+
+After a merged pull request publishes an image, check out the corresponding commit on `main`. From the repository root, set the image tag from that commit and start the example:
+
+```sh
+export RIBBONFISH_VERSION="sha-$(git rev-parse HEAD)"
+docker compose -f examples/raspberry-pi/docker-compose.published.yaml up -d
+docker compose -f examples/raspberry-pi/docker-compose.published.yaml logs -f agent
+```
+
+The multi-architecture manifest selects the host architecture. The example uses the sample config and PNG assets, disables container network access, and stores frames and cache data in named volumes. Copy frames to the current directory with:
+
+```sh
+docker compose -f examples/raspberry-pi/docker-compose.published.yaml cp agent:/var/lib/ribbonfish/frames/display-left.png ./display-left.png
+docker compose -f examples/raspberry-pi/docker-compose.published.yaml cp agent:/var/lib/ribbonfish/frames/display-right.png ./display-right.png
+```
+
+Stop it with `docker compose -f examples/raspberry-pi/docker-compose.published.yaml down`.
 
 ## DRM/KMS setup
 
@@ -84,7 +104,7 @@ The tested Pi has Docker Engine but no Compose plugin. For a Docker-only deploym
 
 ```sh
 docker volume create ribbonfish-cache
-IMAGE=ghcr.io/cyanautomation/ribbonfish-agent:YOUR_PUBLISHED_VERSION
+IMAGE=cyanautomation/ribbonfish-agent:YOUR_PUBLISHED_VERSION
 docker run --detach --name ribbonfish-agent --restart unless-stopped --stop-timeout 15 \
   --init --network none --read-only --cap-drop ALL \
   --security-opt no-new-privileges:true --user 65532:65532 \
