@@ -2,7 +2,7 @@ name: ribbonfish
 
 services:
   agent:
-    image: ghcr.io/cyanautomation/ribbonfish-agent:${RIBBONFISH_VERSION:?Set RIBBONFISH_VERSION}
+    image: cyanautomation/ribbonfish-agent:${RIBBONFISH_VERSION:?Set RIBBONFISH_VERSION}
     restart: unless-stopped
     init: true
     stop_grace_period: 15s
