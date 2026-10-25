@@ -14,13 +14,14 @@ import (
 	"github.com/CyanAutomation/ribbonfish/agent/internal/agent"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/cache"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/config"
+	"github.com/CyanAutomation/ribbonfish/agent/internal/display"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/display/drm"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/display/simulator"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/logging"
 )
 
 func main() {
-	configPath := flag.String("config", "config.json", "path to the agent JSON configuration")
+	configPath := flag.String("config", defaultConfigPath(), "path to the agent JSON configuration")
 	listDisplays := flag.Bool("list-displays", false, "list DRM/KMS connectors from Linux sysfs and exit")
 	flag.Parse()
 	if *listDisplays {
@@ -37,6 +38,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "ribbonfish:", err)
 		os.Exit(1)
 	}
+}
+
+func defaultConfigPath() string {
+	if path := os.Getenv("RIBBONFISH_CONFIG_FILE"); path != "" {
+		return path
+	}
+	return "config.json"
 }
 
 func listDRMDisplays(sysfsRoot, devRoot string, output io.Writer) error {
@@ -73,10 +81,10 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("open image cache: %w", err)
 	}
-	outputBackend, err := simulator.NewSimulator(cfg.Output.Directory)
+	outputBackend, err := newDisplayOutput(cfg)
 	if err != nil {
 		_ = imageCache.Close()
-		return fmt.Errorf("start simulator: %w", err)
+		return fmt.Errorf("start %s: %w", cfg.Output.EffectiveBackend(), err)
 	}
 	playback, err := agent.New(ctx, cfg, imageCache, outputBackend, logger, agent.RealClock{})
 	if err != nil {
@@ -84,10 +92,36 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 		_ = imageCache.Close()
 		return err
 	}
-	logger.Info("agent started", "display_backend", "simulator")
+	logger.Info("agent started", "display_backend", cfg.Output.EffectiveBackend())
 	runErr := playback.Run(ctx)
 	outputErr := outputBackend.Close()
 	cacheErr := imageCache.Close()
 	logger.Info("agent shutdown complete", "reason", context.Cause(ctx))
 	return errors.Join(runErr, outputErr, cacheErr)
+}
+
+func newDisplayOutput(cfg config.Config) (display.Output, error) {
+	fit := display.FitMode(cfg.Output.EffectiveFit())
+	switch cfg.Output.EffectiveBackend() {
+	case "simulator":
+		profiles := make(map[string]display.ModeSpec, len(cfg.Displays))
+		for _, target := range cfg.Displays {
+			mode, err := target.ParseMode()
+			if err != nil {
+				return nil, err
+			}
+			if !mode.Preferred {
+				profiles[target.ID] = mode
+			}
+		}
+		return simulator.NewSimulatorWithProfiles(cfg.Output.Directory, profiles, fit)
+	case "drm":
+		targets := make([]drm.DisplayTarget, 0, len(cfg.Displays))
+		for _, target := range cfg.Displays {
+			targets = append(targets, drm.DisplayTarget{ID: target.ID, Connector: target.Connector, Mode: target.Mode})
+		}
+		return drm.NewOutput(cfg.Output.Device, targets, fit)
+	default:
+		return nil, fmt.Errorf("unsupported display backend %q", cfg.Output.EffectiveBackend())
+	}
 }

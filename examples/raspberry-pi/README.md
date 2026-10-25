@@ -1,23 +1,27 @@
-# Raspberry Pi Docker Compose proof of concept
+# Raspberry Pi deployment
 
-This directory contains a runnable ARM64 software simulator Compose file and a separate **future hardware deployment template**. GitHub Releases and version tags are managed manually through the GitHub UI; this repository does not automatically publish OCI images. The hardware template requires a compatible image to be made available separately and is not a working deployment: its environment-variable interface, agent enrollment, DRM/KMS output, and multi-output behavior remain future work.
+This directory has two deployment modes. The simulator writes PNG frames without touching HDMI. The experimental hardware Compose service uses Linux DRM/KMS to present the same local playlists through one or more configured connectors. Pi 3 A+ KMS mode-setting, frame updates, and visible sample slides have been confirmed. Pi 3B and Pi 4 dual-display acceptance remain open.
 
-## Current agent contract
+## Files
 
-The local Go agent accepts a versioned JSON file through `ribbonfish -config <path>`, uses a persistent filesystem cache, and writes simulated frames as PNG files. It does not yet read the proposed `RIBBONFISH_API_URL`, `RIBBONFISH_DEVICE_ID`, `RIBBONFISH_TOKEN_FILE`, or `RIBBONFISH_CACHE_DIR` variables, enroll with a control plane, or present frames through `/dev/dri`.
+- `docker-compose.simulator.yaml`: isolated software simulation with PNG frames and persistent volumes
+- `simulator-config.json`: two logical simulator displays rendered at 1920x1080
+- `simulator-config.pi3a-plus.json`: one simulator display matching the tested Pi 3 A+ connector and observed 1920x1080@60 mode
+- `docker-compose.yaml`: local-file DRM/KMS deployment, using sample images and no control-plane connection
+- `hardware-config.pi4.json`: two-display Pi 4 profile using HDMI-A-1 and HDMI-A-2
+- `hardware-config.pi3a-plus.json`: tested one-display Pi 3 A+ profile using card0 and HDMI-A-1
+- `hardware-config.pi3b.json`: one-display Pi 3B profile using HDMI-A-1
+- `.env.example`: image tag, config path, cache path, DRM device, and numeric DRM group
 
-Files:
+The agent has no enrollment or remote synchronization yet. The hardware service therefore uses local config/assets and `network_mode: none`. The publishing workflow builds ARMv7 and ARM64 images when a `v*` Git tag is pushed. The version in `.env.example` is an example; set it to a published version.
 
-- `docker-compose.simulator.yaml`: builds and runs the two-output PNG simulator on a native ARM64 Docker host
-- `simulator-config.json`: local simulator configuration for that Compose file
-- `docker-compose.yaml`: future hardware deployment template
-- `.env.example`: non-secret hardware Compose substitutions
+The workflow publishes to GHCR but does not change package visibility. Make the package public in GitHub Packages for unauthenticated pulls, or sign in on the Pi with an account/token that can read the package before running `docker compose pull`.
 
-## Run the simulator natively on Agentlab
+## Software simulator on Agentlab
 
-Agentlab is a Raspberry Pi 4 Model B Rev 1.5 running 64-bit Debian 13 (`aarch64`) with kernel `6.18.29+rpt-rpi-v8`, Docker Engine 29.6.0, and Compose 5.1.4. The simulator Compose file explicitly builds/runs `linux/arm64`, keeps the process at UID 65532, persists cache and frame data in Docker-managed volumes, and has no network or DRM device access.
+Agentlab is a Raspberry Pi 4 Model B Rev 1.5 running 64-bit Debian 13 (`aarch64`). During the last host inspection, it exposed `/dev/dri/card0` with `v3d` and `/dev/dri/card1` with `vc4-drm`; both HDMI connectors were disconnected. The simulator does not open the DRM devices, so it can run without an HDMI display.
 
-From a checkout on Agentlab, run these commands from the repository root:
+From the repository root:
 
 ```sh
 docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml config
@@ -25,31 +29,36 @@ docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml up --build
 docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml logs -f agent
 ```
 
-While the service is running, inspect the host's DRM connector metadata with `docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml exec agent /ribbonfish -list-displays`. This reads sysfs only and does not open or change a DRM device.
-
-The PNGs live in the `simulator-frames` volume. Copy them to the host with `docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml cp agent:/var/lib/ribbonfish/frames/display-left.png ./display-left.png` and the corresponding command for `display-right.png`. Stop the service with `docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml down`.
-
-To observe host resource use while it runs, use `docker stats "$(docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml ps -q agent)"`. For longer runs, record idle and active CPU/RAM, cache volume growth (`docker system df -v`), and Pi temperature (`vcgencmd measure_temp` when available). These measurements cover the simulator workload, not HDMI scanout or display-related GPU use.
-
-The native host smoke check can also run without Compose:
+Frames are written to the `simulator-frames` volume. To copy them out:
 
 ```sh
-sh agent/scripts/smoke-container.sh linux/arm64 pi4
+docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml cp agent:/var/lib/ribbonfish/frames/display-left.png ./display-left.png
+docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml cp agent:/var/lib/ribbonfish/frames/display-right.png ./display-right.png
 ```
 
-It builds and runs the ARM64 image, checks fresh named-volume writes and graceful stop, then restarts without the source assets to prove cache persistence and offline startup. GitHub Actions runs ARMv7 and ARM64 variants under QEMU; only the manual run on Agentlab exercises the Pi kernel and its Docker installation. Neither path proves physical display output.
+The simulator output size is a software fixture taken from `mode`; it does not query the monitor's advertised mode or emulate DRM, memory pressure, or a particular Raspberry Pi model. The Pi 3 A+ simulator profile captures the single connector and 1920x1080@60 timing observed during hardware acceptance. To run that profile:
 
-The read-only connector inventory command reports which card owns each connector and the sysfs-reported driver, connection state, and modes; it does not attempt to open the card or change display state.
+```sh
+RIBBONFISH_SIMULATOR_CONFIG=./simulator-config.pi3a-plus.json \
+  docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml up --build -d
+```
 
-## Agentlab DRM baseline
+`fit` supports `contain` (black bars), `cover` (center crop), and `stretch` (change aspect ratio). The DRM backend selects a requested mode from the connector's advertised modes or uses its preferred mode.
 
-Agentlab exposes `/dev/dri/card0` with the `v3d` driver and `/dev/dri/card1` with `vc4-drm`. Its HDMI connectors appear as `card1-HDMI-A-1` and `card1-HDMI-A-2`; both were disconnected during the last inspection. Both card nodes are owned by `root:video` (GID 44); `/dev/dri/renderD128` is owned by `root:render` (GID 992). The hardware template defaults to `/dev/dri/card1` and GID 44 for this host. Recheck the actual nodes and groups on every target because numbering can vary with the kernel and boot configuration.
+## DRM/KMS setup
 
-This identifies the display-capable DRM device on Agentlab; it does not prove that a container can take DRM master or present a frame. Connector mapping, hotplug behavior, Pi 4 dual-HDMI output, and simultaneous scanout remain hardware acceptance items for the phase when a monitor is available.
+The Linux backend opens the configured DRM card, requests DRM master, selects the configured connector and mode, allocates two XRGB8888 dumb buffers per display, and uses legacy KMS modesetting plus page flips for later frames. It does not use X11 or Wayland. The host display server must release the selected card. When this service takes over the card, it controls scanout for the configured displays. On the tested Pi 3 A+, the framebuffer console resumed its original framebuffer after a clean stop; other kernels may behave differently.
 
-## Future hardware setup
+The backend and its config/selection logic have automated tests and cross-compilation coverage. The following acceptance was run on `ribbonfish-01`, a Raspberry Pi 3 Model A Plus Rev 1.0 with Debian 13.7 ARM64, kernel `6.18.50+rpt-rpi-v8`, and Docker Engine 26.1.5:
 
-Prerequisites are a compatible Raspberry Pi OS Lite installation, Docker Compose, the actual DRM node and group IDs, a compatible agent image made available for the host architecture, and a provisioned device identity/token. Before editing the hardware Compose mapping, inspect:
+- `/dev/dri/card0` is `root:video` (GID 44); HDMI-A-1 is connected and advertises 1920x1080@60.
+- The 512 MiB Pi 3 A+ reports about 415 MiB total Linux memory in `free -h`.
+- A non-root, read-only container with all capabilities dropped and no network started the `drm` backend, rotated the two-image playlist, and updated the active XRGB8888 framebuffer at 1920x1080.
+- The agent process used about 26 MiB RSS; host available memory was about 195 MiB during the run. Temperature reached 43.5°C and `vcgencmd get_throttled` remained `0x0`.
+- `docker stats` reported 0B/0B, and Docker discarded an attempted 128 MiB limit because this kernel does not provide usable memory-controller cgroups. Do not rely on Docker memory limits or `docker stats` for memory accounting on this host.
+- The container exited cleanly. `kmsprint` then showed the original active 1920x1080 RGB16 framebuffer (FB 671), consistent with the framebuffer console resuming scanout.
+
+SSH verified active KMS state and frame updates; the user also confirmed the bundled sample slides were visible on the monitor. This did not measure visual quality or scaling. Agentlab still has no connected HDMI monitor. Before another hardware acceptance run, inspect the target's device nodes, group IDs, connectors, and modes:
 
 ```sh
 ls -l /dev/dri
@@ -57,17 +66,46 @@ stat -c '%g %G %n' /dev/dri/card*
 ls /sys/class/drm
 ```
 
-Copy `.env.example` to `.env` and set the actual image version, API URL, device ID, DRM device path and GID. For the sensitive token file, create a dedicated host group named `ribbonfish-token`, put its numeric GID in `RIBBONFISH_TOKEN_GID`, then create `secrets/device-token` owned by `root:ribbonfish-token` with mode `0440`. For example: `sudo install -o root -g ribbonfish-token -m 0440 /dev/null ./secrets/device-token`; populate it only through the approved enrollment flow. The container runs as UID 65532 and receives this group as a supplementary group, so an owner-only `0600` token file would not be readable. The example is a read-only bind mount, not a Docker Swarm secret.
+On Agentlab, the previous inspection found both card nodes owned by `root:video` (GID 44), with `vc4-drm` on card1. Recheck after reboot and on each different model/kernel. The tested Pi 3 A+ uses card0 and GID 44. Pi 3B uses `hardware-config.pi3b.json`; confirm its actual card and group before deploying.
 
-Never supply Cloudflare API credentials, JEV secrets, or screenshot-renderer credentials to the device agent. Keep `.env`, tokens, screenshots, and runtime files out of Git. The container does not use `privileged: true`, host networking, a browser, X11, or Wayland. `no-new-privileges` does not grant DRM permissions or DRM master ownership. Named-volume cache writes are prepared for the non-root image, but hardware output still needs validation. No health check is defined until the agent exposes a readiness contract.
+From `examples/raspberry-pi`, prepare the Compose settings. For the tested Pi 3 A+, choose `./hardware-config.pi3a-plus.json`, `/dev/dri/card0`, and GID 44. For Pi 3B, choose `./hardware-config.pi3b.json` and confirm the actual DRM card/GID instead.
 
-## Hardware acceptance checklist
+```sh
+cp .env.example .env
+# Edit .env: set a published RIBBONFISH_VERSION and confirm DRM device/GID.
+docker compose config
+docker compose run --rm agent -list-displays
+docker compose pull
+docker compose up -d
+docker compose logs -f agent
+```
 
-- [ ] Pi 3B displays a local image through DRM/KMS from an unprivileged container
-- [ ] Pi 4 shows different images simultaneously on both HDMI connectors
-- [ ] Display identity survives reboot and connector ordering changes
-- [ ] Agent restarts and preserves its cache; playback survives control-plane/network outages
-- [ ] DRM permissions, master ownership, hotplug, and node mappings are documented
-- [ ] RAM, CPU, storage growth, image-switch latency, temperature, and display stability are measured during sustained playback
+The tested Pi has Docker Engine but no Compose plugin. For a Docker-only deployment, set `IMAGE` to a published agent image, then run:
 
-The Cloudflare capture scheduler, queues, Browser Run integration, R2 screenshots, and optional JEV optimizer run outside this Compose deployment.
+```sh
+docker volume create ribbonfish-cache
+IMAGE=ghcr.io/cyanautomation/ribbonfish-agent:YOUR_PUBLISHED_VERSION
+docker run --detach --name ribbonfish-agent --restart unless-stopped --stop-timeout 15 \
+  --init --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges:true --user 65532:65532 \
+  --device /dev/dri/card0:/dev/dri/card0 --group-add 44 \
+  --mount "type=bind,src=$PWD/hardware-config.pi3a-plus.json,dst=/etc/ribbonfish/config.json,readonly" \
+  --mount "type=bind,src=$PWD/../agent/simulator/assets,dst=/assets,readonly" \
+  --mount type=volume,src=ribbonfish-cache,dst=/var/lib/ribbonfish/cache \
+  "$IMAGE" -config /etc/ribbonfish/config.json
+```
+
+Confirm the configured connector reports `connected`, startup selects the expected advertised mode, and the physical screen shows the bundled playlist image. On Pi 4, verify distinct content on both outputs. Restart the service and reboot the Pi to check mode selection, connector mapping, cache persistence, and recovery. Record results for both displays rather than treating a successful startup as proof of scanout. Stop the service with `docker compose down`.
+
+`-list-displays` reads sysfs and reports connector metadata plus whether the mapped card node exists. It does not test permissions, DRM master acquisition, mode-setting, or actual pixels. A successful Compose config check or QEMU smoke run is not hardware acceptance either.
+
+The Compose file maps only one DRM card, runs as UID 65532 with its numeric DRM group, drops all capabilities, uses a read-only root filesystem, and grants no network. It mounts the config and sample assets read-only and stores cache data in a named volume. Do not add `privileged: true` to work around a DRM permission or ownership failure; inspect the card owner, group, and active display services.
+
+## Current hardware limitations
+
+- Pi 3 A+ single-display KMS state, frame updates, and visible sample slides are confirmed. Pi 3B scanout and Pi 4 simultaneous dual-HDMI scanout still need direct testing.
+- HDMI hotplug recovery is not implemented; a failed page flip faults that surface until restart.
+- The agent does not save and restore the previous CRTC mode itself. The tested Pi 3 A+ framebuffer console resumed scanout after shutdown; this should be checked on each target kernel.
+- Connector naming, mode availability, card numbering, and DRM master behavior can vary across kernel and boot settings.
+- The service uses local bundled images only. There is no control-plane API, enrollment token, remote playlist sync, or network health check.
+- Simulator PNGs and emulated ARM containers validate software/container behavior, not physical scanout, GPU timing, or thermal performance.

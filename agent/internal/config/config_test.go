@@ -48,6 +48,14 @@ func TestValidateRejectsInvalidContracts(t *testing.T) {
 		{name: "empty cache directory", wantError: "cache.directory is required", mutate: func(c *Config) { c.Cache.Directory = " " }},
 		{name: "zero cache limit", wantError: "cache.max_bytes must be greater than zero", mutate: func(c *Config) { c.Cache.MaxBytes = 0 }},
 		{name: "empty output directory", wantError: "output.directory is required", mutate: func(c *Config) { c.Output.Directory = "" }},
+		{name: "unknown display backend", wantError: `output.backend must be "simulator" or "drm"`, mutate: func(c *Config) { c.Output.Backend = "x11" }},
+		{name: "DRM backend requires device", wantError: "output.device is required when output.backend is drm", mutate: func(c *Config) { c.Output.Backend = "drm"; c.Displays[0].Connector = "HDMI-A-1" }},
+		{name: "DRM device must be absolute", wantError: "output.device must be an absolute path", mutate: func(c *Config) {
+			c.Output.Backend = "drm"
+			c.Output.Device = "card1"
+			c.Displays[0].Connector = "HDMI-A-1"
+		}},
+		{name: "invalid fit mode", wantError: `output.fit must be "contain", "cover", or "stretch"`, mutate: func(c *Config) { c.Output.Fit = "crop" }},
 		{name: "duplicate playlist", wantError: `playlist id "left" is duplicated`, mutate: func(c *Config) { c.Playlists = append(c.Playlists, c.Playlists[0]) }},
 		{name: "unsafe playlist id", wantError: "playlists[0].id contains unsupported characters", mutate: func(c *Config) { c.Playlists[0].ID = "../left" }},
 		{name: "playlist without assets", wantError: `playlist "left" must contain at least one asset`, mutate: func(c *Config) { c.Playlists[0].Assets = nil }},
@@ -57,6 +65,19 @@ func TestValidateRejectsInvalidContracts(t *testing.T) {
 		{name: "unsafe display id", wantError: "displays[0].id contains unsupported characters", mutate: func(c *Config) { c.Displays[0].ID = "../left" }},
 		{name: "unknown playlist", wantError: `display "display-left" references unknown playlist "missing"`, mutate: func(c *Config) { c.Displays[0].PlaylistID = "missing" }},
 		{name: "invalid interval", wantError: "rotation_interval must be greater than zero", mutate: func(c *Config) { c.Displays[0].RotationInterval = "0s" }},
+		{name: "DRM display requires connector", wantError: `display "display-left" requires connector when output.backend is drm`, mutate: func(c *Config) { c.Output.Backend = "drm"; c.Output.Device = "/dev/dri/card1" }},
+		{name: "duplicate DRM connector", wantError: `connector "HDMI-A-1" is assigned to more than one display`, mutate: func(c *Config) {
+			c.Output.Backend = "drm"
+			c.Output.Device = "/dev/dri/card1"
+			c.Displays[0].Connector = "HDMI-A-1"
+			c.Displays = append(c.Displays, DisplayConfig{ID: "display-right", PlaylistID: "left", RotationInterval: "5s", Connector: "HDMI-A-1"})
+		}},
+		{name: "invalid DRM connector name", wantError: "connector contains unsupported characters", mutate: func(c *Config) {
+			c.Output.Backend = "drm"
+			c.Output.Device = "/dev/dri/card1"
+			c.Displays[0].Connector = "../card1"
+		}},
+		{name: "invalid display mode", wantError: `mode must be "preferred" or WIDTHxHEIGHT[@REFRESH]`, mutate: func(c *Config) { c.Displays[0].Mode = "1080p" }},
 	}
 
 	for _, tt := range tests {
@@ -69,6 +90,12 @@ func TestValidateRejectsInvalidContracts(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want diagnostic containing %q", err, tt.wantError)
 			}
 		})
+	}
+}
+
+func TestEffectiveBackendDefaultsToSimulator(t *testing.T) {
+	if got := validConfig().Output.EffectiveBackend(); got != "simulator" {
+		t.Fatalf("EffectiveBackend() = %q, want simulator", got)
 	}
 }
 
@@ -117,5 +144,43 @@ func TestLoadResolvesPathsRelativeToConfig(t *testing.T) {
 	interval, err := cfg.Displays[0].Interval()
 	if err != nil || interval != 5*time.Second {
 		t.Errorf("Interval() = %v, %v", interval, err)
+	}
+}
+
+func TestLoadAppliesHardwareEnvironmentOverridesBeforeValidation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hardware.json")
+	body := `{"version":1,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"backend":"drm","fit":"contain"},"playlists":[{"id":"left","assets":[{"path":"assets/one.png"}]}],"displays":[{"id":"display-left","playlist_id":"left","connector":"HDMI-A-1","mode":"preferred","rotation_interval":"5s"}]}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RIBBONFISH_DRM_DEVICE", "/dev/dri/card1")
+	t.Setenv("RIBBONFISH_CACHE_DIR", "/var/lib/ribbonfish/cache")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() with hardware overrides = %v", err)
+	}
+	if cfg.Output.Device != "/dev/dri/card1" {
+		t.Errorf("DRM device = %q, want environment override", cfg.Output.Device)
+	}
+	if cfg.Cache.Directory != "/var/lib/ribbonfish/cache" {
+		t.Errorf("cache directory = %q, want environment override", cfg.Cache.Directory)
+	}
+}
+
+func TestLoadIgnoresDRMDeviceOverrideForSimulator(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "simulator.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"directory":"frames"},"playlists":[{"id":"left","assets":[{"path":"asset.png"}]}],"displays":[{"id":"display-left","playlist_id":"left","rotation_interval":"5s"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RIBBONFISH_DRM_DEVICE", "/dev/dri/card1")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Output.Device != "" {
+		t.Fatalf("simulator config picked up DRM device %q", cfg.Output.Device)
 	}
 }
