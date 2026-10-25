@@ -15,15 +15,18 @@ depending on Cloudflare or Linux graphics libraries:
   images using XRGB8888 dumb buffers and page flips.
 - `internal/cache` implements verified, bounded persistent image storage.
 - `internal/playlist` schedules deterministic per-display rotation.
-- `internal/syncer` is the replaceable synchronization boundary.
+- `internal/syncer` validates versioned content manifests, downloads assets over
+  HTTPS, verifies SHA-256 before caching, and persists the last-good snapshot.
 - `internal/logging` configures standard-library `log/slog`.
 
-The current CLI loads and validates configuration, emits structured startup
-and shutdown records, and exits cleanly on SIGINT or SIGTERM. The local runtime
-loads images into the cache and rotates each configured display independently.
-It can write mode-sized PNG frames through the software simulator or present
-them through an experimental Linux DRM/KMS backend. The module has no
-third-party dependencies.
+The current CLI loads a local config or bundled Pi/simulator profile, emits
+structured startup and shutdown records, and exits cleanly on SIGINT or SIGTERM.
+The local runtime loads images into the cache and rotates each configured
+display independently. Optional Worker sync starts after local playback, polls
+for a complete content snapshot, and switches playlist schedules only after all
+assets pass integrity checks. Remote content cannot change output backend,
+DRM card, connector mapping, cache directory, or cache limit. The Go module has
+no third-party dependencies.
 
 ## Local configuration contract
 
@@ -58,16 +61,38 @@ checked, or stored because the cache is full, that item is skipped; displays
 continue with other verified cached items and preserve their last written
 frame when no valid item remains.
 
+## Remote content sync
+
+The Worker contract lives in `workers/device-sync`. A manifest has a version,
+revision, complete playlist contents, SHA-256 digest and byte size for each
+image, and per-display playlist/rotation assignments. It contains no arbitrary
+URLs or local filesystem paths. The device profile owns its output settings;
+remote display IDs must match that profile.
+
+The Go client sends a per-device bearer token, uses an ETag for unchanged
+revisions, limits manifest and image sizes, and rejects non-HTTPS endpoints
+outside loopback development. New image digests are pinned alongside current
+assets while the candidate is fetched. A candidate is saved to persistent state
+and applied only after validation; failures keep the active snapshot. The
+last-good manifest is restored only if every referenced cached image still
+verifies. If a snapshot is unavailable or damaged, the bundled profile starts
+the device.
+
+The playback runtime can switch content without reopening DRM. It waits for
+readers of the old snapshot to finish before allowing cache eviction, so a
+failed or incomplete update cannot remove the currently displayed content.
+
 ## Raspberry Pi deployment
 
-`examples/raspberry-pi/docker-compose.simulator.yaml` runs the software
-simulator with no network or DRM access. `docker-compose.yaml` runs the DRM
-backend using local JSON config and bundled assets, maps one DRM card, mounts a
-persistent cache, and runs non-root with a read-only root filesystem and no
-added capabilities. It intentionally has no network because control-plane
-enrollment and synchronization are not implemented. `.env.example` shows the
-Agentlab Pi 4 device path/group; verify those values per host. The publishing
-workflow creates ARMv7/ARM64 images from `v*` tags.
+`examples/raspberry-pi/docker-compose.simulator.yaml` runs the bundled software
+simulator with no network or DRM access. `docker-compose.yaml` runs a bundled
+hardware profile, maps one DRM card, and mounts one persistent state volume for
+the cache, last-good manifest, frames, and per-device token. It runs non-root
+with a read-only root filesystem and no added capabilities. The network stays
+disabled unless `RIBBONFISH_NETWORK_MODE=bridge` is selected for enrollment or
+sync. `.env.example` defaults to the Pi 4 profile and Agentlab's card/group;
+verify those values per host. The publishing workflow creates ARMv7/ARM64
+images from `v*` tags.
 
 DRM output has passed a single-display KMS mode-setting and frame-update check
 over SSH on a Pi 3 Model A Plus, and the user confirmed that the sample slides

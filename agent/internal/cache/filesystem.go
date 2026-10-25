@@ -185,6 +185,10 @@ func (s *FileStore) Load(ctx context.Context, asset Asset) (image.Image, error) 
 		s.mu.Unlock()
 		return nil, os.ErrNotExist
 	}
+	if asset.Bytes > 0 && entry.Bytes != asset.Bytes {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("asset size does not match expected cache metadata: expected %d bytes, got %d", asset.Bytes, entry.Bytes)
+	}
 	path := s.assetPath(digest)
 	if err := verifyFile(path, digest); err != nil {
 		s.mu.Unlock()

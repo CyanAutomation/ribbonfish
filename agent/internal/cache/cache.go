@@ -11,7 +11,7 @@ import (
 type Asset struct {
 	SHA256 string
 	Path   string
-	Bytes  int64
+	Bytes  int64 // When supplied to Load, the cached object must have this size.
 }
 
 // Store provides verified local images and protects assets in active

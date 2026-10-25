@@ -93,6 +93,23 @@ func TestFileStoreRejectsBadDigestAndCorruptedContent(t *testing.T) {
 	}
 }
 
+func TestFileStoreChecksExpectedAssetSizeWhenLoading(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := pngBytes(t, color.RGBA{B: 180, A: 255})
+	asset, err := store.Put(context.Background(), bytes.NewReader(data), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	asset.Bytes--
+	if _, err := store.Load(context.Background(), asset); err == nil || !strings.Contains(err.Error(), "size") {
+		t.Fatalf("Load() error = %v, want cached asset size mismatch", err)
+	}
+}
+
 func TestFileStoreRejectsCorruptImageBeforePublishing(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewFileStore(dir, 1<<20)
