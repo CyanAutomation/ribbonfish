@@ -47,13 +47,17 @@ sync_url=$(env_value RIBBONFISH_SYNC_URL)
 device_id=$(env_value RIBBONFISH_DEVICE_ID)
 
 case "$version" in
+	latest)
+		;;
 	sha-*) image_commit=${version#sha-} ;;
-	*) fail "RIBBONFISH_VERSION='$version' is not pinned; use sha-<40-character commit>" ;;
+	*) fail "RIBBONFISH_VERSION='$version' must be 'latest' or a pinned sha-<40-character commit>" ;;
 esac
-[ "${#image_commit}" -eq 40 ] || fail "RIBBONFISH_VERSION='$version' must contain a 40-character commit SHA"
-case "$image_commit" in
-	*[!0-9a-f]*) fail "RIBBONFISH_VERSION='$version' must use lowercase hexadecimal" ;;
-esac
+if [ "$version" != latest ]; then
+	[ "${#image_commit}" -eq 40 ] || fail "RIBBONFISH_VERSION='$version' must contain a 40-character commit SHA"
+	case "$image_commit" in
+		*[!0-9a-f]*) fail "RIBBONFISH_VERSION='$version' must use lowercase hexadecimal" ;;
+	esac
+fi
 case "$profile" in
 	pi3a-plus|pi3b|pi4) ;;
 	*) fail "unsupported RIBBONFISH_PROFILE='$profile'" ;;
@@ -81,8 +85,10 @@ fi
 
 container_id=$(docker compose --project-directory "$deployment_dir" -p ribbonfish ps -q agent)
 [ -n "$container_id" ] || fail 'agent container is not running; start it with docker compose up -d'
-runtime=$(docker inspect --format '{{.Config.Image}}|{{.State.Status}}|{{.HostConfig.NetworkMode}}' "$container_id") || fail 'could not inspect agent container'
-expected_runtime="$expected_image|running|$network_mode"
+image_id=$(docker image inspect --format '{{.Id}}' "$expected_image") || fail "image '$expected_image' is not present locally"
+[ -n "$image_id" ] || fail "could not resolve local image ID for '$expected_image'"
+runtime=$(docker inspect --format '{{.Config.Image}}|{{.Image}}|{{.State.Status}}|{{.HostConfig.NetworkMode}}' "$container_id") || fail 'could not inspect agent container'
+expected_runtime="$expected_image|$image_id|running|$network_mode"
 [ "$runtime" = "$expected_runtime" ] || fail "container state '$runtime' does not match '$expected_runtime'"
 
 logs=$(docker logs --tail 200 "$container_id" 2>&1) || fail 'could not read agent logs'

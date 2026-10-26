@@ -40,13 +40,17 @@ case "\$1" in
     done
     case "\$command \${1:-}" in
       'config --quiet') exit 0 ;;
-      'config --images') printf '%s\\n' 'cyanautomation/ribbonfish:$version' ;;
+      'config --images') printf '%s\\n' "\${FAKE_DOCKER_IMAGE:-cyanautomation/ribbonfish:$version}" ;;
       'ps -q') [ "\${2:-}" = agent ] && printf '%s\\n' test-container ;;
       *) echo "unexpected docker compose call: \$*" >&2; exit 2 ;;
     esac
     ;;
+  image)
+    [ "\${2:-}" = inspect ] || { echo "unexpected docker image call: \$*" >&2; exit 2; }
+    printf '%s\\n' "\${FAKE_DOCKER_IMAGE_ID:-sha256:test-image-id}"
+    ;;
   inspect)
-    printf '%s\\n' 'cyanautomation/ribbonfish:$version|running|none'
+    printf '%s\\n' "\${FAKE_DOCKER_IMAGE:-cyanautomation/ribbonfish:$version}|\${FAKE_DOCKER_RUNTIME_IMAGE_ID:-sha256:test-image-id}|running|none"
     ;;
   logs)
     printf '%s\\n' 'level=INFO msg="agent configuration loaded" displays=1 playlists=1'
@@ -58,6 +62,31 @@ EOF
 chmod +x "$temp_dir/bin/docker"
 PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" --preflight
 PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh"
+
+awk -F= '$1 == "RIBBONFISH_VERSION" { $0 = "RIBBONFISH_VERSION=latest" } { print }' \
+	"$target_dir/.env" >"$target_dir/.env.tmp"
+mv "$target_dir/.env.tmp" "$target_dir/.env"
+FAKE_DOCKER_IMAGE=cyanautomation/ribbonfish:latest PATH="$temp_dir/bin:$PATH" \
+	sh "$script_dir/verify-deployment.sh" --preflight
+FAKE_DOCKER_IMAGE=cyanautomation/ribbonfish:latest PATH="$temp_dir/bin:$PATH" \
+	sh "$script_dir/verify-deployment.sh"
+if FAKE_DOCKER_IMAGE=cyanautomation/ribbonfish:latest FAKE_DOCKER_RUNTIME_IMAGE_ID=sha256:stale-image \
+	PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" >/dev/null 2>&1; then
+	echo 'stale container image unexpectedly passed verification' >&2
+	exit 1
+fi
+
+awk -F= '$1 == "RIBBONFISH_VERSION" { $0 = "RIBBONFISH_VERSION=nightly" } { print }' \
+	"$target_dir/.env" >"$target_dir/.env.tmp"
+mv "$target_dir/.env.tmp" "$target_dir/.env"
+if PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" --preflight >/dev/null 2>&1; then
+	echo 'unsupported mutable image tag unexpectedly passed verification' >&2
+	exit 1
+fi
+
+awk -F= -v version="$version" '$1 == "RIBBONFISH_VERSION" { $0 = "RIBBONFISH_VERSION=" version } { print }' \
+	"$target_dir/.env" >"$target_dir/.env.tmp"
+mv "$target_dir/.env.tmp" "$target_dir/.env"
 
 printf '%s\n' 'RIBBONFISH_SYNC_URL=https://sync.example.workers.dev' >> "$target_dir/.env"
 sh "$script_dir/prepare-deployment.sh" \
