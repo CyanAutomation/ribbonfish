@@ -22,7 +22,7 @@ Pi 4 dual-display acceptance remain open.
 - `prepare-deployment.sh`: detects the Pi profile and DRM group, pins the
   published image, and stages the complete deployment kit under
   `~/containers/ribbonfish`
-- `verify-deployment.sh`: checks configuration before start and confirms the
+- `verify-deployment.sh`: validates the configured image and confirms the
   running container has displayed a frame
 - `assets/` and `hardware-config.*.json`: source examples; the container
   profiles and starter images are bundled from `agent/defaults/`
@@ -64,9 +64,12 @@ copy config or image assets. Use `--profile`, `--version`, `--drm-device`, or
 If `~/containers/ribbonfish` exists but is not writable, the script stops and
 reports that directly. Make the deployment directory user-owned once, then
 rerun the script. `verify-deployment.sh --preflight` checks the device and
-GID, sync/network consistency, pinned image, and resolved Compose
-configuration. After `up -d`, the full verifier also checks the running image,
-network mode, loaded display config, and successful frame output. Use
+GID, sync/network consistency, configured image tag (`latest` or an immutable
+SHA tag), and resolved Compose configuration. The setup helper continues to
+generate immutable SHA pins by default. After `up -d`, the full verifier also
+checks that the running container uses the image ID currently resolved by its
+configured tag, along with network mode, loaded display config, and successful
+frame output. Use
 `docker compose -p ribbonfish run --rm agent -list-displays` to inspect
 connector state:
 
