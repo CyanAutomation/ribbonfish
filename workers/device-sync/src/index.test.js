@@ -49,8 +49,12 @@ class FakeDatabase {
           const value = database.playlists.get(`${values[0]}:${values[1]}`);
           return value ? { playlist_id: value.id, revision: value.revision, rotation_interval: value.rotation_interval } : null;
         }
-        if (sql.includes("FROM playlist_assets WHERE sha256")) {
-          for (const value of database.playlists.values()) {
+        if (sql.includes("FROM playlist_assets")) {
+          const playlists = sql.includes("JOIN active_playlist")
+            ? [...database.playlists.values()].filter((value) =>
+              value.id === database.activePlaylist?.playlist_id && value.revision === database.activePlaylist?.revision)
+            : database.playlists.values();
+          for (const value of playlists) {
             const asset = value.assets.find((item) => item.sha256 === values[0]);
             if (asset) return { size: asset.size };
           }
@@ -103,19 +107,18 @@ function testEnvironment({ playlistValue = playlist, assetBytes = new Uint8Array
   db.playlists = new Map(playlistValue ? [[`${playlistValue.id}:${playlistValue.revision}`, playlistValue]] : []);
   db.activePlaylist = playlistValue ? { playlist_id: playlistValue.id, revision: playlistValue.revision } : null;
   const r2Gets = [];
+  const assetObjects = new Map([[digest, assetBytes]]);
   const env = {
     DB: db,
     ASSETS: {
       async get(key) {
         r2Gets.push(key);
-        if (key === `assets/${digest}`) {
-          return { size: assetBytes.byteLength, body: new Response(assetBytes).body };
-        }
-        return null;
+        const bytes = assetObjects.get(key.slice("assets/".length));
+        return bytes ? { size: bytes.byteLength, body: new Response(bytes).body } : null;
       },
     },
   };
-  return { env, db, r2Gets };
+  return { env, db, r2Gets, assetObjects };
 }
 
 async function authorize(db, presented = token) {
@@ -173,14 +176,22 @@ test("unauthorized device cannot read its playlist or cause an R2 read", async (
   assert.deepEqual(r2Gets, []);
 });
 
-test("asset endpoint only serves hashes in the managed playlist catalog", async () => {
-  const { env, db, r2Gets } = testEnvironment();
+test("asset endpoint only serves hashes in the active playlist", async () => {
+  const { env, db, r2Gets, assetObjects } = testEnvironment();
   await authorize(db);
+  const inactiveDigest = "b".repeat(64);
+  db.playlists.set("retired:revision-0", {
+    ...playlist,
+    id: "retired",
+    revision: "revision-0",
+    assets: [{ sha256: inactiveDigest, size: 4 }],
+  });
+  assetObjects.set(inactiveDigest, new Uint8Array([4, 3, 2, 1]));
   const request = (hash) => new Request(`https://worker.test/v2/assets/${hash}`, {
     headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office" },
   });
   const denied = await fetchHandler(request("b".repeat(64)), env);
-  assert.equal(denied.status, 403);
+  assert.equal(denied.status, 403, "inactive playlist assets must be denied");
   assert.deepEqual(r2Gets, []);
 
   const allowed = await fetchHandler(request(digest), env);

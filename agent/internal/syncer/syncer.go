@@ -288,10 +288,11 @@ func validatePlaylistSnapshot(snapshot PlaylistSnapshot, hardware config.Config)
 	if !validID(snapshot.ID) {
 		return fmt.Errorf("invalid playlist id %q", snapshot.ID)
 	}
-	if _, err := time.ParseDuration(snapshot.RotationInterval); err != nil {
+	interval, err := time.ParseDuration(snapshot.RotationInterval)
+	if err != nil {
 		return fmt.Errorf("playlist %q has invalid rotation interval: %w", snapshot.ID, err)
 	}
-	if interval, _ := time.ParseDuration(snapshot.RotationInterval); interval <= 0 {
+	if interval <= 0 {
 		return fmt.Errorf("playlist %q rotation interval must be positive", snapshot.ID)
 	}
 	if len(snapshot.Assets) == 0 || len(snapshot.Assets) > 256 {

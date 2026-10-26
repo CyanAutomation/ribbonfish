@@ -44,9 +44,11 @@ export async function fetchHandler(request, env) {
       const deviceID = request.headers.get("X-Ribbonfish-Device-ID") ?? "";
       await authenticate(request, env, deviceID);
       const assigned = await env.DB.prepare(
-        "SELECT size FROM playlist_assets WHERE sha256 = ? LIMIT 1",
+        `SELECT pa.size FROM playlist_assets pa
+         JOIN active_playlist ap ON ap.playlist_id = pa.playlist_id AND ap.revision = pa.revision
+         WHERE pa.sha256 = ? AND ap.singleton = 1 LIMIT 1`,
       ).bind(digest).first();
-      if (!assigned) throw new HTTPError(403, "asset is not assigned to a managed playlist");
+      if (!assigned) throw new HTTPError(403, "asset is not assigned to the active playlist");
       const object = await env.ASSETS.get(`assets/${digest}`);
       if (!object) throw new HTTPError(404, "asset not found");
       if (object.size !== assigned.size || object.size > MAX_ASSET_BYTES) {
