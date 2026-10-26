@@ -219,10 +219,11 @@ func migrateLegacyManifest(data []byte, saved legacySavedSnapshot, hardware conf
 		if _, exists := playlists[display.PlaylistID]; !exists {
 			return PlaylistSnapshot{}, fmt.Errorf("legacy display %q references unknown playlist %q", display.ID, display.PlaylistID)
 		}
-		if _, err := time.ParseDuration(display.RotationInterval); err != nil {
+		interval, err := time.ParseDuration(display.RotationInterval)
+		if err != nil {
 			return PlaylistSnapshot{}, fmt.Errorf("legacy display %q has invalid rotation interval: %w", display.ID, err)
 		}
-		if interval, _ := time.ParseDuration(display.RotationInterval); interval <= 0 {
+		if interval <= 0 {
 			return PlaylistSnapshot{}, fmt.Errorf("legacy display %q rotation interval must be positive", display.ID)
 		}
 		displays[display.ID] = display
