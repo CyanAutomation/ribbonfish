@@ -182,7 +182,12 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 	return errors.Join(runErr, outputErr, cacheErr)
 }
 
-func runSyncLoop(ctx context.Context, synchronizer syncer.Synchronizer, hardware config.Config, playback *agent.Agent, snapshotPath string, activeSnapshot *syncer.Update, logger interface {
+type syncPlayback interface {
+	CurrentConfig() config.Config
+	ApplyConfig(context.Context, config.Config) error
+}
+
+func runSyncLoop(ctx context.Context, synchronizer syncer.Synchronizer, hardware config.Config, playback syncPlayback, snapshotPath string, activeSnapshot *syncer.Update, logger interface {
 	Info(string, ...any)
 	Warn(string, ...any)
 }) error {
@@ -195,6 +200,7 @@ func runSyncLoop(ctx context.Context, synchronizer syncer.Synchronizer, hardware
 		}
 	}
 	retryDelay := 5 * time.Second
+	syncHealthy := false
 	for ctx.Err() == nil {
 		delay := interval
 		update, err := synchronizer.Synchronize(ctx, hardware, playback.CurrentConfig())
@@ -202,6 +208,7 @@ func runSyncLoop(ctx context.Context, synchronizer syncer.Synchronizer, hardware
 			if ctx.Err() != nil {
 				return nil
 			}
+			syncHealthy = false
 			logger.Warn("remote synchronization failed; keeping last good content", "error", err)
 			delay = retryDelay
 			if retryDelay < 5*time.Minute/2 {
@@ -210,6 +217,7 @@ func runSyncLoop(ctx context.Context, synchronizer syncer.Synchronizer, hardware
 				retryDelay = 5 * time.Minute
 			}
 		} else if update.Changed {
+			syncHealthy = false
 			previous := activeSnapshot
 			previousConfig := playback.CurrentConfig()
 			if err := syncer.SaveSnapshot(snapshotPath, update); err != nil {
@@ -229,10 +237,15 @@ func runSyncLoop(ctx context.Context, synchronizer syncer.Synchronizer, hardware
 			} else {
 				activeSnapshot = &update
 				logger.Info("remote content snapshot activated", "revision", update.Snapshot.Revision)
+				syncHealthy = true
 				retryDelay = 5 * time.Second
 			}
 		} else {
 			retryDelay = 5 * time.Second
+			if !syncHealthy {
+				logger.Info("remote synchronization succeeded", "etag", update.ETag, "changed", update.Changed)
+			}
+			syncHealthy = true
 		}
 		timer := time.NewTimer(delay)
 		select {
