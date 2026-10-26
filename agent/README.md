@@ -87,3 +87,7 @@ state volume with mode 0600. Single-display 1080p KMS mode-setting and frame upd
 verified over SSH on a Pi 3 Model A Plus, and the user confirmed the sample
 slides were visible. Pi 3B and Pi 4 dual-display behavior still need physical
 acceptance. Emulated tests and the Agentlab simulator do not prove KMS scanout.
+
+The agent logs the first successful unchanged sync poll after startup or a
+sync failure with its ETag. Further unchanged polls stay quiet until the next
+failure; a changed, verified playlist is logged when it is activated.
