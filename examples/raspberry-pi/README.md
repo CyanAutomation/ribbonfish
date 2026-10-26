@@ -22,8 +22,8 @@ Pi 4 dual-display acceptance remain open.
 - `prepare-deployment.sh`: detects the Pi profile and DRM group, pins the
   published image, and stages the complete deployment kit under
   `~/containers/ribbonfish`
-- `verify-deployment.sh`: validates the configured image and confirms the
-  running container has displayed a frame
+- `verify-deployment.sh`: validates the configured image, checks connected
+  DRM targets, and confirms the running container has displayed a frame
 - `assets/` and `hardware-config.*.json`: source examples; the container
   profiles and starter images are bundled from `agent/defaults/`
 
@@ -57,8 +57,8 @@ scripts, `.gitignore`, and this README in the deployment directory. It does not
 copy config or image assets. Use `--profile`, `--version`, `--drm-device`, or
 `--drm-gid` to override detection. The Pi profile mapping is:
 
-- Pi 4 defaults to profile `pi4`, `/dev/dri/card1`, and GID `44` for Agentlab.
-- The tested Pi 3 A+ uses profile `pi3a-plus`, `/dev/dri/card0`, and GID `44`.
+- Pi 4 uses profile `pi4`; inspect the host to select its card and group.
+- Ribbonfish is a Pi 3 A+ using profile `pi3a-plus`, `/dev/dri/card0`, and GID `44`.
 - For Pi 3B, select `pi3b` and inspect the actual card and group first.
 
 If `~/containers/ribbonfish` exists but is not writable, the script stops and
@@ -68,12 +68,14 @@ GID, sync/network consistency, configured image tag (`latest` or an immutable
 SHA tag), and resolved Compose configuration. The setup helper continues to
 generate immutable SHA pins by default. After `up -d`, the full verifier also
 checks that the running container uses the image ID currently resolved by its
-configured tag, along with network mode, loaded display config, and successful
-frame output. Use
-`docker compose -p ribbonfish run --rm agent -list-displays` to inspect
-connector state:
+configured tag, checks connected DRM targets through sysfs without opening the
+device or changing scanout, and confirms a successful frame update. Use
+these commands to inspect connector metadata, validate configured targets in
+the running image, or follow the agent logs:
 
 ```sh
+docker compose -p ribbonfish run --rm agent -list-displays
+docker compose -p ribbonfish exec -T agent /ribbonfish -check-displays
 docker compose -p ribbonfish logs -f agent
 ```
 
@@ -154,18 +156,19 @@ docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml up --build
 docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml logs -f agent
 ```
 
-The simulator uses the bundled `simulator` profile, does not open DRM devices,
-and writes PNG frames into its persistent state volume. Copy frames out with:
+The simulator defaults to `simulator-pi3a-plus`, which matches Ribbonfish's
+single `display-main` at 1920x1080. It does not open DRM devices and writes PNG
+frames into its persistent state volume. Copy the frame out with:
 
 ```sh
-docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml cp agent:/var/lib/ribbonfish/frames/display-left.png ./display-left.png
-docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml cp agent:/var/lib/ribbonfish/frames/display-right.png ./display-right.png
+docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml cp agent:/var/lib/ribbonfish/frames/display-main.png ./display-main.png
 ```
 
 For a one-display Pi 3B simulation, set
-`RIBBONFISH_SIMULATOR_PROFILE=simulator-pi3b`; `simulator-pi4` writes two
-outputs. The simulator's size comes from its configured mode; it does not
-query monitor EDID or emulate DRM, memory pressure, or a specific Pi model.
+`RIBBONFISH_SIMULATOR_PROFILE=simulator-pi3b`. Set it to `simulator-pi4` for
+the two-display Pi 4 profile. The simulator uses configured dimensions; it
+does not query monitor EDID or emulate DRM, memory pressure, or a specific Pi
+model.
 
 The published-image simulator can run without a source checkout:
 
@@ -202,18 +205,23 @@ Plus Rev 1.0 with Debian 13.7 ARM64, kernel `6.18.50+rpt-rpi-v8`, and Docker
 Engine 26.1.5. It verified `/dev/dri/card0` as `root:video` (GID 44),
 HDMI-A-1 at 1920x1080@60, non-root read-only operation with capabilities
 dropped and no network, repeated framebuffer updates, and visible sample
-slides. The agent used about 26 MiB RSS on the 512 MiB Pi. This did not measure
-visual quality or scaling. Docker memory limits were unavailable on that
-kernel, so do not rely on `docker stats` for memory accounting there. Agentlab
-has no connected HDMI monitor.
+slides. The HDMI display is currently connected and outputting as expected.
+The agent used about 26 MiB RSS on the 512 MiB Pi. This did not measure visual
+quality or scaling. Docker memory limits were unavailable on that kernel, so
+do not rely on `docker stats` for memory accounting there.
 
-`-list-displays` reports sysfs metadata; it does not test DRM permissions,
-master acquisition, mode-setting, or pixels. A Compose check, simulator PNG,
-or QEMU smoke test is not hardware acceptance. Pi 3B scanout, Pi 4 simultaneous
-dual-HDMI scanout, HDMI hotplug recovery, and cross-kernel DRM ownership still
-need direct testing. A failed page flip currently faults that surface until
-restart. Connector names, card numbering, available modes, and DRM master
-behavior vary by host.
+`-list-displays` reports sysfs metadata. `-check-displays` additionally
+compares the configured card, connector, connection status, and requested
+resolution against sysfs. Sysfs mode names do not expose refresh rates, so the
+check cannot confirm an exact `@60` timing. It does not open DRM, test
+permissions, acquire DRM master, set a mode, or verify pixels.
+`verify-deployment.sh` runs this read-only check against the active container
+before confirming recent frame updates. It complements the confirmed visible
+output; it does not replace checking pixels during future hardware changes.
+Pi 3B scanout, Pi 4 simultaneous dual-HDMI scanout, HDMI hotplug recovery, and
+cross-kernel DRM ownership still need direct testing. A failed page flip
+currently faults that surface until restart. Connector names, card numbering,
+available modes, and DRM master behavior vary by host.
 
 For Docker-only deployments without the Compose plugin, use the bundled profile
 and a single persistent state volume. For example, after pulling the image and

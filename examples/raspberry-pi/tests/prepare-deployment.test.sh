@@ -35,6 +35,7 @@ case "\$1" in
         --project-directory|-p) shift 2 ;;
         config) command=config; shift; break ;;
         ps) command=ps; shift; break ;;
+        exec) command=exec; shift; break ;;
         *) echo "unexpected docker compose option: \$1" >&2; exit 2 ;;
       esac
     done
@@ -42,6 +43,15 @@ case "\$1" in
       'config --quiet') exit 0 ;;
       'config --images') printf '%s\\n' "\${FAKE_DOCKER_IMAGE:-cyanautomation/ribbonfish:$version}" ;;
       'ps -q') [ "\${2:-}" = agent ] && printf '%s\\n' test-container ;;
+      'exec -T')
+        [ "\${2:-}" = agent ] && [ "\${3:-}" = /ribbonfish ] && [ "\${4:-}" = -check-displays ] || { echo "unexpected docker compose exec command: \$*" >&2; exit 2; }
+        if [ "\${FAKE_DOCKER_DISPLAY_CHECK_FAIL:-0}" = 1 ]; then
+          printf '%s\\n' 'DRM connector HDMI-A-1 is disconnected' >&2
+          exit 1
+        fi
+        printf '%s\\n' 'DRM display preflight passed: device=/dev/dri/card0 displays=1'
+        printf '%s\\n' 'display_id=display-main connector=HDMI-A-1 status=connected requested_mode=preferred advertised_modes=32'
+        ;;
       *) echo "unexpected docker compose call: \$*" >&2; exit 2 ;;
     esac
     ;;
@@ -62,6 +72,10 @@ EOF
 chmod +x "$temp_dir/bin/docker"
 PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" --preflight
 PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh"
+if FAKE_DOCKER_DISPLAY_CHECK_FAIL=1 PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" >/dev/null 2>&1; then
+	echo 'disconnected DRM connector unexpectedly passed deployment verification' >&2
+	exit 1
+fi
 
 awk -F= '$1 == "RIBBONFISH_VERSION" { $0 = "RIBBONFISH_VERSION=latest" } { print }' \
 	"$target_dir/.env" >"$target_dir/.env.tmp"

@@ -6,7 +6,7 @@ services:
   agent:
     image: cyanautomation/ribbonfish:${RIBBONFISH_VERSION:-latest}
     environment:
-      RIBBONFISH_PROFILE: simulator
+      RIBBONFISH_PROFILE: ${RIBBONFISH_SIMULATOR_PROFILE:-simulator-pi3a-plus}
       RIBBONFISH_CACHE_DIR: /var/lib/ribbonfish/cache
     user: "65532:65532"
     init: true
