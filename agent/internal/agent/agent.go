@@ -116,11 +116,9 @@ func prepareState(ctx context.Context, cfg config.Config, imageCache cache.Store
 	}
 	if pruneBefore {
 		expected := make(map[string]struct{})
-		for _, playlistConfig := range cfg.Playlists {
-			for _, asset := range playlistConfig.Assets {
-				if asset.SHA256 != "" {
-					expected[strings.ToLower(asset.SHA256)] = struct{}{}
-				}
+		for _, asset := range cfg.Playlist.Assets {
+			if asset.SHA256 != "" {
+				expected[strings.ToLower(asset.SHA256)] = struct{}{}
 			}
 		}
 		if len(expected) > 0 {
@@ -131,57 +129,55 @@ func prepareState(ctx context.Context, cfg config.Config, imageCache cache.Store
 	}
 
 	normalized := cloneConfig(cfg)
-	playlistEntries := make(map[string][]playlist.Entry, len(cfg.Playlists))
+	var playlistEntries []playlist.Entry
 	retained := make(map[string]struct{})
-	for playlistIndex, playlistConfig := range cfg.Playlists {
-		for assetIndex, source := range playlistConfig.Assets {
-			if ctx.Err() != nil {
-				break
+	for assetIndex, source := range cfg.Playlist.Assets {
+		if ctx.Err() != nil {
+			break
+		}
+		if requireCachedAssets {
+			if source.SHA256 == "" {
+				return nil, fmt.Errorf("snapshot asset %q has no SHA-256 digest", source.Path)
 			}
-			if requireCachedAssets {
-				if source.SHA256 == "" {
-					return nil, fmt.Errorf("snapshot asset %q has no SHA-256 digest", source.Path)
-				}
-				digest := strings.ToLower(source.SHA256)
-				if _, err := imageCache.Load(ctx, cache.Asset{SHA256: digest}); err != nil {
-					return nil, fmt.Errorf("snapshot asset %s is unavailable or invalid: %w", digest, err)
-				}
-				normalized.Playlists[playlistIndex].Assets[assetIndex].SHA256 = digest
-				playlistEntries[playlistConfig.ID] = append(playlistEntries[playlistConfig.ID], playlist.Entry{SHA256: digest, Path: source.Path})
+			digest := strings.ToLower(source.SHA256)
+			if _, err := imageCache.Load(ctx, cache.Asset{SHA256: digest}); err != nil {
+				return nil, fmt.Errorf("snapshot asset %s is unavailable or invalid: %w", digest, err)
+			}
+			normalized.Playlist.Assets[assetIndex].SHA256 = digest
+			playlistEntries = append(playlistEntries, playlist.Entry{SHA256: digest, Path: source.Path})
+			retained[digest] = struct{}{}
+			continue
+		}
+		if source.SHA256 != "" {
+			digest := strings.ToLower(source.SHA256)
+			if _, err := imageCache.Load(ctx, cache.Asset{SHA256: digest}); err == nil {
+				normalized.Playlist.Assets[assetIndex].SHA256 = digest
+				playlistEntries = append(playlistEntries, playlist.Entry{SHA256: digest, Path: source.Path})
 				retained[digest] = struct{}{}
 				continue
 			}
-			if source.SHA256 != "" {
-				digest := strings.ToLower(source.SHA256)
-				if _, err := imageCache.Load(ctx, cache.Asset{SHA256: digest}); err == nil {
-					normalized.Playlists[playlistIndex].Assets[assetIndex].SHA256 = digest
-					playlistEntries[playlistConfig.ID] = append(playlistEntries[playlistConfig.ID], playlist.Entry{SHA256: digest, Path: source.Path})
-					retained[digest] = struct{}{}
-					continue
-				}
-			}
-
-			file, err := os.Open(source.Path)
-			if err != nil {
-				logger.Warn("playlist image is unavailable; skipping asset", "playlist_id", playlistConfig.ID, "path", source.Path, "error", err)
-				continue
-			}
-			asset, putErr := imageCache.Put(ctx, file, source.SHA256)
-			closeErr := file.Close()
-			if putErr != nil {
-				if ctx.Err() != nil {
-					break
-				}
-				logger.Warn("playlist image could not be cached; skipping asset", "playlist_id", playlistConfig.ID, "path", source.Path, "error", putErr)
-				continue
-			}
-			if closeErr != nil {
-				logger.Warn("could not close playlist source image", "playlist_id", playlistConfig.ID, "path", source.Path, "error", closeErr)
-			}
-			normalized.Playlists[playlistIndex].Assets[assetIndex].SHA256 = asset.SHA256
-			playlistEntries[playlistConfig.ID] = append(playlistEntries[playlistConfig.ID], playlist.Entry{SHA256: asset.SHA256, Path: source.Path})
-			retained[asset.SHA256] = struct{}{}
 		}
+
+		file, err := os.Open(source.Path)
+		if err != nil {
+			logger.Warn("playlist image is unavailable; skipping asset", "playlist_id", cfg.Playlist.ID, "path", source.Path, "error", err)
+			continue
+		}
+		asset, putErr := imageCache.Put(ctx, file, source.SHA256)
+		closeErr := file.Close()
+		if putErr != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			logger.Warn("playlist image could not be cached; skipping asset", "playlist_id", cfg.Playlist.ID, "path", source.Path, "error", putErr)
+			continue
+		}
+		if closeErr != nil {
+			logger.Warn("could not close playlist source image", "playlist_id", cfg.Playlist.ID, "path", source.Path, "error", closeErr)
+		}
+		normalized.Playlist.Assets[assetIndex].SHA256 = asset.SHA256
+		playlistEntries = append(playlistEntries, playlist.Entry{SHA256: asset.SHA256, Path: source.Path})
+		retained[asset.SHA256] = struct{}{}
 	}
 	if pruneBefore && ctx.Err() == nil {
 		if err := imageCache.Prune(ctx, sortedKeys(retained)); err != nil {
@@ -191,22 +187,20 @@ func prepareState(ctx context.Context, cfg config.Config, imageCache cache.Store
 
 	schedules := make(map[string]playlist.Schedule)
 	var scheduleList []playlist.Schedule
+	interval, err := cfg.Playlist.Interval()
+	if err != nil {
+		return nil, err
+	}
 	for _, displayConfig := range cfg.Displays {
-		entries := playlistEntries[displayConfig.PlaylistID]
-		if len(entries) == 0 {
-			logger.Warn("display has no available playlist images; existing frame is preserved", "display_id", displayConfig.ID, "playlist_id", displayConfig.PlaylistID)
+		if len(playlistEntries) == 0 {
+			logger.Warn("display has no available playlist images; existing frame is preserved", "display_id", displayConfig.ID, "playlist_id", cfg.Playlist.ID)
 			continue
 		}
-		interval, err := displayConfig.Interval()
-		if err != nil {
-			return nil, err
-		}
-		schedule := playlist.Schedule{DisplayID: displayConfig.ID, Interval: interval, Entries: entries, Anchor: time.Unix(0, 0).UTC()}
+		schedule := playlist.Schedule{DisplayID: displayConfig.ID, Interval: interval, Entries: playlistEntries, Anchor: time.Unix(0, 0).UTC()}
 		schedules[displayConfig.ID] = schedule
 		scheduleList = append(scheduleList, schedule)
 	}
 	var scheduler playlist.Scheduler
-	var err error
 	if len(scheduleList) == 0 {
 		logger.Warn("no displays have playable playlist images; waiting for shutdown")
 	} else {
@@ -271,8 +265,8 @@ func (a *Agent) CurrentConfig() config.Config {
 	return cloneConfig(a.state.config)
 }
 
-// ApplyConfig switches playlists after all referenced content is available in
-// the cache. The output and hardware mapping cannot be changed by a remote
+// ApplyConfig switches the active playlist after all its content is available
+// in the cache. The output and hardware mapping cannot be changed by a remote
 // snapshot. Old cache entries remain pinned until playback leaves the prior
 // snapshot, then normal cache pruning removes them.
 func (a *Agent) ApplyConfig(ctx context.Context, cfg config.Config) error {
@@ -510,10 +504,7 @@ func sameHardware(left, right config.Config) bool {
 
 func cloneConfig(source config.Config) config.Config {
 	clone := source
-	clone.Playlists = append([]config.PlaylistConfig(nil), source.Playlists...)
-	for i := range clone.Playlists {
-		clone.Playlists[i].Assets = append([]config.AssetConfig(nil), source.Playlists[i].Assets...)
-	}
+	clone.Playlist.Assets = append([]config.AssetConfig(nil), source.Playlist.Assets...)
 	clone.Displays = append([]config.DisplayConfig(nil), source.Displays...)
 	return clone
 }

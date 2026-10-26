@@ -31,7 +31,7 @@ import (
 
 func TestRunSkipsStartupWhenContextIsAlreadyCanceled(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
-	body := `{"version":1,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"directory":"frames"},"playlists":[{"id":"p","assets":[{"path":"missing.png"}]}],"displays":[{"id":"left","playlist_id":"p","rotation_interval":"1s"}]}`
+	body := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"directory":"frames"},"playlist":{"id":"p","rotation_interval":"1s","assets":[{"path":"missing.png"}]},"displays":[{"id":"left"}]}`
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestRunStopsActivePlaybackOnCancellation(t *testing.T) {
 	dir := t.TempDir()
 	writeMainPNG(t, filepath.Join(dir, "asset.png"), color.RGBA{G: 180, A: 255})
 	configPath := filepath.Join(dir, "config.json")
-	body := `{"version":1,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"directory":"frames"},"playlists":[{"id":"p","assets":[{"path":"asset.png"}]}],"displays":[{"id":"left","playlist_id":"p","rotation_interval":"1h"}]}`
+	body := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"directory":"frames"},"playlist":{"id":"p","rotation_interval":"1h","assets":[{"path":"asset.png"}]},"displays":[{"id":"left"}]}`
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestRunUsesConfiguredSimulatorMode(t *testing.T) {
 	dir := t.TempDir()
 	writeMainPNG(t, filepath.Join(dir, "asset.png"), color.RGBA{G: 180, A: 255})
 	configPath := filepath.Join(dir, "config.json")
-	body := `{"version":1,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"backend":"simulator","directory":"frames","fit":"contain"},"playlists":[{"id":"p","assets":[{"path":"asset.png"}]}],"displays":[{"id":"left","playlist_id":"p","mode":"4x2@60","rotation_interval":"1h"}]}`
+	body := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"backend":"simulator","directory":"frames","fit":"contain"},"playlist":{"id":"p","rotation_interval":"1h","assets":[{"path":"asset.png"}]},"displays":[{"id":"left","mode":"4x2@60"}]}`
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -158,12 +158,12 @@ func TestRunSyncLoopPersistsAndActivatesVerifiedContent(t *testing.T) {
 	writeMainPNG(t, oldPath, color.RGBA{R: 170, A: 255})
 	writeMainPNG(t, newPath, color.RGBA{G: 190, A: 255})
 	cfg := config.Config{
-		Version:   1,
-		LogLevel:  "info",
-		Cache:     config.CacheConfig{Directory: filepath.Join(dir, "cache"), MaxBytes: 1 << 20},
-		Output:    config.OutputConfig{Backend: "simulator", Directory: filepath.Join(dir, "frames"), Fit: "contain"},
-		Playlists: []config.PlaylistConfig{{ID: "welcome", Assets: []config.AssetConfig{{Path: oldPath}}}},
-		Displays:  []config.DisplayConfig{{ID: "screen-main", PlaylistID: "welcome", Mode: "4x4", RotationInterval: "1h"}},
+		Version:  2,
+		LogLevel: "info",
+		Cache:    config.CacheConfig{Directory: filepath.Join(dir, "cache"), MaxBytes: 1 << 20},
+		Output:   config.OutputConfig{Backend: "simulator", Directory: filepath.Join(dir, "frames"), Fit: "contain"},
+		Playlist: config.PlaylistConfig{ID: "welcome", RotationInterval: "1h", Assets: []config.AssetConfig{{Path: oldPath}}},
+		Displays: []config.DisplayConfig{{ID: "screen-main", Mode: "4x4"}},
 	}
 	store, err := cache.NewFileStore(cfg.Cache.Directory, cfg.Cache.MaxBytes)
 	if err != nil {
@@ -197,22 +197,23 @@ func TestRunSyncLoopPersistsAndActivatesVerifiedContent(t *testing.T) {
 		t.Fatalf("cache digest = %q, want calculated digest", asset.SHA256)
 	}
 	candidate := cfg
-	candidate.Playlists = []config.PlaylistConfig{{ID: "welcome", Assets: []config.AssetConfig{{Path: asset.Path, SHA256: asset.SHA256}}}}
-	manifest := syncer.Manifest{
-		Version:   1,
-		Revision:  "remote-3",
-		Playlists: []syncer.ManifestPlaylist{{ID: "welcome", Assets: []syncer.ManifestAsset{{SHA256: asset.SHA256, Size: asset.Bytes}}}},
-		Displays:  []syncer.ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "1h"}},
+	candidate.Playlist = config.PlaylistConfig{ID: "welcome", RotationInterval: "1h", Assets: []config.AssetConfig{{Path: asset.Path, SHA256: asset.SHA256}}}
+	snapshot := syncer.PlaylistSnapshot{
+		Version:          2,
+		Revision:         "remote-3",
+		ID:               "welcome",
+		RotationInterval: "1h",
+		Assets:           []syncer.PlaylistAsset{{SHA256: asset.SHA256, Size: asset.Bytes}},
 	}
 	snapshotPath := filepath.Join(cfg.Cache.Directory, "last-good.json")
-	remote := &oneShotSynchronizer{update: syncer.Update{Config: candidate, Manifest: manifest, ETag: `"remote-3"`, Changed: true}}
+	remote := &oneShotSynchronizer{update: syncer.Update{Config: candidate, Snapshot: snapshot, ETag: `"remote-3"`, Changed: true}}
 	syncDone := make(chan error, 1)
 	go func() {
 		syncDone <- runSyncLoop(ctx, remote, cfg, playback, snapshotPath, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	}()
 
 	deadline := time.After(3 * time.Second)
-	for playback.CurrentConfig().Playlists[0].Assets[0].SHA256 != asset.SHA256 {
+	for playback.CurrentConfig().Playlist.Assets[0].SHA256 != asset.SHA256 {
 		select {
 		case <-deadline:
 			t.Fatal("remote content was not activated")
@@ -331,17 +332,43 @@ func TestBundledDefaultsLoadWithContentHashes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("config.Load() = %v", err)
 			}
-			for _, playlist := range cfg.Playlists {
-				for _, asset := range playlist.Assets {
-					if len(asset.SHA256) != 64 {
-						t.Errorf("asset %q has no SHA-256 digest", asset.Path)
-					}
-					if _, err := os.Stat(asset.Path); err != nil {
-						t.Errorf("bundled asset %q is unavailable: %v", asset.Path, err)
-					}
+			for _, asset := range cfg.Playlist.Assets {
+				if len(asset.SHA256) != 64 {
+					t.Errorf("asset %q has no SHA-256 digest", asset.Path)
+				}
+				if _, err := os.Stat(asset.Path); err != nil {
+					t.Errorf("bundled asset %q is unavailable: %v", asset.Path, err)
 				}
 			}
 		})
+	}
+}
+
+func TestBundledProfilesShareTheSameOfflinePlaylist(t *testing.T) {
+	t.Setenv("RIBBONFISH_CACHE_DIR", "")
+	t.Setenv("RIBBONFISH_DRM_DEVICE", "")
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller() could not locate test source")
+	}
+	defaults := filepath.Clean(filepath.Join(filepath.Dir(source), "../../defaults"))
+	profiles := []string{"pi3a-plus.json", "pi3b.json", "pi4.json", "simulator.json", "simulator-pi3b.json", "simulator-pi4.json"}
+	var shared config.PlaylistConfig
+	for index, name := range profiles {
+		cfg, err := config.Load(filepath.Join(defaults, name))
+		if err != nil {
+			t.Fatalf("config.Load(%s) = %v", name, err)
+		}
+		if index == 0 {
+			shared = cfg.Playlist
+			continue
+		}
+		if !reflect.DeepEqual(cfg.Playlist, shared) {
+			t.Errorf("profile %s playlist differs from the shared offline playlist", name)
+		}
+	}
+	if shared.ID != "default" || shared.RotationInterval != "15s" {
+		t.Fatalf("bundled playlist = %#v, want id default and 15s rotation", shared)
 	}
 }
 

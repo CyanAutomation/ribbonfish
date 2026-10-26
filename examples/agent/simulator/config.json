@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "log_level": "info",
   "cache": {
     "directory": "./var/cache",
@@ -10,36 +10,34 @@
     "directory": "./var/frames",
     "fit": "contain"
   },
-  "playlists": [
-    {
-      "id": "operations",
-      "assets": [
-        { "path": "../../raspberry-pi/assets/operations-overview.png" },
-        { "path": "../../raspberry-pi/assets/service-health.png" }
-      ]
-    },
-    {
-      "id": "platform",
-      "assets": [
-        { "path": "../../raspberry-pi/assets/platform-status.png" },
-        { "path": "../../raspberry-pi/assets/deployment-pipeline.png" }
-      ]
-    }
-  ],
   "displays": [
     {
       "id": "display-left",
-      "playlist_id": "operations",
       "connector": "HDMI-A-1",
-      "mode": "1920x1080@60",
-      "rotation_interval": "15s"
+      "mode": "1920x1080@60"
     },
     {
       "id": "display-right",
-      "playlist_id": "platform",
       "connector": "HDMI-A-2",
-      "mode": "1920x1080@60",
-      "rotation_interval": "9s"
+      "mode": "1920x1080@60"
     }
-  ]
+  ],
+  "playlist": {
+    "id": "default",
+    "rotation_interval": "15s",
+    "assets": [
+      {
+        "path": "../../raspberry-pi/assets/deployment-pipeline.png"
+      },
+      {
+        "path": "../../raspberry-pi/assets/operations-overview.png"
+      },
+      {
+        "path": "../../raspberry-pi/assets/platform-status.png"
+      },
+      {
+        "path": "../../raspberry-pi/assets/service-health.png"
+      }
+    ]
+  }
 }

@@ -22,14 +22,6 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-sha256_file() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
-}
-
 frame_update_logged() {
   printf '%s\n' "$1" \
     | grep -F 'msg="display frame updated"' \
@@ -39,38 +31,27 @@ frame_update_logged() {
 
 frame_update_for_display() {
   display_id=$1
-  case "$profile:$display_id" in
-    pi3b:display-main)
-      frame_update_logged "$container_logs" "$display_id" "$operations_sha" \
-        || frame_update_logged "$container_logs" "$display_id" "$service_sha"
-      ;;
-    pi4:display-left)
-      frame_update_logged "$container_logs" "$display_id" "$operations_sha" \
-        || frame_update_logged "$container_logs" "$display_id" "$service_sha"
-      ;;
-    pi4:display-right)
-      frame_update_logged "$container_logs" "$display_id" "$platform_sha" \
-        || frame_update_logged "$container_logs" "$display_id" "$deployment_sha"
-      ;;
-    *) return 1 ;;
-  esac
+  for asset_sha in $playlist_shas; do
+    if frame_update_logged "$container_logs" "$display_id" "$asset_sha"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 mkdir -p "$scratch/frames" "$scratch/offline-frames"
 
 if [ "$profile" = pi3b ]; then
 	default_profile=simulator-pi3b
-	operations_sha=$(sha256_file "$repo_root/agent/defaults/assets/operations-overview.png")
-  service_sha=$(sha256_file "$repo_root/agent/defaults/assets/service-health.png")
   expected_frames='display-main'
 else
 	default_profile=simulator-pi4
-	operations_sha=$(sha256_file "$repo_root/agent/defaults/assets/operations-overview.png")
-	service_sha=$(sha256_file "$repo_root/agent/defaults/assets/service-health.png")
-	platform_sha=$(sha256_file "$repo_root/agent/defaults/assets/platform-status.png")
-	deployment_sha=$(sha256_file "$repo_root/agent/defaults/assets/deployment-pipeline.png")
   expected_frames='display-left display-right'
 fi
+
+playlist_shas=$(python3 -c 'import json,sys; print(" ".join(asset["sha256"] for asset in json.load(open(sys.argv[1]))["playlist"]["assets"]))' \
+  "$repo_root/agent/defaults/$default_profile.json")
+[ -n "$playlist_shas" ] || { echo "default playlist is empty: $default_profile" >&2; exit 1; }
 
 docker buildx build --platform "$platform" --load --tag "$image" "$repo_root/agent"
 docker volume create "$cache_volume" >/dev/null
@@ -120,8 +101,8 @@ for display_id in $expected_frames; do
   fi
 done
 
-if [ "$profile" = pi4 ] && cmp -s "$scratch/frames/display-left.png" "$scratch/frames/display-right.png"; then
-  echo "dual-display profile wrote identical frames for independent playlists" >&2
+if [ "$profile" = pi4 ] && ! cmp -s "$scratch/frames/display-left.png" "$scratch/frames/display-right.png"; then
+	echo "dual-display profile did not show the same active playlist on both outputs" >&2
   exit 1
 fi
 
@@ -176,8 +157,8 @@ if [ "$ready" != true ]; then
   exit 1
 fi
 
-if [ "$profile" = pi4 ] && cmp -s "$scratch/offline-frames/display-left.png" "$scratch/offline-frames/display-right.png"; then
-  echo "offline dual-display profile wrote identical frames for independent playlists" >&2
+if [ "$profile" = pi4 ] && ! cmp -s "$scratch/offline-frames/display-left.png" "$scratch/offline-frames/display-right.png"; then
+	echo "offline dual-display profile did not restore the shared active playlist" >&2
   exit 1
 fi
 

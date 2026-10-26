@@ -14,25 +14,26 @@ depending on Cloudflare or Linux graphics libraries:
 - `internal/display/drm` configures Linux DRM/KMS connectors and scans out
   images using XRGB8888 dumb buffers and page flips.
 - `internal/cache` implements verified, bounded persistent image storage.
-- `internal/playlist` schedules deterministic per-display rotation.
-- `internal/syncer` validates versioned content manifests, downloads assets over
-  HTTPS, verifies SHA-256 before caching, and persists the last-good snapshot.
+- `internal/playlist` schedules the shared active playlist independently on
+  each output.
+- `internal/syncer` validates versioned playlist snapshots, downloads assets
+  over HTTPS, verifies SHA-256 before caching, and persists the last-good snapshot.
 - `internal/logging` configures standard-library `log/slog`.
 
 The current CLI loads a local config or bundled Pi/simulator profile, emits
 structured startup and shutdown records, and exits cleanly on SIGINT or SIGTERM.
-The local runtime loads images into the cache and rotates each configured
-display independently. Optional Worker sync starts after local playback, polls
-for a complete content snapshot, and switches playlist schedules only after all
-assets pass integrity checks. Remote content cannot change output backend,
-DRM card, connector mapping, cache directory, or cache limit. The Go module has
-no third-party dependencies.
+The local runtime loads one active playlist into the cache and applies its
+rotation interval to each configured display. Optional Worker sync starts after
+local playback, polls for the globally active playlist snapshot, and switches
+content only after all assets pass integrity checks. Remote content cannot
+change output backend, DRM card, connector mapping, cache directory, or cache
+limit. The Go module has no third-party dependencies.
 
 ## Local configuration contract
 
-The config format is strict JSON, version 1. It describes a bounded cache,
-simulator or DRM output, image fitting, ordered playlist assets, and a playlist
-plus rotation interval for each logical display. DRM outputs map logical IDs
+The config format is strict JSON, version 2. It describes a bounded cache,
+simulator or DRM output, image fitting, one ordered playlist and its shared
+rotation interval, plus local logical displays. DRM outputs map logical IDs
 to connector names and preferred or explicit modes. Relative paths are
 anchored to the config file, so the same config works when launched from
 another working directory. Unknown fields and invalid references fail at startup.
@@ -50,8 +51,8 @@ persisted timer state.
 
 The device cache is separate from Cloudflare R2 screenshot retention. It is
 bounded by a local byte limit. Content is keyed by SHA-256, writes use a
-temporary file and atomic rename, and assets referenced by configured
-playlists are protected from eviction. If all unprotected assets have been
+temporary file and atomic rename, and assets referenced by the active playlist
+are protected from eviction. If all unprotected assets have been
 evicted and the cache still cannot fit a required asset, the write fails
 explicitly while existing cached content remains available.
 
@@ -63,20 +64,20 @@ frame when no valid item remains.
 
 ## Remote content sync
 
-The Worker contract lives in `workers/device-sync`. A manifest has a version,
-revision, complete playlist contents, SHA-256 digest and byte size for each
-image, and per-display playlist/rotation assignments. It contains no arbitrary
-URLs or local filesystem paths. The device profile owns its output settings;
-remote display IDs must match that profile.
+The Worker contract lives in `workers/device-sync`. A playlist snapshot has a
+version, revision, playlist ID, rotation interval, and ordered asset hashes and
+sizes. It contains no arbitrary URLs or local filesystem paths. Every enrolled
+device receives the same active snapshot; device profiles own their output
+settings and display IDs.
 
 The Go client sends a per-device bearer token, uses an ETag for unchanged
-revisions, limits manifest and image sizes, and rejects non-HTTPS endpoints
+revisions, limits snapshot and image sizes, and rejects non-HTTPS endpoints
 outside loopback development. New image digests are pinned alongside current
 assets while the candidate is fetched. A candidate is saved to persistent state
 and applied only after validation; failures keep the active snapshot. The
-last-good manifest is restored only if every referenced cached image still
-verifies. If a snapshot is unavailable or damaged, the bundled profile starts
-the device.
+last-good playlist snapshot is restored only if every referenced cached image
+still verifies. If a snapshot is unavailable or damaged, the bundled profile
+starts the device.
 
 The playback runtime can switch content without reopening DRM. It waits for
 readers of the old snapshot to finish before allowing cache eviction, so a
@@ -87,7 +88,7 @@ failed or incomplete update cannot remove the currently displayed content.
 `examples/raspberry-pi/docker-compose.simulator.yaml` runs the bundled software
 simulator with no network or DRM access. `docker-compose.yaml` runs a bundled
 hardware profile, maps one DRM card, and mounts one persistent state volume for
-the cache, last-good manifest, frames, and per-device token. It runs non-root
+the cache, last-good playlist, frames, and per-device token. It runs non-root
 with a read-only root filesystem and no added capabilities. The network stays
 disabled unless `RIBBONFISH_NETWORK_MODE=bridge` is selected for enrollment or
 sync. `.env.example` defaults to the Pi 4 profile and Agentlab's card/group;

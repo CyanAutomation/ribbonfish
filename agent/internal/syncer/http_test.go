@@ -24,32 +24,37 @@ const testDeviceToken = "device-secret-012345678901234567890123456789"
 func TestHTTPClientDownloadsVerifiedContentAndUsesETag(t *testing.T) {
 	pngBytes := syncerPNG(t, color.RGBA{G: 210, A: 255})
 	digest := fmt.Sprintf("%x", sha256.Sum256(pngBytes))
-	manifest := Manifest{
-		Version:   1,
-		Revision:  "revision-2",
-		Playlists: []ManifestPlaylist{{ID: "welcome", Assets: []ManifestAsset{{SHA256: digest, Size: int64(len(pngBytes))}}}},
-		Displays:  []ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "30s"}},
+	snapshot := PlaylistSnapshot{
+		Version:          2,
+		Revision:         "revision-2",
+		ID:               "welcome",
+		RotationInterval: "30s",
+		Assets:           []PlaylistAsset{{SHA256: digest, Size: int64(len(pngBytes))}},
 	}
-	manifestBytes, err := json.Marshal(manifest)
+	snapshotBytes, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifestRequests := 0
+	snapshotRequests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+testDeviceToken {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		switch r.URL.Path {
-		case "/v1/devices/pi-office/manifest":
-			manifestRequests++
+		case "/v2/playlist":
+			if r.Header.Get("X-Ribbonfish-Device-ID") != "pi-office" {
+				http.Error(w, "device id missing", http.StatusUnauthorized)
+				return
+			}
+			snapshotRequests++
 			if r.Header.Get("If-None-Match") == `"revision-2"` {
 				w.WriteHeader(http.StatusNotModified)
 				return
 			}
 			w.Header().Set("ETag", `"revision-2"`)
-			_, _ = w.Write(manifestBytes)
-		case "/v1/assets/" + digest:
+			_, _ = w.Write(snapshotBytes)
+		case "/v2/assets/" + digest:
 			_, _ = w.Write(pngBytes)
 		default:
 			http.NotFound(w, r)
@@ -67,16 +72,16 @@ func TestHTTPClientDownloadsVerifiedContentAndUsesETag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Synchronize() error = %v", err)
 	}
-	if !update.Changed || update.Manifest.Revision != "revision-2" || update.ETag != `"revision-2"` {
+	if !update.Changed || update.Snapshot.Revision != "revision-2" || update.ETag != `"revision-2"` {
 		t.Fatalf("unexpected update metadata: %#v", update)
 	}
 	if update.Config.Output.Directory != hardware.Output.Directory || update.Config.Output.Backend != hardware.Output.Backend {
 		t.Fatalf("remote content changed local output settings: %#v", update.Config.Output)
 	}
-	if got := update.Config.Displays[0].RotationInterval; got != "30s" {
+	if got := update.Config.Playlist.RotationInterval; got != "30s" {
 		t.Fatalf("rotation interval = %q, want remote interval", got)
 	}
-	asset := update.Config.Playlists[0].Assets[0]
+	asset := update.Config.Playlist.Assets[0]
 	if asset.SHA256 != digest {
 		t.Fatalf("asset digest = %q, want %q", asset.SHA256, digest)
 	}
@@ -87,23 +92,24 @@ func TestHTTPClientDownloadsVerifiedContentAndUsesETag(t *testing.T) {
 	client.SetETag(update.ETag)
 	unchanged, err := client.Synchronize(context.Background(), hardware, update.Config)
 	if err != nil {
-		t.Fatalf("Synchronize() for unchanged manifest = %v", err)
+		t.Fatalf("Synchronize() for unchanged snapshot = %v", err)
 	}
-	if unchanged.Changed || manifestRequests != 2 {
-		t.Fatalf("second result changed=%v, manifest requests=%d", unchanged.Changed, manifestRequests)
+	if unchanged.Changed || snapshotRequests != 2 {
+		t.Fatalf("second result changed=%v, snapshot requests=%d", unchanged.Changed, snapshotRequests)
 	}
 }
 
-func TestHTTPClientAcceptsWeakManifestETag(t *testing.T) {
+func TestHTTPClientAcceptsWeakPlaylistSnapshotETag(t *testing.T) {
 	pngBytes := syncerPNG(t, color.RGBA{R: 140, B: 180, A: 255})
 	digest := fmt.Sprintf("%x", sha256.Sum256(pngBytes))
-	manifest := Manifest{
-		Version:   1,
-		Revision:  "revision-weak",
-		Playlists: []ManifestPlaylist{{ID: "welcome", Assets: []ManifestAsset{{SHA256: digest, Size: int64(len(pngBytes))}}}},
-		Displays:  []ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "30s"}},
+	snapshot := PlaylistSnapshot{
+		Version:          2,
+		Revision:         "revision-weak",
+		ID:               "welcome",
+		RotationInterval: "30s",
+		Assets:           []PlaylistAsset{{SHA256: digest, Size: int64(len(pngBytes))}},
 	}
-	manifestBytes, err := json.Marshal(manifest)
+	snapshotBytes, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,14 +119,14 @@ func TestHTTPClientAcceptsWeakManifestETag(t *testing.T) {
 			return
 		}
 		switch r.URL.Path {
-		case "/v1/devices/pi-office/manifest":
+		case "/v2/playlist":
 			if r.Header.Get("If-None-Match") == `"revision-weak"` {
 				w.WriteHeader(http.StatusNotModified)
 				return
 			}
 			w.Header().Set("ETag", `W/"revision-weak"`)
-			_, _ = w.Write(manifestBytes)
-		case "/v1/assets/" + digest:
+			_, _ = w.Write(snapshotBytes)
+		case "/v2/assets/" + digest:
 			_, _ = w.Write(pngBytes)
 		default:
 			http.NotFound(w, r)
@@ -154,19 +160,20 @@ func TestHTTPClientAcceptsWeakManifestETag(t *testing.T) {
 func TestHTTPClientRejectsImageDigestMismatchAndRestoresActivePins(t *testing.T) {
 	pngBytes := syncerPNG(t, color.RGBA{R: 220, A: 255})
 	wrongDigest := strings.Repeat("0", 64)
-	manifestBytes, err := json.Marshal(Manifest{
-		Version:   1,
-		Revision:  "revision-bad",
-		Playlists: []ManifestPlaylist{{ID: "welcome", Assets: []ManifestAsset{{SHA256: wrongDigest, Size: int64(len(pngBytes))}}}},
-		Displays:  []ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "30s"}},
+	snapshotBytes, err := json.Marshal(PlaylistSnapshot{
+		Version:          2,
+		Revision:         "revision-bad",
+		ID:               "welcome",
+		RotationInterval: "30s",
+		Assets:           []PlaylistAsset{{SHA256: wrongDigest, Size: int64(len(pngBytes))}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/devices/pi-office/manifest" {
+		if r.URL.Path == "/v2/playlist" {
 			w.Header().Set("ETag", `"revision-bad"`)
-			_, _ = w.Write(manifestBytes)
+			_, _ = w.Write(snapshotBytes)
 			return
 		}
 		_, _ = w.Write(pngBytes)
@@ -182,7 +189,7 @@ func TestHTTPClientRejectsImageDigestMismatchAndRestoresActivePins(t *testing.T)
 		t.Fatal(err)
 	}
 	active := syncerConfig()
-	active.Playlists[0].Assets[0] = config.AssetConfig{Path: oldAsset.Path, SHA256: oldAsset.SHA256}
+	active.Playlist.Assets[0] = config.AssetConfig{Path: oldAsset.Path, SHA256: oldAsset.SHA256}
 	client, err := NewHTTPClient(server.URL, "pi-office", testDeviceToken, store, server.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -201,57 +208,60 @@ func TestHTTPClientRequiresHTTPSOutsideLoopback(t *testing.T) {
 	}
 }
 
-func TestManifestCannotExceedDeviceCacheBudget(t *testing.T) {
+func TestPlaylistSnapshotCannotExceedDeviceCacheBudget(t *testing.T) {
 	hardware := syncerConfig()
-	manifest := Manifest{
-		Version:  1,
-		Revision: "large-revision",
-		Playlists: []ManifestPlaylist{{ID: "welcome", Assets: []ManifestAsset{
+	snapshot := PlaylistSnapshot{
+		Version:          2,
+		Revision:         "large-revision",
+		ID:               "welcome",
+		RotationInterval: "30s",
+		Assets: []PlaylistAsset{
 			{SHA256: strings.Repeat("1", 64), Size: 1 << 20},
 			{SHA256: strings.Repeat("2", 64), Size: (1 << 20) + 1},
-		}}},
-		Displays: []ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "30s"}},
+		},
 	}
-	if err := validateManifest(manifest, hardware); err == nil || !strings.Contains(err.Error(), "cache budget") {
-		t.Fatalf("validateManifest() error = %v, want cache budget rejection", err)
+	if err := validatePlaylistSnapshot(snapshot, hardware); err == nil || !strings.Contains(err.Error(), "cache budget") {
+		t.Fatalf("validatePlaylistSnapshot() error = %v, want cache budget rejection", err)
 	}
 }
 
-func TestManifestRejectsSingleAssetLargerThanDeviceCache(t *testing.T) {
+func TestPlaylistSnapshotRejectsSingleAssetLargerThanDeviceCache(t *testing.T) {
 	hardware := syncerConfig()
-	manifest := Manifest{
-		Version:   1,
-		Revision:  "over-cache-limit",
-		Playlists: []ManifestPlaylist{{ID: "welcome", Assets: []ManifestAsset{{SHA256: strings.Repeat("1", 64), Size: hardware.Cache.MaxBytes + 1}}}},
-		Displays:  []ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "30s"}},
+	snapshot := PlaylistSnapshot{
+		Version:          2,
+		Revision:         "over-cache-limit",
+		ID:               "welcome",
+		RotationInterval: "30s",
+		Assets:           []PlaylistAsset{{SHA256: strings.Repeat("1", 64), Size: hardware.Cache.MaxBytes + 1}},
 	}
-	if err := validateManifest(manifest, hardware); err == nil || !strings.Contains(err.Error(), "cache budget") {
-		t.Fatalf("validateManifest() error = %v, want cache budget rejection", err)
+	if err := validatePlaylistSnapshot(snapshot, hardware); err == nil || !strings.Contains(err.Error(), "cache budget") {
+		t.Fatalf("validatePlaylistSnapshot() error = %v, want cache budget rejection", err)
 	}
 }
 
-func TestDecodeManifestRejectsInputOverSizeLimit(t *testing.T) {
-	_, err := decodeManifest(strings.NewReader(strings.Repeat(" ", manifestLimit+1)))
+func TestDecodePlaylistSnapshotRejectsInputOverSizeLimit(t *testing.T) {
+	_, err := decodePlaylistSnapshot(strings.NewReader(strings.Repeat(" ", snapshotLimit+1)))
 	if err == nil || !strings.Contains(err.Error(), "1 MiB limit") {
-		t.Fatalf("decodeManifest() error = %v, want manifest size-limit rejection", err)
+		t.Fatalf("decodePlaylistSnapshot() error = %v, want snapshot size-limit rejection", err)
 	}
 }
 
 func TestHTTPClientRejectsChunkedOversizedAssetWithoutCaching(t *testing.T) {
 	pngData := syncerPNG(t, color.RGBA{R: 150, A: 255})
 	digest := fmt.Sprintf("%x", sha256.Sum256(pngData))
-	manifestBytes, err := json.Marshal(Manifest{
-		Version:   1,
-		Revision:  "wrong-size",
-		Playlists: []ManifestPlaylist{{ID: "welcome", Assets: []ManifestAsset{{SHA256: digest, Size: int64(len(pngData) - 1)}}}},
-		Displays:  []ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "30s"}},
+	snapshotBytes, err := json.Marshal(PlaylistSnapshot{
+		Version:          2,
+		Revision:         "wrong-size",
+		ID:               "welcome",
+		RotationInterval: "30s",
+		Assets:           []PlaylistAsset{{SHA256: digest, Size: int64(len(pngData) - 1)}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/devices/pi-office/manifest" {
-			_, _ = w.Write(manifestBytes)
+		if r.URL.Path == "/v2/playlist" {
+			_, _ = w.Write(snapshotBytes)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -273,21 +283,22 @@ func TestHTTPClientRejectsChunkedOversizedAssetWithoutCaching(t *testing.T) {
 	}
 }
 
-func TestHTTPClientRejectsCachedAssetWithWrongManifestSize(t *testing.T) {
+func TestHTTPClientRejectsCachedAssetWithWrongPlaylistSnapshotSize(t *testing.T) {
 	pngData := syncerPNG(t, color.RGBA{G: 150, A: 255})
 	digest := fmt.Sprintf("%x", sha256.Sum256(pngData))
-	manifestBytes, err := json.Marshal(Manifest{
-		Version:   1,
-		Revision:  "cached-wrong-size",
-		Playlists: []ManifestPlaylist{{ID: "welcome", Assets: []ManifestAsset{{SHA256: digest, Size: int64(len(pngData) - 1)}}}},
-		Displays:  []ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "30s"}},
+	snapshotBytes, err := json.Marshal(PlaylistSnapshot{
+		Version:          2,
+		Revision:         "cached-wrong-size",
+		ID:               "welcome",
+		RotationInterval: "30s",
+		Assets:           []PlaylistAsset{{SHA256: digest, Size: int64(len(pngData) - 1)}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/devices/pi-office/manifest" {
-			_, _ = w.Write(manifestBytes)
+		if r.URL.Path == "/v2/playlist" {
+			_, _ = w.Write(snapshotBytes)
 			return
 		}
 		_, _ = w.Write(pngData)
@@ -303,7 +314,7 @@ func TestHTTPClientRejectsCachedAssetWithWrongManifestSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := client.Synchronize(context.Background(), syncerConfig(), syncerConfig()); err == nil || !strings.Contains(err.Error(), "length mismatch") {
-		t.Fatalf("Synchronize() error = %v, want manifest size mismatch", err)
+		t.Fatalf("Synchronize() error = %v, want snapshot size mismatch", err)
 	}
 }
 
@@ -356,24 +367,25 @@ func TestSaveAndLoadSnapshotRequiresEveryPinnedImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest := Manifest{
-		Version:   1,
-		Revision:  "saved-revision",
-		Playlists: []ManifestPlaylist{{ID: "welcome", Assets: []ManifestAsset{{SHA256: digest, Size: asset.Bytes}}}},
-		Displays:  []ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "30s"}},
+	snapshot := PlaylistSnapshot{
+		Version:          2,
+		Revision:         "saved-revision",
+		ID:               "welcome",
+		RotationInterval: "30s",
+		Assets:           []PlaylistAsset{{SHA256: digest, Size: asset.Bytes}},
 	}
 	hardware := syncerConfig()
-	candidate, err := mergeManifest(hardware, manifest, map[string]cache.Asset{digest: asset})
+	candidate, err := mergePlaylistSnapshot(hardware, snapshot, map[string]cache.Asset{digest: asset})
 	if err != nil {
 		t.Fatal(err)
 	}
-	update := Update{Config: candidate, Manifest: manifest, ETag: `"saved-revision"`, Changed: true}
+	update := Update{Config: candidate, Snapshot: snapshot, ETag: `"saved-revision"`, Changed: true}
 	filename := filepath.Join(t.TempDir(), "last-good.json")
 	if err := SaveSnapshot(filename, update); err != nil {
 		t.Fatalf("SaveSnapshot() error = %v", err)
 	}
 	restored, err := LoadSnapshot(filename, hardware, store)
-	if err != nil || restored.Manifest.Revision != manifest.Revision || restored.Config.Playlists[0].Assets[0].SHA256 != digest {
+	if err != nil || restored.Snapshot.Revision != snapshot.Revision || restored.Config.Playlist.Assets[0].SHA256 != digest {
 		t.Fatalf("LoadSnapshot() = %#v, %v", restored, err)
 	}
 	if err := os.WriteFile(asset.Path, []byte("corrupt"), 0o600); err != nil {
@@ -393,18 +405,19 @@ func TestLoadSnapshotPinsImagesBeforeValidatingAndMerging(t *testing.T) {
 		t.Fatal(err)
 	}
 	hardware := syncerConfig()
-	manifest := Manifest{
-		Version:   1,
-		Revision:  "restore-pin-order",
-		Playlists: []ManifestPlaylist{{ID: "welcome", Assets: []ManifestAsset{{SHA256: digest, Size: asset.Bytes}}}},
-		Displays:  []ManifestDisplay{{ID: "screen-main", PlaylistID: "welcome", RotationInterval: "30s"}},
+	snapshot := PlaylistSnapshot{
+		Version:          2,
+		Revision:         "restore-pin-order",
+		ID:               "welcome",
+		RotationInterval: "30s",
+		Assets:           []PlaylistAsset{{SHA256: digest, Size: asset.Bytes}},
 	}
-	candidate, err := mergeManifest(hardware, manifest, map[string]cache.Asset{digest: asset})
+	candidate, err := mergePlaylistSnapshot(hardware, snapshot, map[string]cache.Asset{digest: asset})
 	if err != nil {
 		t.Fatal(err)
 	}
 	filename := filepath.Join(t.TempDir(), "last-good.json")
-	if err := SaveSnapshot(filename, Update{Config: candidate, Manifest: manifest, ETag: `"restore-pin-order"`, Changed: true}); err != nil {
+	if err := SaveSnapshot(filename, Update{Config: candidate, Snapshot: snapshot, ETag: `"restore-pin-order"`, Changed: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -458,12 +471,12 @@ func syncerStore(t *testing.T) *cache.FileStore {
 
 func syncerConfig() config.Config {
 	return config.Config{
-		Version:   1,
-		LogLevel:  "info",
-		Cache:     config.CacheConfig{Directory: "/var/cache/ribbonfish", MaxBytes: 2 << 20},
-		Output:    config.OutputConfig{Backend: "simulator", Directory: "/var/frames", Fit: "contain"},
-		Playlists: []config.PlaylistConfig{{ID: "default", Assets: []config.AssetConfig{{Path: "/starter.png"}}}},
-		Displays:  []config.DisplayConfig{{ID: "screen-main", PlaylistID: "default", Mode: "preferred", RotationInterval: "10s"}},
+		Version:  2,
+		LogLevel: "info",
+		Cache:    config.CacheConfig{Directory: "/var/cache/ribbonfish", MaxBytes: 2 << 20},
+		Output:   config.OutputConfig{Backend: "simulator", Directory: "/var/frames", Fit: "contain"},
+		Playlist: config.PlaylistConfig{ID: "default", RotationInterval: "10s", Assets: []config.AssetConfig{{Path: "/starter.png"}}},
+		Displays: []config.DisplayConfig{{ID: "screen-main", Mode: "preferred"}},
 	}
 }
 
