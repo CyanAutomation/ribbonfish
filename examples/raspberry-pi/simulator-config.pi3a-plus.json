@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "log_level": "info",
   "cache": {
     "directory": "/var/lib/ribbonfish/cache",
@@ -10,22 +10,29 @@
     "directory": "/var/lib/ribbonfish/frames",
     "fit": "contain"
   },
-  "playlists": [
-    {
-      "id": "operations",
-      "assets": [
-        { "path": "/assets/operations-overview.png" },
-        { "path": "/assets/service-health.png" }
-      ]
-    }
-  ],
   "displays": [
     {
       "id": "display-main",
-      "playlist_id": "operations",
       "connector": "HDMI-A-1",
-      "mode": "1920x1080@60",
-      "rotation_interval": "15s"
+      "mode": "1920x1080@60"
     }
-  ]
+  ],
+  "playlist": {
+    "id": "default",
+    "rotation_interval": "15s",
+    "assets": [
+      {
+        "path": "/assets/deployment-pipeline.png"
+      },
+      {
+        "path": "/assets/operations-overview.png"
+      },
+      {
+        "path": "/assets/platform-status.png"
+      },
+      {
+        "path": "/assets/service-health.png"
+      }
+    ]
+  }
 }

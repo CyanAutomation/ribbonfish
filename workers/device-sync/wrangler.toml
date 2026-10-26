@@ -1,6 +1,6 @@
 name = "ribbonfish"
 main = "src/index.js"
-compatibility_date = "2026-10-25"
+compatibility_date = "2026-10-26"
 workers_dev = true
 
 [[r2_buckets]]

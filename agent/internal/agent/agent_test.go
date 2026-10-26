@@ -25,32 +25,20 @@ import (
 
 // Test suite contract sources: docs/agent-foundation.md#local-configuration-contract and #cache-behavior.
 
-func TestAgentRotatesDisplaysIndependentlyAndSkipsBadAssets(t *testing.T) {
+func TestAgentSharesTheActivePlaylistAndIntervalAcrossDisplays(t *testing.T) {
 	dir := t.TempDir()
 	leftFirstPath := filepath.Join(dir, "left-first.png")
 	leftSecondPath := filepath.Join(dir, "left-second.png")
 	leftThirdPath := filepath.Join(dir, "left-third.png")
-	rightFirstPath := filepath.Join(dir, "right-first.png")
-	rightSecondPath := filepath.Join(dir, "right-second.png")
 	leftFirstData := writePNG(t, leftFirstPath, color.RGBA{R: 200, A: 255})
 	writePNG(t, leftSecondPath, color.RGBA{G: 150, A: 255})
 	writePNG(t, leftThirdPath, color.RGBA{B: 180, A: 255})
-	writePNG(t, rightFirstPath, color.RGBA{R: 180, G: 180, A: 255})
-	writePNG(t, rightSecondPath, color.RGBA{R: 40, G: 40, A: 255})
-	corruptPath := filepath.Join(dir, "corrupt.png")
-	if err := os.WriteFile(corruptPath, []byte("corrupt image"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := testConfig(dir,
-		config.PlaylistConfig{ID: "left", Assets: []config.AssetConfig{
-			{Path: leftFirstPath}, {Path: filepath.Join(dir, "missing.png")}, {Path: corruptPath}, {Path: leftSecondPath}, {Path: leftThirdPath},
-		}},
-		config.PlaylistConfig{ID: "right", Assets: []config.AssetConfig{{Path: rightFirstPath}, {Path: rightSecondPath}}},
-	)
+	cfg := testConfig(dir, config.PlaylistConfig{ID: "default", RotationInterval: "10s", Assets: []config.AssetConfig{
+		{Path: leftFirstPath}, {Path: filepath.Join(dir, "missing.png")}, {Path: leftSecondPath}, {Path: leftThirdPath},
+	}})
 	cfg.Displays = []config.DisplayConfig{
-		{ID: "display-left", PlaylistID: "left", RotationInterval: "10s"},
-		{ID: "display-right", PlaylistID: "right", RotationInterval: "3s"},
+		{ID: "display-left"},
+		{ID: "display-right"},
 	}
 	store, err := cache.NewFileStore(cfg.Cache.Directory, cfg.Cache.MaxBytes)
 	if err != nil {
@@ -77,30 +65,32 @@ func TestAgentRotatesDisplaysIndependentlyAndSkipsBadAssets(t *testing.T) {
 	if got := initial["display-left"].pixel; got != (color.RGBA{G: 150, A: 255}) {
 		t.Errorf("left initial frame = %#v, want second asset after corrupt first was skipped", got)
 	}
-	if got := initial["display-right"].pixel; got != (color.RGBA{R: 180, G: 180, A: 255}) {
-		t.Errorf("right initial frame = %#v", got)
+	if got := initial["display-right"].pixel; got != initial["display-left"].pixel {
+		t.Errorf("right initial frame = %#v, want same shared playlist frame", got)
 	}
 	waitForTimers(t, clock, 2)
 
 	clock.Advance(3 * time.Second)
-	rotatedRight := receiveFrame(t, output.frames)
-	if rotatedRight.displayID != "display-right" || rotatedRight.pixel != (color.RGBA{R: 40, G: 40, A: 255}) {
-		t.Fatalf("frame after 3 seconds = %#v, want right playlist only", rotatedRight)
-	}
-	waitForTimers(t, clock, 1)
 	select {
 	case event := <-output.frames:
-		t.Fatalf("left display rotated before its 10-second interval: %#v", event)
+		t.Fatalf("display rotated before the global 10-second interval: %#v", event)
 	default:
 	}
 
-	clock.Advance(17 * time.Second)
+	clock.Advance(7 * time.Second)
+	select {
+	case event := <-output.frames:
+		t.Fatalf("same playlist asset was needlessly redrawn at 10 seconds: %#v", event)
+	default:
+	}
+	waitForTimers(t, clock, 2)
+	clock.Advance(10 * time.Second)
 	lateFrames := collectFrames(t, output.frames, 2)
 	if got := lateFrames["display-left"].pixel; got != (color.RGBA{B: 180, A: 255}) {
 		t.Errorf("left frame at 20 seconds = %#v, want third playlist asset", got)
 	}
-	if got := lateFrames["display-right"].pixel; got != (color.RGBA{R: 180, G: 180, A: 255}) {
-		t.Errorf("right frame at 20 seconds = %#v", got)
+	if got := lateFrames["display-right"].pixel; got != lateFrames["display-left"].pixel {
+		t.Errorf("right frame at 20 seconds = %#v, want same shared playlist frame", got)
 	}
 
 	cancel()
@@ -129,8 +119,8 @@ func TestAgentUsesCachedAssetWhenSourceIsUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := testConfig(dir, config.PlaylistConfig{ID: "offline", Assets: []config.AssetConfig{{Path: filepath.Join(dir, "missing.png"), SHA256: asset.SHA256}}})
-	cfg.Displays = []config.DisplayConfig{{ID: "display-offline", PlaylistID: "offline", RotationInterval: "1m"}}
+	cfg := testConfig(dir, config.PlaylistConfig{ID: "offline", RotationInterval: "1m", Assets: []config.AssetConfig{{Path: filepath.Join(dir, "missing.png"), SHA256: asset.SHA256}}})
+	cfg.Displays = []config.DisplayConfig{{ID: "display-offline"}}
 	output := &recordingOutput{frames: make(chan frameEvent, 1)}
 	app, err := New(context.Background(), cfg, restarted, output, slog.New(slog.NewTextHandler(io.Discard, nil)), newTestClock(time.Unix(0, 0)))
 	if err != nil {
@@ -156,13 +146,10 @@ func TestAgentWritesTwoDisplaysThroughSoftwareBackend(t *testing.T) {
 	rightPath := filepath.Join(dir, "right.png")
 	writePNG(t, leftPath, color.RGBA{R: 210, A: 255})
 	writePNG(t, rightPath, color.RGBA{B: 190, A: 255})
-	cfg := testConfig(dir,
-		config.PlaylistConfig{ID: "left", Assets: []config.AssetConfig{{Path: leftPath}}},
-		config.PlaylistConfig{ID: "right", Assets: []config.AssetConfig{{Path: rightPath}}},
-	)
+	cfg := testConfig(dir, config.PlaylistConfig{ID: "default", RotationInterval: "5s", Assets: []config.AssetConfig{{Path: leftPath}, {Path: rightPath}}})
 	cfg.Displays = []config.DisplayConfig{
-		{ID: "display-left", PlaylistID: "left", RotationInterval: "5s"},
-		{ID: "display-right", PlaylistID: "right", RotationInterval: "5s"},
+		{ID: "display-left"},
+		{ID: "display-right"},
 	}
 	imageCache, err := cache.NewFileStore(cfg.Cache.Directory, cfg.Cache.MaxBytes)
 	if err != nil {
@@ -216,8 +203,8 @@ func TestAgentWritesTwoDisplaysThroughSoftwareBackend(t *testing.T) {
 			t.Fatal("timed out waiting for both simulated display frames")
 		}
 	}
-	if seen["display-left"] != (color.RGBA{R: 210, A: 255}) || seen["display-right"] != (color.RGBA{B: 190, A: 255}) {
-		t.Fatalf("simulator states = %#v", seen)
+	if seen["display-left"] != (color.RGBA{R: 210, A: 255}) || seen["display-right"] != (color.RGBA{R: 210, A: 255}) {
+		t.Fatalf("simulator states = %#v, want both displays to share first playlist item", seen)
 	}
 	cancel()
 	if err := <-done; err != nil {
@@ -410,19 +397,22 @@ func TestApplyConfigRejectsMissingSnapshotAssets(t *testing.T) {
 	if err := app.ApplyConfig(context.Background(), candidate); err == nil {
 		t.Fatal("ApplyConfig accepted a snapshot with an unavailable image")
 	}
-	if got := app.CurrentConfig().Playlists[0].Assets[0].Path; got != starter {
+	if got := app.CurrentConfig().Playlist.Assets[0].Path; got != starter {
 		t.Fatalf("active content changed after failed update: path = %q, want %q", got, starter)
 	}
 }
 
-func testConfig(dir string, playlists ...config.PlaylistConfig) config.Config {
+func testConfig(dir string, playlist config.PlaylistConfig) config.Config {
+	if playlist.RotationInterval == "" {
+		playlist.RotationInterval = "1s"
+	}
 	return config.Config{
-		Version:   1,
-		LogLevel:  "info",
-		Cache:     config.CacheConfig{Directory: filepath.Join(dir, "cache"), MaxBytes: 1 << 20},
-		Output:    config.OutputConfig{Directory: filepath.Join(dir, "frames")},
-		Playlists: playlists,
-		Displays:  []config.DisplayConfig{{ID: "display", PlaylistID: playlists[0].ID, RotationInterval: "1s"}},
+		Version:  2,
+		LogLevel: "info",
+		Cache:    config.CacheConfig{Directory: filepath.Join(dir, "cache"), MaxBytes: 1 << 20},
+		Output:   config.OutputConfig{Directory: filepath.Join(dir, "frames")},
+		Playlist: playlist,
+		Displays: []config.DisplayConfig{{ID: "display"}},
 	}
 }
 

@@ -19,12 +19,12 @@ import (
 // Config describes the local, offline-capable agent. Paths are resolved
 // relative to the config file by Load.
 type Config struct {
-	Version   int              `json:"version"`
-	LogLevel  string           `json:"log_level"`
-	Cache     CacheConfig      `json:"cache"`
-	Output    OutputConfig     `json:"output"`
-	Playlists []PlaylistConfig `json:"playlists"`
-	Displays  []DisplayConfig  `json:"displays"`
+	Version  int             `json:"version"`
+	LogLevel string          `json:"log_level"`
+	Cache    CacheConfig     `json:"cache"`
+	Output   OutputConfig    `json:"output"`
+	Playlist PlaylistConfig  `json:"playlist"`
+	Displays []DisplayConfig `json:"displays"`
 }
 
 type CacheConfig struct {
@@ -40,8 +40,9 @@ type OutputConfig struct {
 }
 
 type PlaylistConfig struct {
-	ID     string        `json:"id"`
-	Assets []AssetConfig `json:"assets"`
+	ID               string        `json:"id"`
+	RotationInterval string        `json:"rotation_interval"`
+	Assets           []AssetConfig `json:"assets"`
 }
 
 type AssetConfig struct {
@@ -50,11 +51,9 @@ type AssetConfig struct {
 }
 
 type DisplayConfig struct {
-	ID               string `json:"id"`
-	PlaylistID       string `json:"playlist_id"`
-	Connector        string `json:"connector,omitempty"`
-	Mode             string `json:"mode,omitempty"`
-	RotationInterval string `json:"rotation_interval"`
+	ID        string `json:"id"`
+	Connector string `json:"connector,omitempty"`
+	Mode      string `json:"mode,omitempty"`
 }
 
 // EffectiveBackend preserves the original local config contract by selecting
@@ -76,14 +75,14 @@ func (c OutputConfig) EffectiveFit() string {
 	return fit
 }
 
-// Interval parses a display's rotation interval.
-func (d DisplayConfig) Interval() (time.Duration, error) {
-	interval, err := time.ParseDuration(d.RotationInterval)
+// Interval parses the globally active playlist's rotation interval.
+func (p PlaylistConfig) Interval() (time.Duration, error) {
+	interval, err := time.ParseDuration(p.RotationInterval)
 	if err != nil {
-		return 0, fmt.Errorf("display %q rotation_interval: %w", d.ID, err)
+		return 0, fmt.Errorf("playlist %q rotation_interval: %w", p.ID, err)
 	}
 	if interval <= 0 {
-		return 0, fmt.Errorf("display %q rotation_interval must be greater than zero", d.ID)
+		return 0, fmt.Errorf("playlist %q rotation_interval must be greater than zero", p.ID)
 	}
 	return interval, nil
 }
@@ -93,8 +92,8 @@ func (d DisplayConfig) Interval() (time.Duration, error) {
 // independently at playback time.
 func (c Config) Validate() error {
 	var problems []error
-	if c.Version != 1 {
-		problems = append(problems, fmt.Errorf("version must be 1, got %d", c.Version))
+	if c.Version != 2 {
+		problems = append(problems, fmt.Errorf("version must be 2, got %d", c.Version))
 	}
 	switch strings.ToLower(strings.TrimSpace(c.LogLevel)) {
 	case "debug", "info", "warn", "error":
@@ -125,36 +124,29 @@ func (c Config) Validate() error {
 	if fit := c.Output.EffectiveFit(); fit != "contain" && fit != "cover" && fit != "stretch" {
 		problems = append(problems, errors.New(`output.fit must be "contain", "cover", or "stretch"`))
 	}
-	if len(c.Playlists) == 0 {
-		problems = append(problems, errors.New("at least one playlist is required"))
+	if strings.TrimSpace(c.Playlist.ID) == "" {
+		problems = append(problems, errors.New("playlist.id is required"))
+	} else if !validIdentifier(c.Playlist.ID) {
+		problems = append(problems, errors.New("playlist.id contains unsupported characters"))
+	}
+	if len(c.Playlist.Assets) == 0 {
+		problems = append(problems, errors.New("playlist must contain at least one asset"))
+	}
+	if _, err := c.Playlist.Interval(); err != nil {
+		problems = append(problems, err)
 	}
 	if len(c.Displays) == 0 {
 		problems = append(problems, errors.New("at least one display is required"))
 	}
 
-	playlists := make(map[string]struct{}, len(c.Playlists))
-	for i, playlist := range c.Playlists {
-		if strings.TrimSpace(playlist.ID) == "" {
-			problems = append(problems, fmt.Errorf("playlists[%d].id is required", i))
-		} else if !validIdentifier(playlist.ID) {
-			problems = append(problems, fmt.Errorf("playlists[%d].id contains unsupported characters", i))
-		} else if _, exists := playlists[playlist.ID]; exists {
-			problems = append(problems, fmt.Errorf("playlist id %q is duplicated", playlist.ID))
-		} else {
-			playlists[playlist.ID] = struct{}{}
+	for i, asset := range c.Playlist.Assets {
+		if strings.TrimSpace(asset.Path) == "" {
+			problems = append(problems, fmt.Errorf("playlist.assets[%d].path is required", i))
 		}
-		if len(playlist.Assets) == 0 {
-			problems = append(problems, fmt.Errorf("playlist %q must contain at least one asset", playlist.ID))
-		}
-		for j, asset := range playlist.Assets {
-			if strings.TrimSpace(asset.Path) == "" {
-				problems = append(problems, fmt.Errorf("playlists[%d].assets[%d].path is required", i, j))
-			}
-			if asset.SHA256 != "" {
-				decoded, err := hex.DecodeString(asset.SHA256)
-				if err != nil || len(decoded) != 32 {
-					problems = append(problems, fmt.Errorf("playlists[%d].assets[%d].sha256 must be a 64-character hexadecimal SHA-256 digest", i, j))
-				}
+		if asset.SHA256 != "" {
+			decoded, err := hex.DecodeString(asset.SHA256)
+			if err != nil || len(decoded) != 32 {
+				problems = append(problems, fmt.Errorf("playlist.assets[%d].sha256 must be a 64-character hexadecimal SHA-256 digest", i))
 			}
 		}
 	}
@@ -170,14 +162,6 @@ func (c Config) Validate() error {
 			problems = append(problems, fmt.Errorf("display id %q is duplicated", display.ID))
 		} else {
 			displays[display.ID] = struct{}{}
-		}
-		if strings.TrimSpace(display.PlaylistID) == "" {
-			problems = append(problems, fmt.Errorf("displays[%d].playlist_id is required", i))
-		} else if _, exists := playlists[display.PlaylistID]; !exists {
-			problems = append(problems, fmt.Errorf("display %q references unknown playlist %q", display.ID, display.PlaylistID))
-		}
-		if _, err := display.Interval(); err != nil {
-			problems = append(problems, err)
 		}
 		if display.Connector != "" && !validIdentifier(display.Connector) {
 			problems = append(problems, fmt.Errorf("displays[%d].connector contains unsupported characters", i))
@@ -248,10 +232,8 @@ func Load(path string) (Config, error) {
 	}
 	cfg.Cache.Directory = resolvePath(base, cfg.Cache.Directory)
 	cfg.Output.Directory = resolvePath(base, cfg.Output.Directory)
-	for i := range cfg.Playlists {
-		for j := range cfg.Playlists[i].Assets {
-			cfg.Playlists[i].Assets[j].Path = resolvePath(base, cfg.Playlists[i].Assets[j].Path)
-		}
+	for i := range cfg.Playlist.Assets {
+		cfg.Playlist.Assets[i].Path = resolvePath(base, cfg.Playlist.Assets[i].Path)
 	}
 	return cfg, nil
 }
