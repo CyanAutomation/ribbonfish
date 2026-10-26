@@ -93,6 +93,8 @@ expected_runtime="$expected_image|$image_id|running|$network_mode"
 
 logs=$(docker logs --tail 200 "$container_id" 2>&1) || fail 'could not read agent logs'
 printf '%s\n' "$logs" | grep -F 'msg="agent configuration loaded"' | grep -Eq 'displays=[1-9][0-9]*' || fail 'agent has not logged a usable display configuration'
+connector_report=$(docker compose --project-directory "$deployment_dir" -p ribbonfish exec -T agent /ribbonfish -check-displays 2>&1) || fail "configured DRM connectors are unavailable or do not advertise the configured mode: $connector_report"
+printf '%s\n' "$connector_report"
 printf '%s\n' "$logs" | grep -F 'msg="display frame updated"' >/dev/null || fail 'agent has not logged a successful display frame update'
 
-printf 'Deployment verified: profile=%s image=%s status=running network=%s; display frame updated\n' "$profile" "$expected_image" "$network_mode"
+printf 'Deployment verified: profile=%s image=%s status=running network=%s; DRM connectors ready and display frame updated\n' "$profile" "$expected_image" "$network_mode"

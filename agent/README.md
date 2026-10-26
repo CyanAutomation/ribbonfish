@@ -8,13 +8,14 @@ sync. It includes a PNG simulator and an experimental Linux DRM/KMS output
 backend.
 
 The container image includes `defaults/` and its starter images. The default
-profile is `pi4`; select `pi3b`, `pi3a-plus`, `simulator`, `simulator-pi3b`, or
-`simulator-pi4` with `RIBBONFISH_PROFILE`. `RIBBONFISH_CONFIG_FILE` can still
-point to a local override.
+profile is `pi4`; select `pi3b`, `pi3a-plus`, `simulator`,
+`simulator-pi3a-plus`, `simulator-pi3b`, or `simulator-pi4` with
+`RIBBONFISH_PROFILE`. `RIBBONFISH_CONFIG_FILE` can still point to a local
+override.
 
 The runnable two-display demo and its instructions are in
 [`../examples/agent/simulator/README.md`](../examples/agent/simulator/README.md).
-For a native ARM64 Docker host such as Agentlab, see the Pi simulator Compose
+For a native ARM64 Raspberry Pi such as Ribbonfish, see the Pi simulator Compose
 example in [`../examples/raspberry-pi/README.md`](../examples/raspberry-pi/README.md).
 The agent module uses the Go standard library only. See
 [`../docs/agent-foundation.md`](../docs/agent-foundation.md) for architecture
@@ -29,8 +30,10 @@ server.
 On Linux, `ribbonfish -list-displays` reports DRM connectors from sysfs,
 including the owning `/dev/dri/cardN`, whether that device node exists, driver,
 connector status, and modes. It does not open the device or test modesetting,
-permissions, or scanout. Use it to select a card and connector before testing
-the actual DRM backend.
+permissions, or scanout. `ribbonfish -check-displays` compares the configured
+DRM card, connectors, and requested resolutions with that sysfs information.
+It is also read-only and does not acquire DRM master or change display state;
+the actual DRM backend must still be tested on hardware.
 
 Build and test the module with:
 
@@ -46,15 +49,16 @@ Run the software demo using the instructions linked above.
 The simulator can also run inside ARM containers under QEMU. This checks the
 container build, bundled default configuration and assets, fresh named-volume
 writes, graceful shutdown, and offline restart from the persistent cache for
-the ARMv7 single-display (Pi 3B) and ARM64 two-display (Pi 4) profiles. It does
-not emulate Raspberry Pi OS, DRM/KMS, GPIO, display timing, or physical
-connector behavior.
+the ARMv7 single-display Pi 3B profile, the ARM64 single-display Pi 3 A+ profile,
+and the ARM64 two-display Pi 4 profile. It does not emulate Raspberry Pi OS,
+DRM/KMS, GPIO, display timing, or physical connector behavior.
 
 With Docker Buildx and QEMU/binfmt support installed, run either profile from
 the repository root:
 
 ```sh
 sh agent/scripts/smoke-container.sh linux/arm/v7 pi3b
+sh agent/scripts/smoke-container.sh linux/arm64 pi3a-plus
 sh agent/scripts/smoke-container.sh linux/arm64 pi4
 ```
 
@@ -62,13 +66,14 @@ For a host-native container smoke check that does not require QEMU, use:
 
 ```sh
 sh agent/scripts/smoke-container.sh linux/amd64 pi3b
+sh agent/scripts/smoke-container.sh linux/amd64 pi3a-plus
 sh agent/scripts/smoke-container.sh linux/amd64 pi4
 ```
 
-The native checks exercise both single- and dual-output simulator profiles,
-but do not check ARM compatibility. On Agentlab, run the ARM64 profile to
-exercise the Pi's native Docker Engine and kernel without a connected monitor;
-the check only writes PNG files and does not access DRM.
+The native checks exercise single- and dual-output simulator profiles, but do
+not check ARM compatibility. On Ribbonfish, run the ARM64 Pi 3 A+ profile to
+exercise the actual Pi's Docker Engine and kernel. It writes PNG files in an
+isolated container and does not open DRM or disturb the active HDMI output.
 
 GitHub Actions runs both checks on changes to the agent, simulator, or Pi
 examples, validates the Pi configs and Compose files, tests the device sync
@@ -86,7 +91,7 @@ provisioned with `-enroll`; the random device token is stored in the persistent
 state volume with mode 0600. Single-display 1080p KMS mode-setting and frame updates have been
 verified over SSH on a Pi 3 Model A Plus, and the user confirmed the sample
 slides were visible. Pi 3B and Pi 4 dual-display behavior still need physical
-acceptance. Emulated tests and the Agentlab simulator do not prove KMS scanout.
+acceptance. Emulated tests do not prove KMS scanout.
 
 The agent logs the first successful unchanged sync poll after startup or a
 sync failure with its ETag. Further unchanged polls stay quiet until the next

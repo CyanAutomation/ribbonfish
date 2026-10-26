@@ -35,6 +35,8 @@ jobs:
           - platform: linux/arm/v7
             profile: pi3b
           - platform: linux/arm64
+            profile: pi3a-plus
+          - platform: linux/arm64
             profile: pi4
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,11 +53,14 @@ jobs:
           python3 -m json.tool agent/defaults/pi3b.json >/dev/null
           python3 -m json.tool agent/defaults/pi4.json >/dev/null
           python3 -m json.tool agent/defaults/simulator.json >/dev/null
+          python3 -m json.tool agent/defaults/simulator-pi3a-plus.json >/dev/null
           python3 -m json.tool agent/defaults/simulator-pi3b.json >/dev/null
           python3 -m json.tool agent/defaults/simulator-pi4.json >/dev/null
           docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml config --quiet
+          RIBBONFISH_SIMULATOR_PROFILE=simulator-pi3a-plus docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml config --quiet
           RIBBONFISH_SIMULATOR_PROFILE=simulator-pi3b docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml config --quiet
           docker compose -f examples/raspberry-pi/docker-compose.published.yaml config --quiet
+          RIBBONFISH_SIMULATOR_PROFILE=simulator-pi3a-plus docker compose -f examples/raspberry-pi/docker-compose.published.yaml config --quiet
           RIBBONFISH_PROFILE=pi3a-plus RIBBONFISH_DRM_DEVICE=/dev/dri/card0 docker compose -f examples/raspberry-pi/docker-compose.yaml config --quiet
           RIBBONFISH_PROFILE=pi3b RIBBONFISH_DRM_DEVICE=/dev/dri/card0 docker compose -f examples/raspberry-pi/docker-compose.yaml config --quiet
           RIBBONFISH_PROFILE=pi4 RIBBONFISH_DRM_DEVICE=/dev/dri/card1 docker compose -f examples/raspberry-pi/docker-compose.yaml config --quiet

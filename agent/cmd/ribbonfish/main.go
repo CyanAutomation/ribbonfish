@@ -27,10 +27,18 @@ import (
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to the agent JSON configuration")
 	listDisplays := flag.Bool("list-displays", false, "list DRM/KMS connectors from Linux sysfs and exit")
+	checkDisplays := flag.Bool("check-displays", false, "check configured DRM connectors against Linux sysfs without changing display state")
 	enroll := flag.Bool("enroll", false, "exchange a one-time code from stdin for a per-device sync credential")
 	flag.Parse()
 	if *listDisplays {
 		if err := listDRMDisplays("/sys/class/drm", "/dev/dri", os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "ribbonfish:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *checkDisplays {
+		if err := checkDRMDisplays(*configPath, "/sys/class/drm", "/dev/dri", os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "ribbonfish:", err)
 			os.Exit(1)
 		}
@@ -63,7 +71,7 @@ func defaultConfigPath() string {
 	}
 	profile := strings.TrimSpace(os.Getenv("RIBBONFISH_PROFILE"))
 	switch profile {
-	case "pi3a-plus", "pi3b", "pi4", "simulator", "simulator-pi3b", "simulator-pi4":
+	case "pi3a-plus", "pi3b", "pi4", "simulator", "simulator-pi3a-plus", "simulator-pi3b", "simulator-pi4":
 	default:
 		profile = "pi4"
 	}
@@ -107,6 +115,42 @@ func listDRMDisplays(sysfsRoot, devRoot string, output io.Writer) error {
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(connectors); err != nil {
 		return fmt.Errorf("write DRM connector report: %w", err)
+	}
+	return nil
+}
+
+func checkDRMDisplays(configPath, sysfsRoot, devRoot string, output io.Writer) error {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return err
+	}
+	if cfg.Output.EffectiveBackend() != "drm" {
+		return fmt.Errorf("display check requires output.backend=drm, got %q", cfg.Output.EffectiveBackend())
+	}
+	connectors, err := drm.Discover(sysfsRoot, devRoot)
+	if err != nil {
+		return err
+	}
+	targets := make([]drm.DisplayTarget, 0, len(cfg.Displays))
+	for _, target := range cfg.Displays {
+		targets = append(targets, drm.DisplayTarget{ID: target.ID, Connector: target.Connector, Mode: target.Mode})
+	}
+	if err := drm.ValidateTargets(cfg.Output.Device, targets, connectors); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(output, "DRM display preflight passed: device=%s displays=%d\n", cfg.Output.Device, len(targets)); err != nil {
+		return fmt.Errorf("write DRM display check result: %w", err)
+	}
+	for _, target := range targets {
+		for _, connector := range connectors {
+			if connector.Name != target.Connector {
+				continue
+			}
+			if _, err := fmt.Fprintf(output, "display_id=%s connector=%s status=%s requested_mode=%s advertised_modes=%d\n", target.ID, connector.Name, connector.Status, target.Mode, len(connector.Modes)); err != nil {
+				return fmt.Errorf("write DRM display check result: %w", err)
+			}
+			break
+		}
 	}
 	return nil
 }
