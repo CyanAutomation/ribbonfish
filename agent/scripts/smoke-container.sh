@@ -120,8 +120,8 @@ for display_id in $expected_frames; do
   fi
 done
 
-if [ "$profile" = pi4 ] && cmp -s "$scratch/frames/display-left.png" "$scratch/frames/display-right.png"; then
-  echo "dual-display profile wrote identical frames for independent playlists" >&2
+if [ "$profile" = pi4 ] && ! cmp -s "$scratch/frames/display-left.png" "$scratch/frames/display-right.png"; then
+	echo "dual-display profile did not show the same active playlist on both outputs" >&2
   exit 1
 fi
 
@@ -176,8 +176,8 @@ if [ "$ready" != true ]; then
   exit 1
 fi
 
-if [ "$profile" = pi4 ] && cmp -s "$scratch/offline-frames/display-left.png" "$scratch/offline-frames/display-right.png"; then
-  echo "offline dual-display profile wrote identical frames for independent playlists" >&2
+if [ "$profile" = pi4 ] && ! cmp -s "$scratch/offline-frames/display-left.png" "$scratch/offline-frames/display-right.png"; then
+	echo "offline dual-display profile did not restore the shared active playlist" >&2
   exit 1
 fi
 

@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "log_level": "info",
   "cache": {
     "directory": "/var/lib/ribbonfish/cache",
@@ -10,24 +10,36 @@
     "directory": "/var/lib/ribbonfish/frames",
     "fit": "contain"
   },
-  "playlists": [
+  "displays": [
     {
-      "id": "operations",
-      "assets": [
-        { "path": "assets/operations-overview.png", "sha256": "790214944b6c953c38acb0b7b0bb7e380546303e9e9a85ed0133b4dab22c6a67" },
-        { "path": "assets/service-health.png", "sha256": "8e6d585928363619f35ae228cfa9b72844b270b8cef2a0357b0c9bc54644d138" }
-      ]
+      "id": "display-left",
+      "mode": "1920x1080@60"
     },
     {
-      "id": "platform",
-      "assets": [
-        { "path": "assets/platform-status.png", "sha256": "fd7dd58a8beaba2bb402fdba501cfb8ecfef66164212c414e24550afbdd8ac22" },
-        { "path": "assets/deployment-pipeline.png", "sha256": "8497f6aeb8d5ad107929ca4d84ea5ed7508811411cb709412e2ff2c5dabff519" }
-      ]
+      "id": "display-right",
+      "mode": "1920x1080@60"
     }
   ],
-  "displays": [
-    { "id": "display-left", "playlist_id": "operations", "mode": "1920x1080@60", "rotation_interval": "15s" },
-    { "id": "display-right", "playlist_id": "platform", "mode": "1920x1080@60", "rotation_interval": "15s" }
-  ]
+  "playlist": {
+    "id": "default",
+    "rotation_interval": "15s",
+    "assets": [
+      {
+        "path": "assets/deployment-pipeline.png",
+        "sha256": "8497f6aeb8d5ad107929ca4d84ea5ed7508811411cb709412e2ff2c5dabff519"
+      },
+      {
+        "path": "assets/operations-overview.png",
+        "sha256": "790214944b6c953c38acb0b7b0bb7e380546303e9e9a85ed0133b4dab22c6a67"
+      },
+      {
+        "path": "assets/platform-status.png",
+        "sha256": "fd7dd58a8beaba2bb402fdba501cfb8ecfef66164212c414e24550afbdd8ac22"
+      },
+      {
+        "path": "assets/service-health.png",
+        "sha256": "8e6d585928363619f35ae228cfa9b72844b270b8cef2a0357b0c9bc54644d138"
+      }
+    ]
+  }
 }

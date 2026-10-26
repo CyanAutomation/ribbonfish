@@ -6,11 +6,12 @@ import { fetchHandler, sha256Hex } from "./index.js";
 
 const token = "a-secure-device-token-with-at-least-32-characters";
 const digest = "a".repeat(64);
-const manifest = {
-  version: 1,
+const playlist = {
+  version: 2,
   revision: "revision-1",
-  playlists: [{ id: "welcome", assets: [{ sha256: digest, size: 4 }] }],
-  displays: [{ id: "screen-main", playlist_id: "welcome", rotation_interval: "30s" }],
+  id: "welcome",
+  rotation_interval: "30s",
+  assets: [{ sha256: digest, size: 4 }],
 };
 
 class FakeDatabase {
@@ -18,38 +19,56 @@ class FakeDatabase {
     this.device = {
       device_id: "pi-office",
       token_hash: "",
-      manifest_key: "devices/pi-office/manifest.json",
       enabled: 1,
     };
     this.enrollment = { code_hash: "", expires_at: Date.now() + 60_000, consumed_at: null };
     this.insertedDevice = null;
     this.enrollments = [this.enrollment];
     this.devices = new Map();
+    this.playlists = new Map([[`${playlist.id}:${playlist.revision}`, playlist]]);
+    this.activePlaylist = { playlist_id: playlist.id, revision: playlist.revision };
   }
 
   prepare(sql) {
     const database = this;
-    return {
-      bind(...values) {
-        return {
-          async first() {
-            if (sql.startsWith("SELECT device_id FROM devices")) {
-              if (database.enrollmentReadBarrier) {
-                const barrier = database.enrollmentReadBarrier;
-                barrier.reads++;
-                if (barrier.reads === 2) barrier.release();
-                await barrier.promise;
-              }
-              return database.devices.get(values[0]) ?? null;
-            }
-            if (sql.includes("FROM devices")) return database.device;
-            if (sql.includes("FROM enrollments")) return database.enrollments.find((item) => item.code_hash === values[0]) ?? null;
-            return null;
-          },
-          values,
-        };
+    let values = [];
+    const statement = {
+      bind(...boundValues) { values = boundValues; return statement; },
+      async first() {
+        if (sql.startsWith("SELECT device_id FROM devices")) {
+          if (database.enrollmentReadBarrier) {
+            const barrier = database.enrollmentReadBarrier;
+            barrier.reads++;
+            if (barrier.reads === 2) barrier.release();
+            await barrier.promise;
+          }
+          return database.devices.get(values[0]) ?? null;
+        }
+        if (sql.includes("FROM active_playlist")) return database.activePlaylist;
+        if (sql.includes("FROM playlists WHERE playlist_id")) {
+          const value = database.playlists.get(`${values[0]}:${values[1]}`);
+          return value ? { playlist_id: value.id, revision: value.revision, rotation_interval: value.rotation_interval } : null;
+        }
+        if (sql.includes("FROM playlist_assets WHERE sha256")) {
+          for (const value of database.playlists.values()) {
+            const asset = value.assets.find((item) => item.sha256 === values[0]);
+            if (asset) return { size: asset.size };
+          }
+          return null;
+        }
+        if (sql.includes("FROM devices")) {
+          return values[0] === "pi-office" ? database.device : database.devices.get(values[0]) ?? null;
+        }
+        if (sql.includes("FROM enrollments")) return database.enrollments.find((item) => item.code_hash === values[0]) ?? null;
+        return null;
       },
+      async all() {
+        const value = database.playlists.get(`${values[0]}:${values[1]}`);
+        return { results: value?.assets ?? [] };
+      },
+      get values() { return values; },
     };
+    return statement;
   }
 
   async batch(statements) {
@@ -61,12 +80,12 @@ class FakeDatabase {
       enrollment.claim_id = claimID;
     }
 
-    const [insertDeviceID, tokenHash, manifestKey, createdAt, insertCodeHash, consumedAt, insertClaimID, insertDeviceIDAgain] = insert.values;
+    const [insertDeviceID, tokenHash, createdAt, insertCodeHash, consumedAt, insertClaimID, insertDeviceIDAgain] = insert.values;
     const claimedEnrollment = this.enrollments.find((item) => item.code_hash === insertCodeHash);
     let insertChanges = 0;
     if (claimedEnrollment?.consumed_at === consumedAt && claimedEnrollment.claim_id === insertClaimID &&
         insertDeviceID === insertDeviceIDAgain && !this.devices.has(insertDeviceID)) {
-      const device = { device_id: insertDeviceID, token_hash: tokenHash, manifest_key: manifestKey, enabled: 1, created_at: createdAt };
+      const device = { device_id: insertDeviceID, token_hash: tokenHash, enabled: 1, created_at: createdAt };
       this.devices.set(insertDeviceID, device);
       this.insertedDevice = device;
       this.device = device;
@@ -79,19 +98,16 @@ class FakeDatabase {
   }
 }
 
-function testEnvironment({ manifestValue = manifest, assetBytes = new Uint8Array([1, 2, 3, 4]) } = {}) {
+function testEnvironment({ playlistValue = playlist, assetBytes = new Uint8Array([1, 2, 3, 4]) } = {}) {
   const db = new FakeDatabase();
+  db.playlists = new Map(playlistValue ? [[`${playlistValue.id}:${playlistValue.revision}`, playlistValue]] : []);
+  db.activePlaylist = playlistValue ? { playlist_id: playlistValue.id, revision: playlistValue.revision } : null;
   const r2Gets = [];
   const env = {
     DB: db,
     ASSETS: {
       async get(key) {
         r2Gets.push(key);
-        if (key === "devices/pi-office/manifest.json") {
-          if (!manifestValue) return null;
-          const body = JSON.stringify(manifestValue);
-          return { size: new TextEncoder().encode(body).byteLength, async text() { return body; } };
-        }
         if (key === `assets/${digest}`) {
           return { size: assetBytes.byteLength, body: new Response(assetBytes).body };
         }
@@ -106,44 +122,71 @@ async function authorize(db, presented = token) {
   db.device.token_hash = await sha256Hex(presented);
 }
 
-test("manifest endpoint authenticates the device and returns a revision ETag", async () => {
+test("version 2 playlist endpoint authenticates the device and returns a revision ETag", async () => {
   const { env, db } = testEnvironment();
   await authorize(db);
-  const response = await fetchHandler(new Request("https://worker.test/v1/devices/pi-office/manifest", {
-    headers: { Authorization: `Bearer ${token}` },
-  }), env);
+  const request = (headers = {}) => new Request("https://worker.test/v2/playlist", {
+    headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office", ...headers },
+  });
+  const response = await fetchHandler(request(), env);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("etag"), '"revision-1"');
   assert.equal(response.headers.get("cache-control"), "private, no-store, no-transform");
-  assert.deepEqual(await response.json(), manifest);
+  assert.deepEqual(await response.json(), playlist);
 
-  const unchanged = await fetchHandler(new Request("https://worker.test/v1/devices/pi-office/manifest", {
-    headers: { Authorization: `Bearer ${token}`, "If-None-Match": '"revision-1"' },
-  }), env);
+  const unchanged = await fetchHandler(request({ "If-None-Match": '"revision-1"' }), env);
   assert.equal(unchanged.status, 304);
 });
 
-test("unauthorized device cannot read its manifest or cause an R2 read", async () => {
+test("all enrolled devices receive the same active playlist", async () => {
+  const { env, db } = testEnvironment();
+  const secondToken = "another-secure-device-token-with-at-least-32-characters";
+  db.devices.set("pi-second", { device_id: "pi-second", token_hash: await sha256Hex(secondToken), enabled: 1 });
+  await authorize(db);
+  const fetchPlaylist = (deviceID, bearer) => fetchHandler(new Request("https://worker.test/v2/playlist", {
+    headers: { Authorization: `Bearer ${bearer}`, "X-Ribbonfish-Device-ID": deviceID },
+  }), env);
+  const first = await fetchPlaylist("pi-office", token);
+  const second = await fetchPlaylist("pi-second", secondToken);
+  assert.deepEqual(await first.json(), await second.json());
+});
+
+test("changing the active playlist changes the global response revision", async () => {
+  const { env, db } = testEnvironment();
+  await authorize(db);
+  db.playlists.set("platform:revision-2", { ...playlist, id: "platform", revision: "revision-2" });
+  db.activePlaylist = { playlist_id: "platform", revision: "revision-2" };
+  const response = await fetchHandler(new Request("https://worker.test/v2/playlist", {
+    headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office", "If-None-Match": '"revision-1"' },
+  }), env);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("etag"), '"revision-2"');
+  assert.equal((await response.json()).id, "platform");
+});
+
+test("unauthorized device cannot read its playlist or cause an R2 read", async () => {
   const { env, r2Gets } = testEnvironment();
-  const response = await fetchHandler(new Request("https://worker.test/v1/devices/pi-office/manifest"), env);
+  const response = await fetchHandler(new Request("https://worker.test/v2/playlist", {
+    headers: { "X-Ribbonfish-Device-ID": "pi-office" },
+  }), env);
   assert.equal(response.status, 401);
   assert.deepEqual(r2Gets, []);
 });
 
-test("asset endpoint only serves a hash assigned by that device manifest", async () => {
+test("asset endpoint only serves hashes in the managed playlist catalog", async () => {
   const { env, db, r2Gets } = testEnvironment();
   await authorize(db);
-  const request = (hash) => new Request(`https://worker.test/v1/assets/${hash}`, {
+  const request = (hash) => new Request(`https://worker.test/v2/assets/${hash}`, {
     headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office" },
   });
   const denied = await fetchHandler(request("b".repeat(64)), env);
   assert.equal(denied.status, 403);
-  assert.deepEqual(r2Gets, ["devices/pi-office/manifest.json"]);
+  assert.deepEqual(r2Gets, []);
 
   const allowed = await fetchHandler(request(digest), env);
   assert.equal(allowed.status, 200);
   assert.deepEqual(new Uint8Array(await allowed.arrayBuffer()), new Uint8Array([1, 2, 3, 4]));
-  assert.deepEqual(r2Gets.slice(-2), ["devices/pi-office/manifest.json", `assets/${digest}`]);
+  assert.deepEqual(r2Gets, [`assets/${digest}`]);
 });
 
 test("enrollment consumes a one-time code and stores only the device token hash", async () => {
@@ -183,41 +226,47 @@ test("concurrent enrollment for the same device consumes only the winning code",
   assert.equal(db.enrollments.filter((item) => item.consumed_at !== null).length, 1);
 });
 
-test("manifest validation rejects arbitrary asset URLs and invalid digests", async () => {
-  const { env, db } = testEnvironment({ manifestValue: {
-    ...manifest,
-    playlists: [{ id: "welcome", assets: [{ sha256: "not-a-hash", size: 4, url: "https://attacker.test/x" }] }],
+test("playlist validation rejects invalid stored asset digests", async () => {
+  const { env, db } = testEnvironment({ playlistValue: {
+    ...playlist,
+    assets: [{ sha256: "not-a-hash", size: 4 }],
   } });
   await authorize(db);
-  const response = await fetchHandler(new Request("https://worker.test/v1/devices/pi-office/manifest", {
-    headers: { Authorization: `Bearer ${token}` },
+  const response = await fetchHandler(new Request("https://worker.test/v2/playlist", {
+    headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office" },
   }), env);
   assert.equal(response.status, 502);
 });
 
-test("Pi 3 A+ sync manifest matches the bundled profile and image bytes", async () => {
-  const profile = JSON.parse(await readFile(new URL("../../../agent/defaults/pi3a-plus.json", import.meta.url), "utf8"));
-  const piManifest = JSON.parse(await readFile(new URL("../examples/manifest.pi3a-plus.json", import.meta.url), "utf8"));
-  assert.deepEqual(piManifest.displays, [{ id: "display-main", playlist_id: "operations", rotation_interval: "15s" }]);
-
-  const configured = profile.playlists.find((playlist) => playlist.id === "operations");
-  const synced = piManifest.playlists.find((playlist) => playlist.id === "operations");
-  assert.ok(configured);
-  assert.ok(synced);
-  assert.equal(configured.assets.length, synced.assets.length);
-  for (let index = 0; index < configured.assets.length; index++) {
-    const source = configured.assets[index];
-    const assetPath = new URL(`../../../agent/defaults/${source.path}`, import.meta.url);
-    const bytes = await readFile(assetPath);
-    const sha256 = createHash("sha256").update(bytes).digest("hex");
-    assert.deepEqual(synced.assets[index], { sha256, size: bytes.byteLength });
+test("playlist validation rejects durations the Go agent cannot parse", async () => {
+  for (const rotation_interval of ["0.1ns", "999999999999999999999h"]) {
+    const { env, db } = testEnvironment({ playlistValue: { ...playlist, rotation_interval } });
+    await authorize(db);
+    const response = await fetchHandler(new Request("https://worker.test/v2/playlist", {
+      headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office" },
+    }), env);
+    assert.equal(response.status, 502, rotation_interval);
   }
+});
 
-  const { env, db } = testEnvironment({ manifestValue: piManifest });
-  await authorize(db);
-  const response = await fetchHandler(new Request("https://worker.test/v1/devices/pi-office/manifest", {
-    headers: { Authorization: `Bearer ${token}` },
-  }), env);
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), piManifest);
+test("default Worker playlist assets match the bundled images", async () => {
+  const defaultPlaylist = JSON.parse(await readFile(new URL("../defaults/default-playlist.json", import.meta.url), "utf8"));
+  const profile = JSON.parse(await readFile(new URL("../../../agent/defaults/pi3a-plus.json", import.meta.url), "utf8"));
+  assert.equal(defaultPlaylist.id, "default");
+  assert.equal(defaultPlaylist.rotation_interval, "15s");
+  assert.equal(profile.playlist.id, defaultPlaylist.id);
+  assert.equal(profile.playlist.rotation_interval, defaultPlaylist.rotation_interval);
+  assert.equal(profile.playlist.assets.length, defaultPlaylist.assets.length);
+  for (const asset of defaultPlaylist.assets) {
+    const assetPath = new URL(asset.path, new URL("../defaults/default-playlist.json", import.meta.url));
+    const bytes = await readFile(assetPath);
+    assert.deepEqual(
+      { sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.byteLength },
+      { sha256: asset.sha256, size: asset.size },
+    );
+  }
+  assert.deepEqual(
+    profile.playlist.assets.map(({ sha256 }) => sha256),
+    defaultPlaylist.assets.map(({ sha256 }) => sha256),
+  );
 });

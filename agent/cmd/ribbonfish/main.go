@@ -122,7 +122,7 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	logger.Info("agent configuration loaded", "displays", len(cfg.Displays), "playlists", len(cfg.Playlists))
+	logger.Info("agent configuration loaded", "displays", len(cfg.Displays), "playlist_id", cfg.Playlist.ID)
 	if ctx.Err() != nil {
 		logger.Info("agent shutdown complete", "reason", context.Cause(ctx))
 		return nil
@@ -138,7 +138,7 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 	if snapshot, loadErr := syncer.LoadSnapshot(snapshotPath, hardwareConfig, imageCache); loadErr == nil {
 		cfg = snapshot.Config
 		activeSnapshot = &snapshot
-		logger.Info("last-good remote content loaded", "revision", snapshot.Manifest.Revision)
+		logger.Info("last-good remote content loaded", "revision", snapshot.Snapshot.Revision)
 	} else if !errors.Is(loadErr, os.ErrNotExist) {
 		logger.Warn("last-good remote content is unavailable; using bundled content", "error", loadErr)
 	}
@@ -215,20 +215,20 @@ func runSyncLoop(ctx context.Context, synchronizer syncer.Synchronizer, hardware
 			if err := syncer.SaveSnapshot(snapshotPath, update); err != nil {
 				logger.Warn("could not persist remote content; keeping last good content", "error", err)
 				if restoreErr := restoreSnapshot(snapshotPath, previous); restoreErr != nil {
-					logger.Warn("could not restore last-good manifest", "error", restoreErr)
+					logger.Warn("could not restore last-good snapshot", "error", restoreErr)
 				}
 				rollbackETag(synchronizer, previous)
 				restoreActivePins(ctx, synchronizer, previousConfig)
 			} else if err := playback.ApplyConfig(ctx, update.Config); err != nil {
 				logger.Warn("could not activate remote content; keeping last good content", "error", err)
 				if restoreErr := restoreSnapshot(snapshotPath, previous); restoreErr != nil {
-					logger.Warn("could not restore last-good manifest", "error", restoreErr)
+					logger.Warn("could not restore last-good snapshot", "error", restoreErr)
 				}
 				rollbackETag(synchronizer, previous)
 				restoreActivePins(ctx, synchronizer, previousConfig)
 			} else {
 				activeSnapshot = &update
-				logger.Info("remote content snapshot activated", "revision", update.Manifest.Revision)
+				logger.Info("remote content snapshot activated", "revision", update.Snapshot.Revision)
 				retryDelay = 5 * time.Second
 			}
 		} else {
@@ -264,15 +264,15 @@ func restoreActivePins(ctx context.Context, synchronizer syncer.Synchronizer, ac
 func restoreSnapshot(path string, snapshot *syncer.Update) error {
 	if snapshot == nil {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove rejected last-good manifest: %w", err)
+			return fmt.Errorf("remove rejected last-good snapshot: %w", err)
 		}
 		directory, err := os.Open(filepath.Dir(path))
 		if err != nil {
-			return fmt.Errorf("open last-good manifest directory: %w", err)
+			return fmt.Errorf("open last-good snapshot directory: %w", err)
 		}
 		defer directory.Close()
 		if err := directory.Sync(); err != nil {
-			return fmt.Errorf("sync last-good manifest directory: %w", err)
+			return fmt.Errorf("sync last-good snapshot directory: %w", err)
 		}
 		return nil
 	}

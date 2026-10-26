@@ -17,11 +17,11 @@ The initial use case is a fleet of Raspberry Pis showing company websites and Up
 ## How It Works
 
 1. The container starts from a bundled, hardware-specific default config and starter images.
-2. An enrolled device can poll an authenticated Worker for a versioned content manifest and images held in R2.
-3. The Go agent verifies image hashes, caches content, and rotates local playlists through the simulator or DRM/KMS output.
+2. Every enrolled device polls an authenticated Worker for the same globally active playlist and its images held in R2.
+3. The Go agent verifies image hashes, caches a local copy, and rotates that shared playlist on each output through the simulator or DRM/KMS.
 4. It keeps the active snapshot and continues displaying it when sync is disabled or the network is unavailable.
 
-**Implementation status:** The agent ships Pi 3 A+, Pi 3B, Pi 4, and simulator profiles with sample images. Optional sync is implemented in the Go agent and the Worker under [`workers/device-sync`](workers/device-sync/README.md): one-time codes enroll devices, D1 stores token hashes, and the Worker uses an R2 binding to serve only a device's manifest and assigned image hashes. Candidate snapshots are validated and applied atomically; failed sync leaves the previous snapshot active. The Worker and Go client are tested locally, but a deployed Cloudflare account and end-to-end Cloudflare credentials are not part of this repository setup.
+**Implementation status:** The agent ships Pi 3 A+, Pi 3B, Pi 4, and simulator profiles with sample images. Optional sync is implemented in the Go agent and the Worker under [`workers/device-sync`](workers/device-sync/README.md): one-time codes enroll devices, D1 stores token hashes and a playlist catalog, and every enrolled agent reads the same active playlist. Candidate snapshots are validated and applied atomically; failed sync leaves the previous snapshot active. Playlist releases use a trusted Wrangler bootstrap process; there is no playlist management UI or write API. The Worker and Go client are tested locally, but a deployed Cloudflare account and end-to-end Cloudflare credentials are not part of this repository setup.
 
 The DRM backend configures named connectors, selects advertised modes, and uses XRGB8888 dumb buffers with page flips. It is experimental: one single-display Pi 3 A+ has passed physical KMS and visible-frame acceptance, while Pi 3B and Pi 4 dual-output behavior remain open.
 
@@ -43,7 +43,8 @@ container compatibility only and does not replace physical Pi testing.
 ## Goals
 
 - Run on Raspberry Pi 3B and 4 without a full desktop, Chromium, or a browser extension.
-- Centrally configure sites, per-site capture schedules, playlists, devices, and physical outputs.
+- Centrally configure sites, per-site capture schedules, managed playlists, devices, and physical outputs.
+- Select one active playlist globally; enrolled devices keep verified local copies and poll for changes.
 - Support one or multiple independent HDMI outputs per device.
 - Continue displaying cached content during Cloudflare or network outages.
 - Render a given site/viewport variant once and reuse its screenshot across devices.
@@ -76,8 +77,8 @@ flowchart TD
     Renderer --> R2[(R2: Versioned Screenshots)]
     Renderer --> D1
 
-    Pi1[Go Display Agent: Pi 3B] -->|HTTPS: Config and Manifest| API
-    Pi2[Go Display Agent: Pi 4] -->|HTTPS: Config and Manifest| API
+    Pi1[Go Display Agent: Pi 3B] -->|HTTPS: Config and active playlist| API
+    Pi2[Go Display Agent: Pi 4] -->|HTTPS: Config and active playlist| API
 
     Pi1 -->|HTTPS: Image Download| API
     Pi2 -->|HTTPS: Image Download| API
@@ -95,16 +96,16 @@ flowchart TD
 
 Ribbonfish deliberately supports **no screenshot capture interval shorter than 60 seconds**. A single once-per-minute Cloudflare Cron Trigger dispatches due work using D1 scheduling state and Queues. This avoids sub-minute timers, delayed-message scheduling loops, and Durable Objects. Capture intervals are configuration values, not promises of exact wall-clock execution; browser rendering and device synchronisation add further freshness latency. Reject capture intervals below `60s` at the API and configuration-validation boundaries.
 
-**Durable Objects are explicitly out of scope**, including for device presence, push commands, and display coordination. Devices poll for configuration and manifests, and all playlist rotation is local. Reconsidering this decision requires a new, demonstrated product requirement rather than speculative extensibility.
+**Durable Objects are explicitly out of scope**, including for device presence, push commands, and display coordination. Devices poll for configuration and the globally active playlist, and all playlist rotation is local. Reconsidering this decision requires a new, demonstrated product requirement rather than speculative extensibility.
 
 ## Cloud Services
 
 | Component | Responsibility and implementation status |
 |------------|-------------------------|
-| Workers | The authenticated device sync and enrollment endpoints are implemented in `workers/device-sync`; the management UI, renderer API, and capture pipeline remain proposed |
-| D1 | The sync Worker uses D1 for per-device credential hashes and one-time enrollment codes; broader capture and management state remains proposed |
+| Workers | The authenticated global playlist sync and enrollment endpoints are implemented in `workers/device-sync`; playlist changes use a trusted Wrangler process; the management UI, renderer API, and capture pipeline remain proposed |
+| D1 | The sync Worker uses D1 for a versioned playlist catalog, the single active-playlist pointer, per-device credential hashes, and one-time enrollment codes; broader capture state remains proposed |
 | Browser Run | Headless page rendering and screenshot capture, with explicit viewport and load/wait policies |
-| R2 | The sync Worker reads private manifests and content-addressed images through an R2 binding; screenshot retention and capture publication remain proposed |
+| R2 | The sync Worker reads private content-addressed images through an R2 binding; screenshot retention and capture publication remain proposed |
 | Queues | Single-consumer, single-message capture execution, bounded retries, and backlog control |
 | Scheduled Worker (Cron Trigger) | Run every minute, check D1 for due variants, and enqueue deduplicated capture jobs |
 
@@ -116,7 +117,7 @@ Cloudflare Browser Run supports screenshot Quick Actions and browser sessions. T
 
 ### Deployment model
 
-The experimental deployment is **Docker Compose on Raspberry Pi OS Lite**, with no graphical desktop, Chromium, X11, or Wayland session. The container includes its default profile and starter images, so the offline Compose setup needs no host-mounted config or asset files. It maps one DRM card, persists cache, last-good manifest, and the per-device credential in a state volume, and runs non-root with a read-only root filesystem and no added capabilities. Networking defaults to `none`; set it to `bridge` only for enrollment or optional sync. GitHub Actions publishes an ARMv7/ARM64 GHCR release image for `v*` tags and a multi-architecture Docker Hub image (`amd64`, `arm64`, and `arm/v7`) after a PR merges into `main`, tagged `latest` and with the immutable merge SHA (`sha-<SHA>`). Use a SHA tag for repeatable deployments. The image must already be present on the Pi for a fully offline first start.
+The experimental deployment is **Docker Compose on Raspberry Pi OS Lite**, with no graphical desktop, Chromium, X11, or Wayland session. The container includes its default profile and starter images, so the offline Compose setup needs no host-mounted config or asset files. It maps one DRM card, persists cache, last-good playlist snapshot, and the per-device credential in a state volume, and runs non-root with a read-only root filesystem and no added capabilities. Networking defaults to `none`; set it to `bridge` only for enrollment or optional sync. GitHub Actions publishes an ARMv7/ARM64 GHCR release image for `v*` tags and a multi-architecture Docker Hub image (`amd64`, `arm64`, and `arm/v7`) after a PR merges into `main`, tagged `latest` and with the immutable merge SHA (`sha-<SHA>`). Use a SHA tag for repeatable deployments. The image must already be present on the Pi for a fully offline first start.
 
 The Compose deployment maps only the selected DRM card and its numeric device group. The agent requests DRM master, configures the selected connector(s), and takes over scanout; the host display manager or compositor must release that card. Device access does not guarantee DRM master ownership or multi-output support. Select the bundled profile and verify the device path, group, and connector on each Pi. Avoid `privileged: true`.
 
@@ -125,12 +126,12 @@ A small Go agent, packaged as a multi-architecture OCI image and deployed primar
 
 1. Identify available DRM/KMS connectors, supported modes, and output identities.
 2. Start from a bundled profile and optionally authenticate to the sync Worker with a per-device token.
-3. Poll for a complete versioned content snapshot and download changed images with SHA-256 checks.
+3. Poll for the globally active versioned playlist and download changed images with SHA-256 checks.
 4. Decode and present images through a DRM/KMS display backend, without X11, Wayland, or Chromium.
-5. Independently rotate playlists on each physical output.
+5. Rotate the same playlist independently on each physical output using its shared rotation interval.
 6. Keep the last-good snapshot through reboots and disconnections.
 
-Remote manifests update playlists and rotation intervals only. Hardware output, cache paths, and DRM device mappings remain local to the Pi.
+The remote playlist controls its asset order and rotation interval. Every local output uses that same playlist; output hardware, cache paths, and DRM device mappings remain local to the Pi.
 
 > The direct DRM/KMS code is an experimental implementation. Single-display 1920x1080 KMS state and frame updates have been verified over SSH on a Pi 3 Model A Plus, and the user confirmed the sample slides were visible. Physical proof is still required for Pi 3B scanout, simultaneous distinct frames on Pi 4 HDMI outputs, hotplug/recovery, and other kernel/display combinations.
 
@@ -150,11 +151,11 @@ How frequently Cloudflare creates a fresh screenshot of a site/variant. **Minimu
 
 ### Rotation Duration
 
-How long an image remains visible before the device advances to the next playlist item.
+How long an image remains visible before each output advances to the next item in the globally active playlist. The interval is part of the playlist and is shared by all devices.
 
 ### Device Sync Interval
 
-How frequently the agent checks for updated image manifests. The Go agent defaults to one minute; Compose can override this with `RIBBONFISH_SYNC_INTERVAL`.
+How frequently the agent checks for an updated active playlist snapshot. The Go agent defaults to one minute; Compose can override this with `RIBBONFISH_SYNC_INTERVAL`.
 
 These are separate settings. A display can rotate between two cached screenshots every 20 seconds even when one screenshot is captured daily and another every 60 seconds. The 60-second minimum applies **only to screenshot capture**, not to local playlist dwell times or device synchronisation.
 
@@ -182,12 +183,11 @@ sites:
 
 playlists:
   - id: office-rotation
+    rotation_interval: 60s
     entries:
       - variant: future-tools-landscape
-        display_duration: 60s
 
       - variant: uptime-landscape
-        display_duration: 60s
 
 devices:
   - id: office-pi-4
@@ -195,10 +195,9 @@ devices:
 
     outputs:
       - connector: HDMI-A-1
-        playlist: office-rotation
-
       - connector: HDMI-A-2
-        playlist: office-rotation
+
+active_playlist: office-rotation
 ```
 
 > This is an illustrative product schema, not an implemented configuration format.
@@ -279,7 +278,7 @@ The optimiser sits **after deterministic eligibility checks and before the singl
 
 ### 1. Provision a Device
 
-An administrator creates a device and assigns one or more output playlists.
+An administrator enrolls a device. Every enrolled device receives the globally active playlist; playlist assignment is not stored per device or output. Playlist releases are published by a trusted Wrangler process.
 
 A one-time enrollment credential is exchanged for scoped device credentials. The agent downloads its initial configuration and cached images, then starts presenting content.
 
@@ -311,7 +310,7 @@ Reuse is allowed only when those inputs and access permissions are compatible.
 
 ### 3. Synchronize a Device
 
-The agent periodically requests a signed or authenticated configuration manifest.
+The agent periodically requests the authenticated global playlist snapshot. It includes the ordered assets and rotation interval shared by all devices.
 
 If the version has changed, it:
 
@@ -323,19 +322,11 @@ A bounded number of previous versions are retained for recovery.
 
 An interrupted download must never replace a valid image.
 
-### 4. Rotate Independently per Display
+### 4. Rotate the Shared Playlist on Each Display
 
-Each output maintains its own:
+Each output maintains its own playback position and time anchor while using the same active playlist and rotation interval. Rotation happens locally. Changing the global active playlist is detected by each device during its next poll.
 
-- Playlist index
-- Dwell timer
-- Current image
-
-Rotation happens locally and independently of Cloudflare.
-
-A device with two HDMI outputs may show different playlists simultaneously.
-
-New image versions replace relevant cached assets without resetting unrelated display timers.
+All outputs on a device show the same selected playlist item at a given time. New playlist versions activate atomically after their assets pass verification.
 
 ### 5. Operate Offline
 
@@ -494,11 +485,11 @@ Add:
 ### Phase 3 — Fleet Management
 
 The device-side fleet slice is implemented: one-time enrollment, per-device
-credentials, authenticated manifest and asset delivery, local playlists, and
-output assignments. Remaining fleet-management work includes:
+credentials, authenticated global playlist and asset delivery, verified local
+playlist copies, and local output settings. Remaining fleet-management work includes:
 
 - Basic management UI
-- Device registry and assignment management
+- Playlist catalog and active-playlist controls
 - Credential rotation and operator audit events
 
 ### Phase 4 — Operational Hardening
@@ -558,11 +549,12 @@ The repository should ultimately include:
 2. Stable physical display identity across reboot and connector reordering.
 3. Cron-based due-job claim strategy, handling of missed minutes, and acceptable capture timing drift.
 4. Browser Run Quick Actions versus persistent sessions for complex or authenticated pages.
-5. Device authentication, enrollment, and per-device asset delivery are
-   implemented in the sync Worker; credential rotation remains open.
+5. Device authentication and enrollment are implemented in the sync Worker.
+   Authenticated devices receive the same active playlist and managed assets;
+   credential rotation remains open.
 6. Image format, compression, scaling, storage retention, and delivery method.
 7. Whether a shared 60-second screenshot is sufficiently fresh for operational monitoring.
 8. Container permissions and DRM master ownership on Pi 3B and Pi 4.
 9. Capture concurrency limits, missed-job reconciliation, and capture cost ceilings.
-10. Administrator authentication; device-scoped asset delivery is implemented
+10. Administrator authentication; asset requests are authenticated per device
     in the sync Worker.

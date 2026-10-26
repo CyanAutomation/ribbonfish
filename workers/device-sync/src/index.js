@@ -1,9 +1,9 @@
-const MAX_MANIFEST_BYTES = 1 << 20;
+import { isValidPositiveDuration } from "./duration.js";
+
 const MAX_ENROLLMENT_BYTES = 4 << 10;
 const MAX_ASSET_BYTES = 32 << 20;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
-const DURATION_PATTERN = /^(?:[0-9]+(?:\.[0-9]+)?(?:ns|us|µs|ms|s|m|h))+$/;
 
 class HTTPError extends Error {
   constructor(status, message) {
@@ -26,32 +26,31 @@ export async function fetchHandler(request, env) {
       return await enroll(request, env);
     }
 
-    const manifestMatch = url.pathname.match(/^\/v1\/devices\/([^/]+)\/manifest$/);
-    if (manifestMatch) {
+    if (url.pathname === "/v2/playlist") {
       if (request.method !== "GET") return methodNotAllowed("GET");
-      const deviceID = decodeURIComponent(manifestMatch[1]);
-      const device = await authenticate(request, env, deviceID);
-      const { manifest, etag } = await readAssignedManifest(env, device);
+      const deviceID = request.headers.get("X-Ribbonfish-Device-ID") ?? "";
+      await authenticate(request, env, deviceID);
+      const { playlist, etag } = await readActivePlaylist(env);
       if (matchesETag(request.headers.get("If-None-Match"), etag)) {
         return new Response(null, { status: 304, headers: privateHeaders({ ETag: etag }) });
       }
-      return jsonResponse(manifest, 200, { ETag: etag });
+      return jsonResponse(playlist, 200, { ETag: etag });
     }
 
-    const assetMatch = url.pathname.match(/^\/v1\/assets\/([a-f0-9]{64})$/);
+    const assetMatch = url.pathname.match(/^\/v2\/assets\/([a-f0-9]{64})$/);
     if (assetMatch) {
       if (request.method !== "GET") return methodNotAllowed("GET");
       const digest = assetMatch[1];
       const deviceID = request.headers.get("X-Ribbonfish-Device-ID") ?? "";
-      const device = await authenticate(request, env, deviceID);
-      const { manifest } = await readAssignedManifest(env, device);
-      const assigned = manifest.playlists.flatMap((playlist) => playlist.assets)
-        .find((asset) => asset.sha256 === digest);
-      if (!assigned) throw new HTTPError(403, "asset is not assigned to this device");
+      await authenticate(request, env, deviceID);
+      const assigned = await env.DB.prepare(
+        "SELECT size FROM playlist_assets WHERE sha256 = ? LIMIT 1",
+      ).bind(digest).first();
+      if (!assigned) throw new HTTPError(403, "asset is not assigned to a managed playlist");
       const object = await env.ASSETS.get(`assets/${digest}`);
       if (!object) throw new HTTPError(404, "asset not found");
       if (object.size !== assigned.size || object.size > MAX_ASSET_BYTES) {
-        throw new HTTPError(502, "stored asset metadata does not match the manifest");
+        throw new HTTPError(502, "stored asset metadata does not match the playlist");
       }
       const headers = privateHeaders({
         "Content-Type": "application/octet-stream",
@@ -102,12 +101,12 @@ async function enroll(request, env) {
          AND NOT EXISTS (SELECT 1 FROM devices WHERE device_id = ?)`,
     ).bind(now, claimID, codeHash, now, data.device_id),
     env.DB.prepare(
-      `INSERT INTO devices (device_id, token_hash, manifest_key, enabled, created_at)
-       SELECT ?, ?, ?, 1, ?
+      `INSERT INTO devices (device_id, token_hash, enabled, created_at)
+       SELECT ?, ?, 1, ?
        WHERE EXISTS (
          SELECT 1 FROM enrollments WHERE code_hash = ? AND consumed_at = ? AND claim_id = ?
        ) AND NOT EXISTS (SELECT 1 FROM devices WHERE device_id = ?)`,
-    ).bind(data.device_id, tokenHash, manifestKey(data.device_id), now, codeHash, now, claimID, data.device_id),
+    ).bind(data.device_id, tokenHash, now, codeHash, now, claimID, data.device_id),
   ]);
   if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) {
     const existingAfterClaim = await env.DB.prepare(
@@ -125,9 +124,9 @@ async function authenticate(request, env, deviceID) {
   const match = authorization.match(/^Bearer ([A-Za-z0-9_-]{32,256})$/);
   if (!match) throw new HTTPError(401, "device authentication failed");
   const device = await env.DB.prepare(
-    "SELECT device_id, token_hash, manifest_key, enabled FROM devices WHERE device_id = ?",
+    "SELECT device_id, token_hash, enabled FROM devices WHERE device_id = ?",
   ).bind(deviceID).first();
-  if (!device || device.enabled !== 1 || device.manifest_key !== manifestKey(deviceID)) {
+  if (!device || device.enabled !== 1) {
     throw new HTTPError(401, "device authentication failed");
   }
   const presentedHash = await sha256Hex(match[1]);
@@ -137,51 +136,47 @@ async function authenticate(request, env, deviceID) {
   return device;
 }
 
-async function readAssignedManifest(env, device) {
-  const object = await env.ASSETS.get(device.manifest_key);
-  if (!object) throw new HTTPError(404, "manifest not found");
-  if (object.size > MAX_MANIFEST_BYTES) throw new HTTPError(502, "manifest exceeds size limit");
-  let manifest;
-  try {
-    manifest = JSON.parse(await object.text());
-    validateManifest(manifest);
-  } catch {
-    throw new HTTPError(502, "stored manifest is invalid");
+async function readActivePlaylist(env) {
+  const active = await env.DB.prepare(
+    "SELECT playlist_id, revision FROM active_playlist WHERE singleton = 1",
+  ).first();
+  if (!active || !ID_PATTERN.test(active.playlist_id ?? "") || !ID_PATTERN.test(active.revision ?? "")) {
+    throw new HTTPError(503, "no active playlist is configured");
   }
-  return { manifest, etag: `"${manifest.revision}"` };
+  const playlistRow = await env.DB.prepare(
+    "SELECT playlist_id, revision, rotation_interval FROM playlists WHERE playlist_id = ? AND revision = ?",
+  ).bind(active.playlist_id, active.revision).first();
+  if (!playlistRow) throw new HTTPError(502, "active playlist is missing");
+  const assetResult = await env.DB.prepare(
+    "SELECT sha256, size FROM playlist_assets WHERE playlist_id = ? AND revision = ? ORDER BY position",
+  ).bind(active.playlist_id, active.revision).all();
+  const playlist = {
+    version: 2,
+    revision: active.revision,
+    id: playlistRow.playlist_id,
+    rotation_interval: playlistRow.rotation_interval,
+    assets: assetResult.results,
+  };
+  try {
+    validatePlaylist(playlist);
+  } catch {
+    throw new HTTPError(502, "stored active playlist is invalid");
+  }
+  return { playlist, etag: `"${playlist.revision}"` };
 }
 
-function validateManifest(manifest) {
-  if (!hasExactKeys(manifest, ["version", "revision", "playlists", "displays"]) ||
-      manifest.version !== 1 || !ID_PATTERN.test(manifest.revision ?? "") ||
-      !Array.isArray(manifest.playlists) || manifest.playlists.length < 1 || manifest.playlists.length > 64 ||
-      !Array.isArray(manifest.displays) || manifest.displays.length < 1 || manifest.displays.length > 16) {
-    throw new Error("invalid manifest envelope");
+function validatePlaylist(playlist) {
+  if (!hasExactKeys(playlist, ["version", "revision", "id", "rotation_interval", "assets"]) ||
+      playlist.version !== 2 || !ID_PATTERN.test(playlist.revision ?? "") ||
+      !ID_PATTERN.test(playlist.id ?? "") || !isValidPositiveDuration(playlist.rotation_interval) ||
+      !Array.isArray(playlist.assets) || playlist.assets.length < 1 || playlist.assets.length > 256) {
+    throw new Error("invalid playlist envelope");
   }
-  const playlistIDs = new Set();
-  for (const playlist of manifest.playlists) {
-    if (!hasExactKeys(playlist, ["id", "assets"]) || !ID_PATTERN.test(playlist.id ?? "") ||
-        playlistIDs.has(playlist.id) || !Array.isArray(playlist.assets) ||
-        playlist.assets.length < 1 || playlist.assets.length > 256) {
-      throw new Error("invalid playlist");
+  for (const asset of playlist.assets) {
+    if (!hasExactKeys(asset, ["sha256", "size"]) || !DIGEST_PATTERN.test(asset.sha256 ?? "") ||
+        !Number.isSafeInteger(asset.size) || asset.size < 1 || asset.size > MAX_ASSET_BYTES) {
+      throw new Error("invalid asset reference");
     }
-    playlistIDs.add(playlist.id);
-    for (const asset of playlist.assets) {
-      if (!hasExactKeys(asset, ["sha256", "size"]) || !DIGEST_PATTERN.test(asset.sha256 ?? "") ||
-          !Number.isSafeInteger(asset.size) || asset.size < 1 || asset.size > MAX_ASSET_BYTES) {
-        throw new Error("invalid asset reference");
-      }
-    }
-  }
-  const displayIDs = new Set();
-  for (const display of manifest.displays) {
-    if (!hasExactKeys(display, ["id", "playlist_id", "rotation_interval"]) ||
-        !ID_PATTERN.test(display.id ?? "") || displayIDs.has(display.id) ||
-        !playlistIDs.has(display.playlist_id) || typeof display.rotation_interval !== "string" ||
-        !DURATION_PATTERN.test(display.rotation_interval) || !/[1-9]/.test(display.rotation_interval)) {
-      throw new Error("invalid display assignment");
-    }
-    displayIDs.add(display.id);
   }
 }
 
@@ -215,10 +210,6 @@ async function readJSON(request, maxBytes) {
   } catch {
     throw new HTTPError(400, "request body must be valid JSON");
   }
-}
-
-function manifestKey(deviceID) {
-  return `devices/${deviceID}/manifest.json`;
 }
 
 function randomToken() {
