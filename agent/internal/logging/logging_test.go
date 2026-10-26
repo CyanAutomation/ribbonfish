@@ -8,7 +8,7 @@ import (
 
 // Test suite contract source: docs/agent-foundation.md#local-configuration-contract.
 
-func TestNewFiltersBelowConfiguredLevel(t *testing.T) {
+func TestNewFiltersBelowConfiguredLevelAndEmitsVisibleAttributes(t *testing.T) {
 	var output bytes.Buffer
 	logger, err := New(&output, "warn")
 	if err != nil {
@@ -16,14 +16,31 @@ func TestNewFiltersBelowConfiguredLevel(t *testing.T) {
 	}
 	logger.Info("hidden")
 	logger.Warn("visible", "display_id", "left")
-	if strings.Contains(output.String(), "hidden") || !strings.Contains(output.String(), "visible") ||
-		!strings.Contains(output.String(), "level=WARN") || !strings.Contains(output.String(), "display_id=left") {
-		t.Fatalf("unexpected structured log output: %q", output.String())
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("warning logger emitted %d records, want only the warning record: %q", len(lines), output.String())
+	}
+	fields := strings.Fields(lines[0])
+	for _, want := range []string{"level=WARN", "msg=visible", "display_id=left"} {
+		found := false
+		for _, field := range fields {
+			if field == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("warning record fields = %v, missing %q", fields, want)
+		}
 	}
 }
 
-func TestNewRejectsUnknownLevel(t *testing.T) {
-	if _, err := New(&bytes.Buffer{}, "trace"); err == nil {
-		t.Fatal("New() error = nil, want unsupported level error")
+func TestNewRejectsUnsupportedLevelValues(t *testing.T) {
+	for _, level := range []string{"trace", ""} {
+		t.Run(level, func(t *testing.T) {
+			if _, err := New(&bytes.Buffer{}, level); err == nil || err.Error() != `unsupported log level "`+level+`"` {
+				t.Fatalf("New(%q) error = %v, want unsupported log level diagnostic", level, err)
+			}
+		})
 	}
 }
