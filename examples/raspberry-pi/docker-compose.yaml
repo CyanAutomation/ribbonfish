@@ -2,7 +2,7 @@ name: ribbonfish
 
 services:
   agent:
-    image: cyanautomation/ribbonfish:${RIBBONFISH_VERSION:?Set RIBBONFISH_VERSION to a published sha-<commit> tag}
+    image: cyanautomation/ribbonfish:${RIBBONFISH_VERSION:?Set RIBBONFISH_VERSION to latest or a published sha-<commit> tag}
     restart: unless-stopped
     init: true
     stop_grace_period: 15s
