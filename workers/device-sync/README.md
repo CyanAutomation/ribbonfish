@@ -71,17 +71,17 @@ and sizes, uploads immutable images to `assets/<lowercase-sha256>`, and stores a
 new revision in D1. With `--activate`, it then updates the single active pointer.
 Content is stored before the active pointer changes. Re-publishing an existing
 playlist ID creates a new revision; older revisions remain in D1 and their
-content-addressed objects remain in R2 for devices that are still finishing
-downloads. All enrolled devices see the new active revision on their next poll.
+content-addressed objects remain in R2. All enrolled devices see the new active
+revision on their next poll.
 Use `--database NAME` and `--bucket NAME` when publishing to a different
 Wrangler environment.
 
 Agent polls use `GET /v2/playlist`, conditional ETags, and
 `X-Ribbonfish-Device-ID`. The playlist response contains the playlist ID,
 rotation interval, and ordered image hashes and sizes. The Worker serves an
-image only if its hash appears in the managed playlist catalog. Every enrolled
-device can fetch any catalogued image so a playlist switch during an in-flight
-download does not invalidate the previous snapshot.
+image only if its hash appears in the active playlist revision. If the active
+playlist changes during a download, the agent rejects the incomplete candidate,
+keeps its last-good playlist, and retries against the new active revision.
 
 ## Enroll and revoke devices
 
