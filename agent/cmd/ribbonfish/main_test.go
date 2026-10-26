@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -235,6 +236,103 @@ func TestRunSyncLoopPersistsAndActivatesVerifiedContent(t *testing.T) {
 	if err := <-syncDone; err != nil {
 		t.Fatalf("sync loop = %v", err)
 	}
+}
+
+func TestRunSyncLoopLogsSuccessfulUnchangedPollsAndRecovery(t *testing.T) {
+	t.Setenv("RIBBONFISH_SYNC_INTERVAL", "1ms")
+	tests := []struct {
+		name  string
+		steps []syncResult
+		warns int
+	}{
+		{
+			name: "logs first unchanged poll once",
+			steps: []syncResult{
+				{update: syncer.Update{ETag: `"revision-current"`}},
+				{update: syncer.Update{ETag: `"revision-current"`}},
+			},
+		},
+		{
+			name: "logs success after a sync failure",
+			steps: []syncResult{
+				{err: errors.New("network unavailable")},
+				{update: syncer.Update{ETag: `"revision-current"`}},
+			},
+			warns: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			remote := &scriptedSynchronizer{steps: tt.steps, cancel: cancel, cancelOnCall: len(tt.steps)}
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+			if err := runSyncLoop(ctx, remote, config.Config{}, syncLoopTestPlayback{}, "", nil, logger); err != nil {
+				t.Fatalf("runSyncLoop() error = %v", err)
+			}
+			if got := strings.Count(logs.String(), `msg="remote synchronization succeeded"`); got != 1 {
+				t.Fatalf("successful sync log count = %d, want 1; logs: %s", got, logs.String())
+			}
+			if !strings.Contains(logs.String(), "revision-current") {
+				t.Fatalf("successful sync log omitted current revision; logs: %s", logs.String())
+			}
+			if !strings.Contains(logs.String(), "changed=false") {
+				t.Fatalf("successful unchanged sync log omitted its unchanged status; logs: %s", logs.String())
+			}
+			if got := strings.Count(logs.String(), `msg="remote synchronization failed; keeping last good content"`); got != tt.warns {
+				t.Fatalf("sync failure log count = %d, want %d; logs: %s", got, tt.warns, logs.String())
+			}
+			if got := remote.callCount(); got != len(tt.steps) {
+				t.Fatalf("Synchronize() call count = %d, want %d", got, len(tt.steps))
+			}
+		})
+	}
+}
+
+type syncLoopTestPlayback struct{}
+
+func (syncLoopTestPlayback) CurrentConfig() config.Config {
+	return config.Config{}
+}
+
+func (syncLoopTestPlayback) ApplyConfig(context.Context, config.Config) error {
+	return nil
+}
+
+type syncResult struct {
+	update syncer.Update
+	err    error
+}
+
+type scriptedSynchronizer struct {
+	mu           sync.Mutex
+	steps        []syncResult
+	calls        int
+	cancel       context.CancelFunc
+	cancelOnCall int
+}
+
+func (s *scriptedSynchronizer) Synchronize(context.Context, config.Config, config.Config) (syncer.Update, error) {
+	s.mu.Lock()
+	call := s.calls + 1
+	s.calls = call
+	step := s.steps[min(call-1, len(s.steps)-1)]
+	cancel := s.cancel
+	shouldCancel := call == s.cancelOnCall
+	s.mu.Unlock()
+	if shouldCancel {
+		cancel()
+	}
+	return step.update, step.err
+}
+
+func (s *scriptedSynchronizer) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
 }
 
 type oneShotSynchronizer struct {
