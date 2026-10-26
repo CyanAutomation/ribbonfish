@@ -3,12 +3,12 @@ name: ribbonfish-pi-simulator
 
 services:
   agent:
-    image: ribbonfish:agentlab-simulator
+    image: ribbonfish:software-simulator
     platform: linux/arm64
     build:
       context: ../../agent
     environment:
-      RIBBONFISH_PROFILE: ${RIBBONFISH_SIMULATOR_PROFILE:-simulator}
+      RIBBONFISH_PROFILE: ${RIBBONFISH_SIMULATOR_PROFILE:-simulator-pi3a-plus}
       RIBBONFISH_CACHE_DIR: /var/lib/ribbonfish/cache
     user: "65532:65532"
     init: true

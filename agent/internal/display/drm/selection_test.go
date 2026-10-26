@@ -56,6 +56,57 @@ func TestSelectConnectorModeReportsUnavailableTargets(t *testing.T) {
 	}
 }
 
+func TestValidateTargetsMatchesConfiguredHardware(t *testing.T) {
+	connectors := []Connector{{
+		Card:              0,
+		Name:              "HDMI-A-1",
+		Device:            "/dev/dri/card0",
+		DeviceNodePresent: true,
+		Driver:            "vc4-drm",
+		Status:            "connected",
+		Modes:             []string{"1920x1080i", "1280x720"},
+	}}
+	targets := []DisplayTarget{{ID: "display-main", Connector: "HDMI-A-1", Mode: "1920x1080@60"}}
+
+	if err := ValidateTargets("/dev/dri/card0", targets, connectors); err != nil {
+		t.Fatalf("ValidateTargets() error = %v", err)
+	}
+}
+
+func TestValidateTargetsRejectsUnavailableOrMismatchedHardware(t *testing.T) {
+	base := Connector{
+		Card:              0,
+		Name:              "HDMI-A-1",
+		Device:            "/dev/dri/card0",
+		DeviceNodePresent: true,
+		Status:            "connected",
+		Modes:             []string{"1920x1080"},
+	}
+	target := DisplayTarget{ID: "display-main", Connector: "HDMI-A-1", Mode: "1920x1080@60"}
+	tests := []struct {
+		name       string
+		devicePath string
+		targets    []DisplayTarget
+		connectors []Connector
+		wantError  string
+	}{
+		{name: "missing connector", devicePath: "/dev/dri/card0", targets: []DisplayTarget{target}, connectors: nil, wantError: "not found"},
+		{name: "wrong card", devicePath: "/dev/dri/card1", targets: []DisplayTarget{target}, connectors: []Connector{base}, wantError: "belongs to"},
+		{name: "missing device node", devicePath: "/dev/dri/card0", targets: []DisplayTarget{target}, connectors: []Connector{{Card: 0, Name: base.Name, Device: base.Device, Status: base.Status, Modes: base.Modes}}, wantError: "is missing"},
+		{name: "disconnected connector", devicePath: "/dev/dri/card0", targets: []DisplayTarget{target}, connectors: []Connector{{Card: 0, Name: base.Name, Device: base.Device, DeviceNodePresent: true, Status: "disconnected", Modes: base.Modes}}, wantError: "disconnected"},
+		{name: "no advertised modes", devicePath: "/dev/dri/card0", targets: []DisplayTarget{target}, connectors: []Connector{{Card: 0, Name: base.Name, Device: base.Device, DeviceNodePresent: true, Status: "connected"}}, wantError: "advertises no modes"},
+		{name: "unsupported resolution", devicePath: "/dev/dri/card0", targets: []DisplayTarget{{ID: target.ID, Connector: target.Connector, Mode: "3840x2160"}}, connectors: []Connector{base}, wantError: "does not advertise resolution 3840x2160"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateTargets(tt.devicePath, tt.targets, tt.connectors)
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("ValidateTargets() error = %v, want substring %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestSelectCRTCUsesCompatibleUnusedEncoder(t *testing.T) {
 	crtcs := []uint32{40, 41}
 	used := map[uint32]bool{40: true}

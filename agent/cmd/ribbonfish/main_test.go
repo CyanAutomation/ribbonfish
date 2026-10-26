@@ -155,6 +155,76 @@ func TestDefaultConfigPathSelectsBundledProfile(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigPathSelectsPi3APlusSimulatorProfile(t *testing.T) {
+	t.Setenv("RIBBONFISH_CONFIG_FILE", "")
+	t.Setenv("RIBBONFISH_DEFAULTS_DIR", "/usr/share/ribbonfish/defaults")
+	t.Setenv("RIBBONFISH_PROFILE", "simulator-pi3a-plus")
+	if got, want := defaultConfigPath(), "/usr/share/ribbonfish/defaults/simulator-pi3a-plus.json"; got != want {
+		t.Fatalf("defaultConfigPath() = %q, want %q", got, want)
+	}
+}
+
+func TestCheckDRMDisplaysMatchesConnectedConfiguredConnector(t *testing.T) {
+	t.Setenv("RIBBONFISH_CACHE_DIR", "")
+	t.Setenv("RIBBONFISH_DRM_DEVICE", "")
+	dir := t.TempDir()
+	devRoot := filepath.Join(dir, "dev", "dri")
+	if err := os.MkdirAll(devRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	devicePath := filepath.Join(devRoot, "card0")
+	if err := os.Symlink(os.DevNull, devicePath); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "config.json")
+	configBody := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"backend":"drm","device":"DEVICE_PATH","fit":"contain"},"playlist":{"id":"default","rotation_interval":"15s","assets":[{"path":"asset.png"}]},"displays":[{"id":"display-main","connector":"HDMI-A-1","mode":"1920x1080@60"}]}`
+	configBody = strings.Replace(configBody, "DEVICE_PATH", devicePath, 1)
+	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sysfsRoot := filepath.Join(dir, "sysfs", "drm")
+	cardDevice := filepath.Join(sysfsRoot, "card0", "device")
+	if err := os.MkdirAll(cardDevice, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	driver := filepath.Join(sysfsRoot, "drivers", "vc4-drm")
+	if err := os.MkdirAll(driver, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(driver, filepath.Join(cardDevice, "driver")); err != nil {
+		t.Fatal(err)
+	}
+	connector := filepath.Join(sysfsRoot, "card0-HDMI-A-1")
+	if err := os.MkdirAll(connector, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(connector, "status"), []byte("connected\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(connector, "modes"), []byte("1920x1080\n1280x720\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := checkDRMDisplays(configPath, sysfsRoot, devRoot, &output); err != nil {
+		t.Fatalf("checkDRMDisplays() error = %v", err)
+	}
+	if !strings.Contains(output.String(), "connector=HDMI-A-1") || !strings.Contains(output.String(), "device="+devicePath) {
+		t.Fatalf("checkDRMDisplays() output = %q, want connected device and connector summary", output.String())
+	}
+
+	if err := os.WriteFile(filepath.Join(connector, "status"), []byte("disconnected\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := checkDRMDisplays(configPath, sysfsRoot, devRoot, &output); err == nil || !strings.Contains(err.Error(), "disconnected") {
+		t.Fatalf("checkDRMDisplays() error = %v, want disconnected connector diagnostic", err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("checkDRMDisplays() wrote success output before failure: %q", output.String())
+	}
+}
+
 func TestRunSyncLoopPersistsAndActivatesVerifiedContent(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := filepath.Join(dir, "old.png")
@@ -431,7 +501,7 @@ func TestBundledProfilesLoadWithVerifiedSharedOfflinePlaylist(t *testing.T) {
 		t.Fatal("runtime.Caller() could not locate test source")
 	}
 	defaults := filepath.Clean(filepath.Join(filepath.Dir(source), "../../defaults"))
-	profiles := []string{"pi3a-plus.json", "pi3b.json", "pi4.json", "simulator.json", "simulator-pi3b.json", "simulator-pi4.json"}
+	profiles := []string{"pi3a-plus.json", "pi3b.json", "pi4.json", "simulator.json", "simulator-pi3a-plus.json", "simulator-pi3b.json", "simulator-pi4.json"}
 	var sharedPlaylist *config.PlaylistConfig
 	for _, name := range profiles {
 		t.Run(name, func(t *testing.T) {
@@ -471,7 +541,7 @@ func TestPi3APlusSimulatorUsesObservedHDMIMode(t *testing.T) {
 		t.Fatal("runtime.Caller() could not locate test source")
 	}
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(source), "../../.."))
-	configPath := filepath.Join(repoRoot, "examples/raspberry-pi/simulator-config.pi3a-plus.json")
+	configPath := filepath.Join(repoRoot, "agent/defaults/simulator-pi3a-plus.json")
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		t.Fatalf("config.Load() = %v", err)

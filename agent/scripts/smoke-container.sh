@@ -3,10 +3,10 @@ set -eu
 
 # Contract source: agent/README.md#arm-container-compatibility.
 
-platform=${1:?usage: smoke-container.sh <linux/amd64|linux/arm/v7|linux/arm64> <pi3b|pi4>}
-profile=${2:?usage: smoke-container.sh <linux/amd64|linux/arm/v7|linux/arm64> <pi3b|pi4>}
+platform=${1:?usage: smoke-container.sh <linux/amd64|linux/arm/v7|linux/arm64> <pi3a-plus|pi3b|pi4>}
+profile=${2:?usage: smoke-container.sh <linux/amd64|linux/arm/v7|linux/arm64> <pi3a-plus|pi3b|pi4>}
 case "$platform:$profile" in
-	linux/arm/v7:pi3b|linux/arm64:pi4|linux/amd64:pi3b|linux/amd64:pi4) ;;
+	linux/arm/v7:pi3b|linux/arm64:pi3a-plus|linux/arm64:pi4|linux/amd64:pi3a-plus|linux/amd64:pi3b|linux/amd64:pi4) ;;
   *) echo "unsupported platform/profile pair: $platform:$profile" >&2; exit 2 ;;
 esac
 
@@ -41,13 +41,20 @@ frame_update_for_display() {
 
 mkdir -p "$scratch/frames" "$scratch/offline-frames"
 
-if [ "$profile" = pi3b ]; then
-	default_profile=simulator-pi3b
-  expected_frames='display-main'
-else
-	default_profile=simulator-pi4
-  expected_frames='display-left display-right'
-fi
+case "$profile" in
+	pi3a-plus)
+		default_profile=simulator-pi3a-plus
+		expected_frames='display-main'
+		;;
+	pi3b)
+		default_profile=simulator-pi3b
+		expected_frames='display-main'
+		;;
+	pi4)
+		default_profile=simulator-pi4
+		expected_frames='display-left display-right'
+		;;
+esac
 
 playlist_shas=$(python3 -c 'import json,sys; print(" ".join(asset["sha256"] for asset in json.load(open(sys.argv[1]))["playlist"]["assets"]))' \
   "$repo_root/agent/defaults/$default_profile.json")
