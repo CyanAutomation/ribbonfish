@@ -1,9 +1,9 @@
 # Two-display software demo
 
 This demo runs the Go agent without a Raspberry Pi, DRM/KMS device, Docker, or
-network connection. Each configured display gets an independent playlist and
-rotation interval. The simulator writes its current frame as an atomically
-replaced PNG file.
+network connection. Each configured display shows the same globally active
+playlist and follows its shared rotation interval. The simulator writes each
+current frame as an atomically replaced PNG file.
 
 From the repository root:
 
@@ -12,8 +12,8 @@ cd agent
 go run ./cmd/ribbonfish -config ../examples/agent/simulator/config.json
 ```
 
-The example rotates the left display every 15 seconds and the right display
-every 9 seconds. Watch the structured logs or open these files while it runs:
+The example rotates both displays every 15 seconds. Watch the structured logs
+or open these files while it runs:
 
 - `examples/agent/simulator/var/frames/display-left.png`
 - `examples/agent/simulator/var/frames/display-right.png`
@@ -44,7 +44,7 @@ Missing or corrupt playlist items are logged and skipped, and a display keeps
 its last successfully written frame if none of its configured assets can be
 loaded. A cache directory that cannot be opened prevents startup. If the cache
 is full, the agent keeps playable cached items, reports skipped assets, and
-does not evict images protected by active playlists.
+does not evict images protected by the active playlist.
 
 Runtime files are ignored by Git. Delete `var/` to clear the simulator output
 and local device cache.

@@ -21,42 +21,32 @@ import (
 )
 
 const (
-	manifestLimit = 1 << 20
+	snapshotLimit = 1 << 20
 	assetLimit    = 32 << 20
 )
 
 var digestPattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
-var errAssetSizeMismatch = errors.New("image body size does not match manifest")
+var errAssetSizeMismatch = errors.New("image body size does not match snapshot")
 
-// Manifest is a complete desired content snapshot. It intentionally contains
-// no filesystem paths, output devices, DRM connectors, or cache settings.
-type Manifest struct {
-	Version   int                `json:"version"`
-	Revision  string             `json:"revision"`
-	Playlists []ManifestPlaylist `json:"playlists"`
-	Displays  []ManifestDisplay  `json:"displays"`
+// PlaylistSnapshot is a complete desired playlist. It contains no filesystem
+// paths, output devices, DRM connectors, or cache settings.
+type PlaylistSnapshot struct {
+	Version          int             `json:"version"`
+	Revision         string          `json:"revision"`
+	ID               string          `json:"id"`
+	RotationInterval string          `json:"rotation_interval"`
+	Assets           []PlaylistAsset `json:"assets"`
 }
 
-type ManifestPlaylist struct {
-	ID     string          `json:"id"`
-	Assets []ManifestAsset `json:"assets"`
-}
-
-type ManifestAsset struct {
+type PlaylistAsset struct {
 	SHA256 string `json:"sha256"`
 	Size   int64  `json:"size"`
-}
-
-type ManifestDisplay struct {
-	ID               string `json:"id"`
-	PlaylistID       string `json:"playlist_id"`
-	RotationInterval string `json:"rotation_interval"`
 }
 
 // Update carries a fully fetched and verified snapshot ready for activation.
 type Update struct {
 	Config   config.Config
-	Manifest Manifest
+	Snapshot PlaylistSnapshot
 	ETag     string
 	Changed  bool
 }
@@ -97,7 +87,7 @@ func NewHTTPClient(baseURL, deviceID, token string, store cache.Store, client *h
 	return &HTTPClient{baseURL: parsed, deviceID: deviceID, token: token, store: store, http: configuredHTTPClient(client)}, nil
 }
 
-// SetETag supplies the last persisted manifest tag for conditional polling.
+// SetETag supplies the last persisted snapshot tag for conditional polling.
 func (c *HTTPClient) SetETag(etag string) {
 	if strings.ContainsAny(etag, "\r\n") {
 		return
@@ -118,41 +108,42 @@ func (c *HTTPClient) Synchronize(ctx context.Context, hardware, active config.Co
 	if err := ctx.Err(); err != nil {
 		return Update{}, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("v1/devices/"+url.PathEscape(c.deviceID)+"/manifest"), nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("v2/playlist"), nil)
 	if err != nil {
-		return Update{}, fmt.Errorf("create manifest request: %w", err)
+		return Update{}, fmt.Errorf("create snapshot request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+c.token)
+	request.Header.Set("X-Ribbonfish-Device-ID", c.deviceID)
 	request.Header.Set("Accept", "application/json")
 	if c.etag != "" {
 		request.Header.Set("If-None-Match", c.etag)
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
-		return Update{}, fmt.Errorf("fetch manifest: %w", err)
+		return Update{}, fmt.Errorf("fetch snapshot: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotModified {
 		return Update{ETag: c.etag}, nil
 	}
 	if response.StatusCode != http.StatusOK {
-		return Update{}, responseError("fetch manifest", response)
+		return Update{}, responseError("fetch snapshot", response)
 	}
-	manifest, err := decodeManifest(response.Body)
+	snapshot, err := decodePlaylistSnapshot(response.Body)
 	if err != nil {
-		return Update{}, fmt.Errorf("decode manifest: %w", err)
+		return Update{}, fmt.Errorf("decode snapshot: %w", err)
 	}
-	if err := validateManifest(manifest, hardware); err != nil {
-		return Update{}, fmt.Errorf("validate manifest: %w", err)
+	if err := validatePlaylistSnapshot(snapshot, hardware); err != nil {
+		return Update{}, fmt.Errorf("validate snapshot: %w", err)
 	}
 	etag := strings.TrimSpace(response.Header.Get("ETag"))
-	if etag != "" && !manifestETagMatchesRevision(etag, manifest.Revision) {
-		return Update{}, fmt.Errorf("manifest ETag %q does not match revision %q", etag, manifest.Revision)
+	if etag != "" && !snapshotETagMatchesRevision(etag, snapshot.Revision) {
+		return Update{}, fmt.Errorf("snapshot ETag %q does not match revision %q", etag, snapshot.Revision)
 	}
-	expectedETag := `"` + manifest.Revision + `"`
+	expectedETag := `"` + snapshot.Revision + `"`
 
 	activeDigests := configDigests(active)
-	candidateDigests := manifestDigests(manifest)
+	candidateDigests := snapshotDigests(snapshot)
 	protected := append(append([]string(nil), activeDigests...), candidateDigests...)
 	if err := c.store.Prune(ctx, protected); err != nil {
 		if ctx.Err() == nil {
@@ -168,35 +159,33 @@ func (c *HTTPClient) Synchronize(ctx context.Context, hardware, active config.Co
 	}()
 
 	assets := make(map[string]cache.Asset, len(candidateDigests))
-	for _, playlist := range manifest.Playlists {
-		for _, item := range playlist.Assets {
-			digest := strings.ToLower(item.SHA256)
-			if _, exists := assets[digest]; exists {
-				continue
-			}
-			if _, err := c.store.Load(ctx, cache.Asset{SHA256: digest, Bytes: item.Size}); err == nil {
-				assets[digest] = cache.Asset{SHA256: digest, Path: "cached:" + digest, Bytes: item.Size}
-				continue
-			}
-			asset, err := c.fetchAsset(ctx, digest, item.Size)
-			if err != nil {
-				return Update{}, err
-			}
-			assets[digest] = asset
+	for _, item := range snapshot.Assets {
+		digest := strings.ToLower(item.SHA256)
+		if _, exists := assets[digest]; exists {
+			continue
 		}
+		if _, err := c.store.Load(ctx, cache.Asset{SHA256: digest, Bytes: item.Size}); err == nil {
+			assets[digest] = cache.Asset{SHA256: digest, Path: "cached:" + digest, Bytes: item.Size}
+			continue
+		}
+		asset, err := c.fetchAsset(ctx, digest, item.Size)
+		if err != nil {
+			return Update{}, err
+		}
+		assets[digest] = asset
 	}
-	candidate, err := mergeManifest(hardware, manifest, assets)
+	candidate, err := mergePlaylistSnapshot(hardware, snapshot, assets)
 	if err != nil {
 		return Update{}, err
 	}
 	etag = expectedETag
 	c.etag = etag
 	committed = true
-	return Update{Config: candidate, Manifest: manifest, ETag: etag, Changed: true}, nil
+	return Update{Config: candidate, Snapshot: snapshot, ETag: etag, Changed: true}, nil
 }
 
 func (c *HTTPClient) fetchAsset(ctx context.Context, digest string, expectedSize int64) (cache.Asset, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("v1/assets/"+digest), nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("v2/assets/"+digest), nil)
 	if err != nil {
 		return cache.Asset{}, fmt.Errorf("create image request: %w", err)
 	}
@@ -215,14 +204,14 @@ func (c *HTTPClient) fetchAsset(ctx context.Context, digest string, expectedSize
 		return cache.Asset{}, fmt.Errorf("image %s has invalid or excessive declared size %d", digest, expectedSize)
 	}
 	if response.ContentLength >= 0 && response.ContentLength != expectedSize {
-		return cache.Asset{}, fmt.Errorf("image %s length mismatch: manifest says %d bytes, server says %d", digest, expectedSize, response.ContentLength)
+		return cache.Asset{}, fmt.Errorf("image %s length mismatch: snapshot says %d bytes, server says %d", digest, expectedSize, response.ContentLength)
 	}
 	asset, err := c.store.Put(ctx, &assetSizeReader{source: response.Body, remaining: expectedSize}, digest)
 	if err != nil {
 		return cache.Asset{}, fmt.Errorf("verify and cache image %s: %w", digest, err)
 	}
 	if asset.Bytes != expectedSize {
-		return cache.Asset{}, fmt.Errorf("image %s length mismatch: manifest says %d bytes, received %d", digest, expectedSize, asset.Bytes)
+		return cache.Asset{}, fmt.Errorf("image %s length mismatch: snapshot says %d bytes, received %d", digest, expectedSize, asset.Bytes)
 	}
 	return asset, nil
 }
@@ -265,132 +254,92 @@ func (c *HTTPClient) endpoint(endpointPath string) string {
 	return base.String()
 }
 
-func decodeManifest(reader io.Reader) (Manifest, error) {
-	data, err := io.ReadAll(io.LimitReader(reader, manifestLimit+1))
+func decodePlaylistSnapshot(reader io.Reader) (PlaylistSnapshot, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, snapshotLimit+1))
 	if err != nil {
-		return Manifest{}, err
+		return PlaylistSnapshot{}, err
 	}
-	if len(data) > manifestLimit {
-		return Manifest{}, errors.New("manifest exceeds 1 MiB limit")
+	if len(data) > snapshotLimit {
+		return PlaylistSnapshot{}, errors.New("snapshot exceeds 1 MiB limit")
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(data)))
 	decoder.DisallowUnknownFields()
-	var manifest Manifest
-	if err := decoder.Decode(&manifest); err != nil {
-		return Manifest{}, err
+	var snapshot PlaylistSnapshot
+	if err := decoder.Decode(&snapshot); err != nil {
+		return PlaylistSnapshot{}, err
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		if err == nil {
-			return Manifest{}, errors.New("manifest contains multiple JSON values")
+			return PlaylistSnapshot{}, errors.New("snapshot contains multiple JSON values")
 		}
-		return Manifest{}, err
+		return PlaylistSnapshot{}, err
 	}
-	return manifest, nil
+	return snapshot, nil
 }
 
-func validateManifest(manifest Manifest, hardware config.Config) error {
-	if manifest.Version != 1 {
-		return fmt.Errorf("unsupported manifest version %d", manifest.Version)
+func validatePlaylistSnapshot(snapshot PlaylistSnapshot, hardware config.Config) error {
+	if snapshot.Version != 2 {
+		return fmt.Errorf("unsupported playlist snapshot version %d", snapshot.Version)
 	}
-	if !validID(manifest.Revision) {
+	if !validID(snapshot.Revision) {
 		return errors.New("revision must be a 1-64 character identifier")
 	}
-	if len(manifest.Playlists) == 0 || len(manifest.Playlists) > 64 {
-		return errors.New("manifest must contain between 1 and 64 playlists")
+	if !validID(snapshot.ID) {
+		return fmt.Errorf("invalid playlist id %q", snapshot.ID)
 	}
-	if len(manifest.Displays) != len(hardware.Displays) || len(manifest.Displays) > 16 {
-		return errors.New("manifest display set must match the local hardware profile")
+	interval, err := time.ParseDuration(snapshot.RotationInterval)
+	if err != nil {
+		return fmt.Errorf("playlist %q has invalid rotation interval: %w", snapshot.ID, err)
 	}
-	hardwareDisplays := make(map[string]struct{}, len(hardware.Displays))
-	for _, item := range hardware.Displays {
-		hardwareDisplays[item.ID] = struct{}{}
+	if interval <= 0 {
+		return fmt.Errorf("playlist %q rotation interval must be positive", snapshot.ID)
 	}
-	playlists := make(map[string]struct{}, len(manifest.Playlists))
+	if len(snapshot.Assets) == 0 || len(snapshot.Assets) > 256 {
+		return fmt.Errorf("playlist %q must contain between 1 and 256 assets", snapshot.ID)
+	}
 	assets := make(map[string]int64)
-	for _, playlist := range manifest.Playlists {
-		if !validID(playlist.ID) {
-			return fmt.Errorf("invalid playlist id %q", playlist.ID)
+	for _, asset := range snapshot.Assets {
+		if !digestPattern.MatchString(asset.SHA256) {
+			return fmt.Errorf("playlist %q has invalid SHA-256 digest", snapshot.ID)
 		}
-		if _, exists := playlists[playlist.ID]; exists {
-			return fmt.Errorf("duplicate playlist id %q", playlist.ID)
+		if asset.Size <= 0 || asset.Size > assetLimit {
+			return fmt.Errorf("playlist %q has invalid or excessive image size %d", snapshot.ID, asset.Size)
 		}
-		playlists[playlist.ID] = struct{}{}
-		if len(playlist.Assets) == 0 || len(playlist.Assets) > 256 {
-			return fmt.Errorf("playlist %q must contain between 1 and 256 assets", playlist.ID)
+		digest := strings.ToLower(asset.SHA256)
+		if previous, exists := assets[digest]; exists && previous != asset.Size {
+			return fmt.Errorf("asset %s has conflicting declared sizes", digest)
 		}
-		for _, asset := range playlist.Assets {
-			if !digestPattern.MatchString(asset.SHA256) {
-				return fmt.Errorf("playlist %q has invalid SHA-256 digest", playlist.ID)
-			}
-			if asset.Size <= 0 || asset.Size > assetLimit {
-				return fmt.Errorf("playlist %q has invalid or excessive image size %d", playlist.ID, asset.Size)
-			}
-			digest := strings.ToLower(asset.SHA256)
-			if previous, exists := assets[digest]; exists && previous != asset.Size {
-				return fmt.Errorf("asset %s has conflicting declared sizes", digest)
-			}
-			assets[digest] = asset.Size
-		}
-	}
-	for _, item := range manifest.Displays {
-		if !validID(item.ID) {
-			return fmt.Errorf("invalid display id %q", item.ID)
-		}
-		if _, exists := hardwareDisplays[item.ID]; !exists {
-			return fmt.Errorf("manifest display %q is not present in the local hardware profile", item.ID)
-		}
-		if _, exists := playlists[item.PlaylistID]; !exists {
-			return fmt.Errorf("display %q references unknown playlist %q", item.ID, item.PlaylistID)
-		}
-		if _, err := time.ParseDuration(item.RotationInterval); err != nil {
-			return fmt.Errorf("display %q has invalid rotation interval: %w", item.ID, err)
-		}
-		if duration, _ := time.ParseDuration(item.RotationInterval); duration <= 0 {
-			return fmt.Errorf("display %q rotation interval must be positive", item.ID)
-		}
+		assets[digest] = asset.Size
 	}
 	if len(assets) > 512 {
-		return errors.New("manifest exceeds the 512 unique image limit")
+		return errors.New("playlist exceeds the 512 unique image limit")
 	}
 	var totalAssetBytes int64
 	for _, size := range assets {
-		// Manifest limits keep size bounded, so this subtraction cannot underflow;
+		// Playlist snapshot limits keep size bounded, so this subtraction cannot underflow;
 		// it also avoids overflowing a sum before comparing with the cache limit.
 		if totalAssetBytes > hardware.Cache.MaxBytes-size {
-			return errors.New("manifest assets exceed the device cache budget")
+			return errors.New("snapshot assets exceed the device cache budget")
 		}
 		totalAssetBytes += size
 	}
 	return nil
 }
 
-func mergeManifest(hardware config.Config, manifest Manifest, assets map[string]cache.Asset) (config.Config, error) {
+func mergePlaylistSnapshot(hardware config.Config, snapshot PlaylistSnapshot, assets map[string]cache.Asset) (config.Config, error) {
 	candidate := copyConfig(hardware)
-	candidate.Playlists = make([]config.PlaylistConfig, 0, len(manifest.Playlists))
-	for _, playlist := range manifest.Playlists {
-		local := config.PlaylistConfig{ID: playlist.ID, Assets: make([]config.AssetConfig, 0, len(playlist.Assets))}
-		for _, item := range playlist.Assets {
-			digest := strings.ToLower(item.SHA256)
-			asset, ok := assets[digest]
-			if !ok || asset.Path == "" {
-				return config.Config{}, fmt.Errorf("image %s is not cached", digest)
-			}
-			local.Assets = append(local.Assets, config.AssetConfig{Path: asset.Path, SHA256: digest})
-		}
-		candidate.Playlists = append(candidate.Playlists, local)
+	candidate.Playlist = config.PlaylistConfig{
+		ID: snapshot.ID, RotationInterval: snapshot.RotationInterval,
+		Assets: make([]config.AssetConfig, 0, len(snapshot.Assets)),
 	}
-	remoteDisplays := make(map[string]ManifestDisplay, len(manifest.Displays))
-	for _, item := range manifest.Displays {
-		remoteDisplays[item.ID] = item
-	}
-	for i := range candidate.Displays {
-		remote, ok := remoteDisplays[candidate.Displays[i].ID]
-		if !ok {
-			return config.Config{}, fmt.Errorf("manifest is missing local display %q", candidate.Displays[i].ID)
+	for _, item := range snapshot.Assets {
+		digest := strings.ToLower(item.SHA256)
+		asset, ok := assets[digest]
+		if !ok || asset.Path == "" {
+			return config.Config{}, fmt.Errorf("image %s is not cached", digest)
 		}
-		candidate.Displays[i].PlaylistID = remote.PlaylistID
-		candidate.Displays[i].RotationInterval = remote.RotationInterval
+		candidate.Playlist.Assets = append(candidate.Playlist.Assets, config.AssetConfig{Path: asset.Path, SHA256: digest})
 	}
 	if err := candidate.Validate(); err != nil {
 		return config.Config{}, fmt.Errorf("validate merged content: %w", err)
@@ -400,24 +349,19 @@ func mergeManifest(hardware config.Config, manifest Manifest, assets map[string]
 
 func copyConfig(source config.Config) config.Config {
 	copy := source
-	copy.Playlists = append([]config.PlaylistConfig(nil), source.Playlists...)
-	for i := range copy.Playlists {
-		copy.Playlists[i].Assets = append([]config.AssetConfig(nil), source.Playlists[i].Assets...)
-	}
+	copy.Playlist.Assets = append([]config.AssetConfig(nil), source.Playlist.Assets...)
 	copy.Displays = append([]config.DisplayConfig(nil), source.Displays...)
 	return copy
 }
 
-func manifestDigests(manifest Manifest) []string {
+func snapshotDigests(snapshot PlaylistSnapshot) []string {
 	seen := make(map[string]struct{})
 	var digests []string
-	for _, playlist := range manifest.Playlists {
-		for _, asset := range playlist.Assets {
-			digest := strings.ToLower(asset.SHA256)
-			if _, ok := seen[digest]; !ok {
-				seen[digest] = struct{}{}
-				digests = append(digests, digest)
-			}
+	for _, asset := range snapshot.Assets {
+		digest := strings.ToLower(asset.SHA256)
+		if _, ok := seen[digest]; !ok {
+			seen[digest] = struct{}{}
+			digests = append(digests, digest)
 		}
 	}
 	return digests
@@ -426,16 +370,14 @@ func manifestDigests(manifest Manifest) []string {
 func configDigests(cfg config.Config) []string {
 	seen := make(map[string]struct{})
 	var digests []string
-	for _, playlist := range cfg.Playlists {
-		for _, asset := range playlist.Assets {
-			if !digestPattern.MatchString(asset.SHA256) {
-				continue
-			}
-			digest := strings.ToLower(asset.SHA256)
-			if _, ok := seen[digest]; !ok {
-				seen[digest] = struct{}{}
-				digests = append(digests, digest)
-			}
+	for _, asset := range cfg.Playlist.Assets {
+		if !digestPattern.MatchString(asset.SHA256) {
+			continue
+		}
+		digest := strings.ToLower(asset.SHA256)
+		if _, ok := seen[digest]; !ok {
+			seen[digest] = struct{}{}
+			digests = append(digests, digest)
 		}
 	}
 	return digests
@@ -482,7 +424,7 @@ func validID(value string) bool {
 	return true
 }
 
-func manifestETagMatchesRevision(etag, revision string) bool {
+func snapshotETagMatchesRevision(etag, revision string) bool {
 	etag = strings.TrimSpace(etag)
 	if strings.HasPrefix(etag, "W/") {
 		etag = strings.TrimSpace(strings.TrimPrefix(etag, "W/"))

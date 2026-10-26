@@ -80,7 +80,7 @@ docker compose -p ribbonfish logs -f agent
 The service defaults to `network_mode: none`. Pulling the image needs a network
 connection; after it is present locally, the service itself can start offline.
 The image contains a starter playlist, and the named `ribbonfish-state` volume
-holds the cache, last-good manifest, frames, and device credential. The
+holds the cache, last-good playlist snapshot, frames, and device credential. The
 container runs as UID 65532 with a read-only root filesystem and no added
 capabilities.
 
@@ -96,11 +96,12 @@ read the package.
 
 ## Optional Cloudflare sync and enrollment
 
-The sync Worker serves a device-specific versioned manifest and only the R2
-image hashes assigned to that device. D1 stores credential hashes; the Pi
-stores only its own random token in the persistent state volume. The container
-image contains no Cloudflare account credential. Worker setup, publishing a
-manifest, enrollment-code generation, and revocation instructions are in
+The sync Worker serves one globally active versioned playlist to every
+enrolled device. D1 stores the playlist catalog and credential hashes; the Pi
+stores only its own random token and last-good playlist in the persistent state
+volume. The container image contains no Cloudflare account credential. Worker
+setup, trusted playlist publishing, enrollment-code generation, and revocation
+instructions are in
 [`../../workers/device-sync/README.md`](../../workers/device-sync/README.md).
 
 Sync is an explicit opt-in. Set the Worker URL and device ID to generate a
@@ -135,10 +136,11 @@ unset enrollment_code
 docker compose -p ribbonfish up -d
 ```
 
-The agent starts local playback before polling. It verifies the manifest and
-each image's size and SHA-256 digest, saves a complete last-good snapshot, and
-changes playlists only after all assets pass validation. On network or
-validation errors it retains the current content and retries with backoff.
+The agent starts local playback before polling. It verifies the shared playlist
+and each image's size and SHA-256 digest, saves a complete last-good snapshot,
+and activates the new playlist and its rotation interval only after all assets
+pass validation. On network or validation errors it retains the current content
+and retries with backoff.
 For fully offline operation, leave the sync URL empty and networking set to
 `none`.
 

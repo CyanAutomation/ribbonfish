@@ -53,7 +53,7 @@ case "\$1" in
     printf '%s\\n' "\${FAKE_DOCKER_IMAGE:-cyanautomation/ribbonfish:$version}|\${FAKE_DOCKER_RUNTIME_IMAGE_ID:-sha256:test-image-id}|running|none"
     ;;
   logs)
-    printf '%s\\n' 'level=INFO msg="agent configuration loaded" displays=1 playlists=1'
+    printf '%s\\n' 'level=INFO msg="agent configuration loaded" displays=1 playlist_id=default'
     printf '%s\\n' 'level=INFO msg="display frame updated" display_id=display-main'
     ;;
   *) echo "unexpected docker call: \$*" >&2; exit 2 ;;

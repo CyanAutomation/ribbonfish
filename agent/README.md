@@ -2,8 +2,8 @@
 
 This directory contains the Go display agent. It defines a versioned local
 JSON contract, bundled Pi and simulator profiles, structured logging,
-cancellation-aware lifecycle, deterministic per-display scheduling, a
-persistent content-verified image cache, and optional authenticated manifest
+cancellation-aware lifecycle, deterministic shared-playlist scheduling, a
+persistent content-verified image cache, and optional authenticated playlist
 sync. It includes a PNG simulator and an experimental Linux DRM/KMS output
 backend.
 
@@ -20,10 +20,11 @@ The agent module uses the Go standard library only. See
 [`../docs/agent-foundation.md`](../docs/agent-foundation.md) for architecture
 decisions and hardware questions, and
 [`../workers/device-sync/README.md`](../workers/device-sync/README.md) for
-Worker deployment and per-device enrollment. The DRM backend uses named DRM connectors,
-the connector's preferred or requested mode, linear XRGB8888 dumb buffers, and
-page flips. It requires exclusive DRM master access to the chosen card and
-may take over scanout from a host display server.
+Worker deployment, global playlist publishing, and per-device enrollment. The
+DRM backend uses named DRM connectors, the connector's preferred or requested
+mode, linear XRGB8888 dumb buffers, and page flips. It requires exclusive DRM
+master access to the chosen card and may take over scanout from a host display
+server.
 
 On Linux, `ribbonfish -list-displays` reports DRM connectors from sysfs,
 including the owning `/dev/dri/cardN`, whether that device node exists, driver,
