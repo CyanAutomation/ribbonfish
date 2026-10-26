@@ -21,9 +21,26 @@ func validConfig() Config {
 	}
 }
 
-func TestValidateAcceptsValidConfig(t *testing.T) {
-	if err := validConfig().Validate(); err != nil {
-		t.Fatalf("Validate() error = %v", err)
+func TestValidateAcceptsValidSimulatorAndDRMConfigs(t *testing.T) {
+	tests := []struct {
+		name   string
+		config Config
+	}{
+		{name: "simulator", config: validConfig()},
+		{name: "DRM with a device and connector", config: func() Config {
+			cfg := validConfig()
+			cfg.Output.Backend = "drm"
+			cfg.Output.Device = "/dev/dri/card0"
+			cfg.Displays[0].Connector = "HDMI-A-1"
+			return cfg
+		}()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.config.Validate(); err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
 	}
 }
 
@@ -91,9 +108,23 @@ func TestValidateRejectsInvalidContracts(t *testing.T) {
 	}
 }
 
-func TestEffectiveBackendDefaultsToSimulator(t *testing.T) {
-	if got := validConfig().Output.EffectiveBackend(); got != "simulator" {
-		t.Fatalf("EffectiveBackend() = %q, want simulator", got)
+func TestEffectiveBackendUsesSimulatorOnlyWhenUnset(t *testing.T) {
+	tests := []struct {
+		name string
+		set  string
+		want string
+	}{
+		{name: "unset backend defaults to simulator", want: "simulator"},
+		{name: "explicit DRM backend is preserved", set: "drm", want: "drm"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Output.Backend = tt.set
+			if got := cfg.Output.EffectiveBackend(); got != tt.want {
+				t.Fatalf("EffectiveBackend() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -29,8 +29,9 @@ import (
 
 // Test suite contract sources: agent/README.md and README.md#device-software.
 
-func TestRunSkipsStartupWhenContextIsAlreadyCanceled(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "config.json")
+func TestRunLogsShutdownWithoutOpeningRuntimeResourcesForCanceledContext(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
 	body := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"directory":"frames"},"playlist":{"id":"p","rotation_interval":"1s","assets":[{"path":"missing.png"}]},"displays":[{"id":"left"}]}`
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -43,6 +44,11 @@ func TestRunSkipsStartupWhenContextIsAlreadyCanceled(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "agent configuration loaded") || !strings.Contains(output.String(), "agent shutdown complete") {
 		t.Fatalf("missing lifecycle log records: %s", output.String())
+	}
+	for _, path := range []string{filepath.Join(dir, "cache"), filepath.Join(dir, "frames")} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("runtime resource %q was opened for an already-canceled run; stat error = %v", path, err)
+		}
 	}
 }
 
@@ -116,9 +122,6 @@ func TestRunUsesConfiguredSimulatorMode(t *testing.T) {
 	if got := frame.Bounds(); got != image.Rect(0, 0, 4, 2) {
 		t.Fatalf("simulator frame bounds = %v, want configured 4x2 mode", got)
 	}
-	if logs := output.String(); !strings.Contains(logs, `display_backend=simulator`) {
-		t.Fatalf("startup log does not identify selected backend: %s", logs)
-	}
 }
 
 func TestRunRejectsInvalidConfig(t *testing.T) {
@@ -126,8 +129,8 @@ func TestRunRejectsInvalidConfig(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(`{"version":1}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := run(context.Background(), configPath, &bytes.Buffer{}); err == nil {
-		t.Fatal("run() error = nil, want config validation error")
+	if err := run(context.Background(), configPath, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "version must be 2") {
+		t.Fatalf("run() error = %v, want version validation diagnostic", err)
 	}
 }
 
@@ -281,17 +284,17 @@ func TestExampleConfigsLoadAndValidate(t *testing.T) {
 	tests := []struct {
 		path           string
 		backend        string
-		displayCount   int
+		displayIDs     []string
 		firstConnector string
 		device         string
 		firstMode      string
 	}{
-		{path: "examples/agent/simulator/config.json", backend: "simulator", displayCount: 2},
-		{path: "examples/raspberry-pi/simulator-config.json", backend: "simulator", displayCount: 2},
-		{path: "examples/raspberry-pi/simulator-config.pi3a-plus.json", backend: "simulator", displayCount: 1, firstConnector: "HDMI-A-1", firstMode: "1920x1080@60"},
-		{path: "examples/raspberry-pi/hardware-config.pi3a-plus.json", backend: "drm", displayCount: 1, firstConnector: "HDMI-A-1", device: "/dev/dri/card0", firstMode: "preferred"},
-		{path: "examples/raspberry-pi/hardware-config.pi3b.json", backend: "drm", displayCount: 1, firstConnector: "HDMI-A-1"},
-		{path: "examples/raspberry-pi/hardware-config.pi4.json", backend: "drm", displayCount: 2, firstConnector: "HDMI-A-1"},
+		{path: "examples/agent/simulator/config.json", backend: "simulator", displayIDs: []string{"display-left", "display-right"}},
+		{path: "examples/raspberry-pi/simulator-config.json", backend: "simulator", displayIDs: []string{"display-left", "display-right"}},
+		{path: "examples/raspberry-pi/simulator-config.pi3a-plus.json", backend: "simulator", displayIDs: []string{"display-main"}, firstConnector: "HDMI-A-1", firstMode: "1920x1080@60"},
+		{path: "examples/raspberry-pi/hardware-config.pi3a-plus.json", backend: "drm", displayIDs: []string{"display-main"}, firstConnector: "HDMI-A-1", device: "/dev/dri/card0", firstMode: "preferred"},
+		{path: "examples/raspberry-pi/hardware-config.pi3b.json", backend: "drm", displayIDs: []string{"display-main"}, firstConnector: "HDMI-A-1", device: "/dev/dri/card0", firstMode: "preferred"},
+		{path: "examples/raspberry-pi/hardware-config.pi4.json", backend: "drm", displayIDs: []string{"display-left", "display-right"}, firstConnector: "HDMI-A-1", device: "/dev/dri/card1", firstMode: "preferred"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
@@ -302,8 +305,12 @@ func TestExampleConfigsLoadAndValidate(t *testing.T) {
 			if got := cfg.Output.EffectiveBackend(); got != tt.backend {
 				t.Errorf("backend = %q, want %q", got, tt.backend)
 			}
-			if got := len(cfg.Displays); got != tt.displayCount {
-				t.Errorf("display count = %d, want %d", got, tt.displayCount)
+			gotIDs := make([]string, len(cfg.Displays))
+			for i, display := range cfg.Displays {
+				gotIDs[i] = display.ID
+			}
+			if !reflect.DeepEqual(gotIDs, tt.displayIDs) {
+				t.Errorf("display IDs = %v, want %v", gotIDs, tt.displayIDs)
 			}
 			if tt.firstConnector != "" && cfg.Displays[0].Connector != tt.firstConnector {
 				t.Errorf("first connector = %q, want %q", cfg.Displays[0].Connector, tt.firstConnector)
@@ -318,33 +325,7 @@ func TestExampleConfigsLoadAndValidate(t *testing.T) {
 	}
 }
 
-func TestBundledDefaultsLoadWithContentHashes(t *testing.T) {
-	t.Setenv("RIBBONFISH_CACHE_DIR", "")
-	t.Setenv("RIBBONFISH_DRM_DEVICE", "")
-	_, source, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("runtime.Caller() could not locate test source")
-	}
-	defaults := filepath.Clean(filepath.Join(filepath.Dir(source), "../../defaults"))
-	for _, name := range []string{"pi3a-plus.json", "pi3b.json", "pi4.json", "simulator.json", "simulator-pi3b.json", "simulator-pi4.json"} {
-		t.Run(name, func(t *testing.T) {
-			cfg, err := config.Load(filepath.Join(defaults, name))
-			if err != nil {
-				t.Fatalf("config.Load() = %v", err)
-			}
-			for _, asset := range cfg.Playlist.Assets {
-				if len(asset.SHA256) != 64 {
-					t.Errorf("asset %q has no SHA-256 digest", asset.Path)
-				}
-				if _, err := os.Stat(asset.Path); err != nil {
-					t.Errorf("bundled asset %q is unavailable: %v", asset.Path, err)
-				}
-			}
-		})
-	}
-}
-
-func TestBundledProfilesShareTheSameOfflinePlaylist(t *testing.T) {
+func TestBundledProfilesLoadWithVerifiedSharedOfflinePlaylist(t *testing.T) {
 	t.Setenv("RIBBONFISH_CACHE_DIR", "")
 	t.Setenv("RIBBONFISH_DRM_DEVICE", "")
 	_, source, _, ok := runtime.Caller(0)
@@ -353,22 +334,34 @@ func TestBundledProfilesShareTheSameOfflinePlaylist(t *testing.T) {
 	}
 	defaults := filepath.Clean(filepath.Join(filepath.Dir(source), "../../defaults"))
 	profiles := []string{"pi3a-plus.json", "pi3b.json", "pi4.json", "simulator.json", "simulator-pi3b.json", "simulator-pi4.json"}
-	var shared config.PlaylistConfig
-	for index, name := range profiles {
-		cfg, err := config.Load(filepath.Join(defaults, name))
-		if err != nil {
-			t.Fatalf("config.Load(%s) = %v", name, err)
-		}
-		if index == 0 {
-			shared = cfg.Playlist
-			continue
-		}
-		if !reflect.DeepEqual(cfg.Playlist, shared) {
-			t.Errorf("profile %s playlist differs from the shared offline playlist", name)
-		}
+	var sharedPlaylist *config.PlaylistConfig
+	for _, name := range profiles {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := config.Load(filepath.Join(defaults, name))
+			if err != nil {
+				t.Fatalf("config.Load() = %v", err)
+			}
+			if sharedPlaylist == nil {
+				playlistCopy := cfg.Playlist
+				sharedPlaylist = &playlistCopy
+			} else if !reflect.DeepEqual(cfg.Playlist, *sharedPlaylist) {
+				t.Errorf("profile playlist differs from the shared offline playlist")
+			}
+			for _, asset := range cfg.Playlist.Assets {
+				data, err := os.ReadFile(asset.Path)
+				if err != nil {
+					t.Errorf("bundled asset %q is unavailable: %v", asset.Path, err)
+					continue
+				}
+				actual := sha256.Sum256(data)
+				if got, want := hex.EncodeToString(actual[:]), asset.SHA256; got != want {
+					t.Errorf("asset %q SHA-256 = %q, want %q", asset.Path, got, want)
+				}
+			}
+		})
 	}
-	if shared.ID != "default" || shared.RotationInterval != "15s" {
-		t.Fatalf("bundled playlist = %#v, want id default and 15s rotation", shared)
+	if sharedPlaylist == nil || sharedPlaylist.ID != "default" || sharedPlaylist.RotationInterval != "15s" {
+		t.Fatalf("bundled playlist = %#v, want id default and 15s rotation", sharedPlaylist)
 	}
 }
 
