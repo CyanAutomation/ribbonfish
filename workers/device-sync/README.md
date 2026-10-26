@@ -32,6 +32,18 @@ npx wrangler d1 execute ribbonfish-devices --remote --file=migrations/0001_add_e
 npx wrangler d1 execute ribbonfish-devices --remote --file=migrations/0002_global_playlists.sql
 ```
 
+If a migration was applied manually but is still listed as pending, first verify
+that its schema change is present and that its name is absent from
+`d1_migrations`. Record only that verified migration before applying the
+remaining migrations. For example, when `claim_id` already exists on
+`enrollments`:
+
+```sh
+npx wrangler d1 execute ribbonfish-devices --remote --command \
+  "INSERT INTO d1_migrations (name) VALUES ('0001_add_enrollment_claim_id.sql')"
+npx wrangler d1 migrations apply ribbonfish-devices --remote
+```
+
 ## Publish and activate playlists
 
 The Worker has no playlist write endpoint. Playlist releases use the trusted
