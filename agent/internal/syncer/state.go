@@ -2,6 +2,8 @@ package syncer
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/CyanAutomation/ribbonfish/agent/internal/cache"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/config"
@@ -18,6 +21,30 @@ type savedSnapshot struct {
 	Version  int              `json:"version"`
 	ETag     string           `json:"etag"`
 	Snapshot PlaylistSnapshot `json:"playlist"`
+}
+
+type legacySavedSnapshot struct {
+	Version  int            `json:"version"`
+	ETag     string         `json:"etag"`
+	Manifest legacyManifest `json:"manifest"`
+}
+
+type legacyManifest struct {
+	Version   int              `json:"version"`
+	Revision  string           `json:"revision"`
+	Playlists []legacyPlaylist `json:"playlists"`
+	Displays  []legacyDisplay  `json:"displays"`
+}
+
+type legacyPlaylist struct {
+	ID     string          `json:"id"`
+	Assets []PlaylistAsset `json:"assets"`
+}
+
+type legacyDisplay struct {
+	ID               string `json:"id"`
+	PlaylistID       string `json:"playlist_id"`
+	RotationInterval string `json:"rotation_interval"`
 }
 
 // SaveSnapshot atomically persists only a verified snapshot and its revision.
@@ -90,17 +117,8 @@ func LoadSnapshot(filename string, hardware config.Config, store cache.Store) (U
 	if len(data) > snapshotLimit {
 		return Update{}, errors.New("last-good snapshot exceeds 1 MiB limit")
 	}
-	decoder := json.NewDecoder(strings.NewReader(string(data)))
-	decoder.DisallowUnknownFields()
-	var saved savedSnapshot
-	if err := decoder.Decode(&saved); err != nil {
-		return Update{}, fmt.Errorf("decode last-good snapshot: %w", err)
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return Update{}, errors.New("last-good snapshot contains multiple JSON values")
-		}
+	saved, err := decodeLastGoodSnapshot(data, hardware)
+	if err != nil {
 		return Update{}, fmt.Errorf("decode last-good snapshot: %w", err)
 	}
 	if saved.Version != 2 || saved.ETag != `"`+saved.Snapshot.Revision+`"` {
@@ -129,4 +147,116 @@ func LoadSnapshot(filename string, hardware config.Config, store cache.Store) (U
 		return Update{}, err
 	}
 	return Update{Config: candidate, Snapshot: saved.Snapshot, ETag: saved.ETag, Changed: true}, nil
+}
+
+func decodeLastGoodSnapshot(data []byte, hardware config.Config) (savedSnapshot, error) {
+	var saved savedSnapshot
+	currentErr := decodeStrictJSON(data, &saved)
+	if currentErr == nil {
+		return saved, nil
+	}
+
+	var legacy legacySavedSnapshot
+	if err := decodeStrictJSON(data, &legacy); err != nil {
+		return savedSnapshot{}, currentErr
+	}
+	snapshot, err := migrateLegacyManifest(data, legacy, hardware)
+	if err != nil {
+		return savedSnapshot{}, err
+	}
+	return savedSnapshot{
+		Version:  2,
+		ETag:     `"` + snapshot.Revision + `"`,
+		Snapshot: snapshot,
+	}, nil
+}
+
+func decodeStrictJSON(data []byte, target any) error {
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("last-good snapshot contains multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+func migrateLegacyManifest(data []byte, saved legacySavedSnapshot, hardware config.Config) (PlaylistSnapshot, error) {
+	manifest := saved.Manifest
+	if saved.Version != 1 || manifest.Version != 1 || !validID(manifest.Revision) ||
+		saved.ETag != `"`+manifest.Revision+`"` {
+		return PlaylistSnapshot{}, errors.New("legacy last-good manifest has an unsupported version or ETag")
+	}
+	if len(manifest.Playlists) == 0 || len(manifest.Playlists) > 64 || len(manifest.Displays) != len(hardware.Displays) {
+		return PlaylistSnapshot{}, errors.New("legacy last-good manifest does not match the local display profile")
+	}
+
+	playlists := make(map[string]legacyPlaylist, len(manifest.Playlists))
+	for _, playlist := range manifest.Playlists {
+		if !validID(playlist.ID) {
+			return PlaylistSnapshot{}, fmt.Errorf("legacy last-good manifest has invalid playlist id %q", playlist.ID)
+		}
+		if _, exists := playlists[playlist.ID]; exists {
+			return PlaylistSnapshot{}, fmt.Errorf("legacy last-good manifest has duplicate playlist id %q", playlist.ID)
+		}
+		playlists[playlist.ID] = playlist
+	}
+
+	displays := make(map[string]legacyDisplay, len(manifest.Displays))
+	for _, display := range manifest.Displays {
+		if !validID(display.ID) {
+			return PlaylistSnapshot{}, fmt.Errorf("legacy last-good manifest has invalid display id %q", display.ID)
+		}
+		if _, exists := displays[display.ID]; exists {
+			return PlaylistSnapshot{}, fmt.Errorf("legacy last-good manifest has duplicate display id %q", display.ID)
+		}
+		if _, exists := playlists[display.PlaylistID]; !exists {
+			return PlaylistSnapshot{}, fmt.Errorf("legacy display %q references unknown playlist %q", display.ID, display.PlaylistID)
+		}
+		if _, err := time.ParseDuration(display.RotationInterval); err != nil {
+			return PlaylistSnapshot{}, fmt.Errorf("legacy display %q has invalid rotation interval: %w", display.ID, err)
+		}
+		if interval, _ := time.ParseDuration(display.RotationInterval); interval <= 0 {
+			return PlaylistSnapshot{}, fmt.Errorf("legacy display %q rotation interval must be positive", display.ID)
+		}
+		displays[display.ID] = display
+	}
+
+	var playlistID, rotationInterval string
+	var selectedInterval time.Duration
+	for _, display := range hardware.Displays {
+		legacy, ok := displays[display.ID]
+		if !ok {
+			return PlaylistSnapshot{}, fmt.Errorf("legacy last-good manifest is missing local display %q", display.ID)
+		}
+		interval, _ := time.ParseDuration(legacy.RotationInterval)
+		if playlistID == "" {
+			playlistID, rotationInterval, selectedInterval = legacy.PlaylistID, legacy.RotationInterval, interval
+			continue
+		}
+		if legacy.PlaylistID != playlistID || interval != selectedInterval {
+			return PlaylistSnapshot{}, errors.New("legacy last-good manifest assigns different content to local displays")
+		}
+	}
+
+	selected := playlists[playlistID]
+	sum := sha256.Sum256(data)
+	revision := "legacy-" + hex.EncodeToString(sum[:28])
+	snapshot := PlaylistSnapshot{
+		Version:          2,
+		Revision:         revision,
+		ID:               selected.ID,
+		RotationInterval: rotationInterval,
+		Assets:           append([]PlaylistAsset(nil), selected.Assets...),
+	}
+	if err := validatePlaylistSnapshot(snapshot, hardware); err != nil {
+		return PlaylistSnapshot{}, fmt.Errorf("validate migrated last-good playlist: %w", err)
+	}
+	return snapshot, nil
 }
