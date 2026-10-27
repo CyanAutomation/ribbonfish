@@ -8,6 +8,7 @@ import {
   confirmBeforeAction,
   formatAuditDetails,
   formatAuditEventType,
+  formatDeviceEnabledMessage,
   formatTimestamp,
 } from "./ui-utils.js";
 
@@ -148,7 +149,7 @@ function renderDevices(devices) {
           }),
         );
         if (!confirmed) return;
-        showMessage(device.device_id + (device.enabled ? " disabled" : " enabled"));
+        showMessage(formatDeviceEnabledMessage(device.device_id, nextEnabled));
         await refresh();
       } catch (error) { showMessage(error.message, true); }
     });

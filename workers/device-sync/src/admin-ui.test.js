@@ -8,6 +8,7 @@ import {
   confirmBeforeAction,
   formatAuditDetails,
   formatAuditEventType,
+  formatDeviceEnabledMessage,
   formatTimestamp,
 } from "../public/admin/ui-utils.js";
 
@@ -100,9 +101,39 @@ test("OpenUI Core streaming parser accepts partial programs and Core merges patc
   runtime.dispose();
 });
 
+test("waitForQueries rejects when the runtime is disposed during a pending query", async () => {
+  let resolveOverview;
+  const runtime = createFleetOpenUI({
+    getOverview: () => new Promise((resolve) => { resolveOverview = resolve; }),
+  });
+
+  runtime.renderProgram(OPENUI_STARTER_SOURCE);
+  const waiting = runtime.waitForQueries().then(
+    () => "resolved",
+    (error) => error.message,
+  );
+  runtime.dispose();
+
+  const outcome = await Promise.race([
+    waiting,
+    new Promise((resolve) => setTimeout(() => resolve("still pending"), 25)),
+  ]);
+  resolveOverview(overview);
+  assert.match(outcome, /disposed/i);
+});
+
 test("audit timestamps are explicit UTC and preserve the Unix epoch", () => {
   assert.equal(formatTimestamp(null), "Never seen");
   assert.match(formatTimestamp(0, "en-GB"), /^1 Jan 1970, 00:00:00 UTC$/);
+  assert.equal(
+    formatAuditDetails({ expires_at: "2026-10-27T21:00:00.000Z" }, "en-GB")[0].value,
+    "27 Oct 2026, 21:00:00 UTC",
+  );
+});
+
+test("device enabled messages report the state just applied", () => {
+  assert.equal(formatDeviceEnabledMessage("pi-1", true), "pi-1 enabled");
+  assert.equal(formatDeviceEnabledMessage("pi-1", false), "pi-1 disabled");
 });
 
 test("audit events and metadata are presented as readable labels", () => {

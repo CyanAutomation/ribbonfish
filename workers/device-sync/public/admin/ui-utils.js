@@ -31,6 +31,10 @@ export function formatAuditEventType(eventType) {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+export function formatDeviceEnabledMessage(deviceID, enabled) {
+  return `${deviceID} ${enabled ? "enabled" : "disabled"}`;
+}
+
 export function formatAuditDetails(metadata, locale) {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return [];
   return Object.entries(metadata).map(([key, value]) => ({
@@ -48,7 +52,7 @@ export async function confirmBeforeAction(confirmFn, message, action) {
 
 function formatMetadataValue(key, value, locale) {
   if (value === null || value === undefined || value === "") return "—";
-  if (typeof value === "number" && /(?:_at|_until|_expires)$/i.test(key)) {
+  if ((typeof value === "number" || typeof value === "string") && /(?:_at|_until|_expires)$/i.test(key)) {
     return formatTimestamp(value, locale);
   }
   if (Array.isArray(value)) return value.map((item) => formatMetadataValue(key, item, locale)).join(", ");
