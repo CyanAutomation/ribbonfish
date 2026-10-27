@@ -169,7 +169,9 @@ export function createFleetOpenUI({ getOverview }) {
   const store = createStore();
   const streamingParser = createStreamingParser(schema, "Dashboard");
   const listeners = new Set();
+  const pendingQueryWaiters = new Set();
   let parseResult = null;
+  let disposed = false;
 
   const queryManager = createQueryManager({
     async callTool(toolName, args) {
@@ -288,17 +290,34 @@ export function createFleetOpenUI({ getOverview }) {
       return () => listeners.delete(listener);
     },
     async waitForQueries() {
+      if (disposed) throw new Error("OpenUI runtime has been disposed");
       if (!queryManager.isAnyLoading()) return;
-      await new Promise((resolve) => {
-        const unsubscribe = queryManager.subscribe(() => {
+      await new Promise((resolve, reject) => {
+        let settled = false;
+        let unsubscribe = () => {};
+        const finish = (error) => {
+          if (settled) return;
+          settled = true;
+          unsubscribe();
+          pendingQueryWaiters.delete(cancel);
+          if (error) reject(error);
+          else resolve();
+        };
+        const cancel = () => finish(new Error("OpenUI runtime was disposed while waiting for queries"));
+        const check = () => {
           if (!queryManager.isAnyLoading()) {
-            unsubscribe();
-            resolve();
+            finish();
           }
-        });
+        };
+        unsubscribe = queryManager.subscribe(check);
+        pendingQueryWaiters.add(cancel);
+        check();
       });
     },
     dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const cancel of [...pendingQueryWaiters]) cancel();
       unsubscribeQuery();
       queryManager.dispose();
       store.dispose();
