@@ -15,7 +15,7 @@ outbound HTTPS access to api.github.com and raw.githubusercontent.com.
 
 Options are passed to prepare-deployment.sh. Use --target, --profile,
 --drm-device, --drm-gid, --sync-url, --device-id, or --replace-env. The
-default image pin is the current main commit; --version may override it.
+deployment always uses the latest published image.
 EOF
 }
 
@@ -54,4 +54,4 @@ for file in docker-compose.yaml .env.example .gitignore README.md install.sh pre
 	curl -fsSL "$url" -o "$source_dir/$file" || fail "could not download $file from commit $commit"
 done
 
-sh "$source_dir/prepare-deployment.sh" --version "sha-$commit" "$@"
+sh "$source_dir/prepare-deployment.sh" "$@"

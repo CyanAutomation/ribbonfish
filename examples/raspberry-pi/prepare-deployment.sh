@@ -2,10 +2,8 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-repo_root=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 target_dir=${RIBBONFISH_DEPLOYMENT_DIR:-"$HOME/containers/ribbonfish"}
 profile=${RIBBONFISH_PROFILE:-}
-version=${RIBBONFISH_VERSION:-}
 drm_device=${RIBBONFISH_DRM_DEVICE:-}
 drm_gid=${RIBBONFISH_DRM_GID:-}
 sync_url=${RIBBONFISH_SYNC_URL:-}
@@ -17,13 +15,12 @@ usage() {
 Usage: prepare-deployment.sh [options]
 
 Stage the hardware Compose deployment in ~/containers/ribbonfish by default.
-The generated .env pins the image to an immutable sha-<commit> tag and starts
-with networking disabled.
+The Compose file always uses the latest published image and starts with
+networking disabled.
 
 Options:
   --target DIR          Deployment directory (default: ~/containers/ribbonfish)
   --profile PROFILE     pi3a-plus, pi3b, or pi4 (auto-detected where possible)
-  --version TAG         Published sha-<40-character-commit> image tag
   --drm-device PATH     DRM card device (default follows the profile)
   --drm-gid GID         Numeric group owning the DRM card (default: detected)
   --sync-url URL        Cloudflare Worker URL (requires --device-id)
@@ -31,9 +28,7 @@ Options:
   --replace-env         Back up and replace an existing .env
   -h, --help            Show this help
 
-When --version is omitted, the source repository must be a Git checkout whose
-image has been published. Pass --version sha-<published commit> when running
-from a downloaded deployment kit. Existing .env files are preserved.
+Existing .env files are preserved.
 EOF
 }
 
@@ -52,11 +47,6 @@ while [ "$#" -gt 0 ]; do
 		--profile)
 			[ "$#" -ge 2 ] || fail '--profile requires a value'
 			profile=$2
-			shift 2
-			;;
-		--version)
-			[ "$#" -ge 2 ] || fail '--version requires a value'
-			version=$2
 			shift 2
 			;;
 		--drm-device)
@@ -107,20 +97,6 @@ case "$profile" in
 	pi3a-plus|pi3b) default_device=/dev/dri/card0 ;;
 	pi4) default_device=/dev/dri/card1 ;;
 	*) fail "unsupported Pi profile '$profile' (choose pi3a-plus, pi3b, or pi4)" ;;
-esac
-
-if [ -z "$version" ]; then
-	commit=$(git -C "$repo_root" rev-parse --verify HEAD 2>/dev/null || true)
-	[ -n "$commit" ] || fail 'could not resolve a source commit; pass --version sha-<published commit>'
-	version="sha-$commit"
-fi
-case "$version" in
-	sha-*) image_commit=${version#sha-} ;;
-	*) fail "image version '$version' is mutable or invalid; pass sha-<40-character commit>" ;;
-esac
-[ "${#image_commit}" -eq 40 ] || fail "image version '$version' must contain a 40-character commit SHA"
-case "$image_commit" in
-	*[!0-9a-f]*) fail "image version '$version' must use lowercase hexadecimal" ;;
 esac
 
 drm_device=${drm_device:-$default_device}
@@ -207,19 +183,17 @@ if [ ! -e "$target_dir/.env" ] || [ "$replace_env" = true ]; then
 		network_mode=none
 	fi
 	cat >"$environment_tmp" <<EOF
-RIBBONFISH_VERSION=$version
 RIBBONFISH_PROFILE=$profile
-RIBBONFISH_CACHE_DIR=/var/lib/ribbonfish/cache
 RIBBONFISH_DRM_DEVICE=$drm_device
 RIBBONFISH_DRM_GID=$drm_gid
 RIBBONFISH_NETWORK_MODE=$network_mode
-RIBBONFISH_SYNC_URL=$sync_url
-RIBBONFISH_SYNC_INTERVAL=1m
-RIBBONFISH_DEVICE_ID=$device_id
 EOF
+	if [ -n "$sync_url" ]; then
+		printf 'RIBBONFISH_SYNC_URL=%s\nRIBBONFISH_DEVICE_ID=%s\n' "$sync_url" "$device_id" >>"$environment_tmp"
+	fi
 	chmod 0600 "$environment_tmp"
 	mv -f "$environment_tmp" "$target_dir/.env"
-	printf 'Created %s/.env with profile %s, pinned image %s, and network mode %s\n' "$target_dir" "$profile" "$version" "$network_mode"
+	printf 'Created %s/.env with profile %s, image latest, and network mode %s\n' "$target_dir" "$profile" "$network_mode"
 else
 	printf 'Preserved existing %s/.env; validate it with verify-deployment.sh\n' "$target_dir"
 fi
