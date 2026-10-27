@@ -8,15 +8,17 @@ drm_device=${RIBBONFISH_DRM_DEVICE:-}
 drm_gid=${RIBBONFISH_DRM_GID:-}
 sync_url=${RIBBONFISH_SYNC_URL:-}
 device_id=${RIBBONFISH_DEVICE_ID:-}
+image=${RIBBONFISH_IMAGE:-}
 replace_env=false
+fix_target_owner=false
 
 usage() {
 	cat <<'EOF'
 Usage: prepare-deployment.sh [options]
 
 Stage the hardware Compose deployment in ~/containers/ribbonfish by default.
-The Compose file always uses the latest published image and starts with
-networking disabled.
+The Compose file defaults to the latest published image and starts with
+networking disabled. Use --image to select an immutable tag or digest.
 
 Options:
   --target DIR          Deployment directory (default: ~/containers/ribbonfish)
@@ -25,6 +27,8 @@ Options:
   --drm-gid GID         Numeric group owning the DRM card (default: detected)
   --sync-url URL        Cloudflare Worker URL (requires --device-id)
   --device-id ID        Stable Worker device ID (requires --sync-url)
+  --image IMAGE         image tag or digest (default: cyanautomation/ribbonfish:latest)
+  --fix-target-owner    use sudo to fix an empty root-owned target directory
   --replace-env         Back up and replace an existing .env
   -h, --help            Show this help
 
@@ -69,6 +73,16 @@ while [ "$#" -gt 0 ]; do
 			device_id=$2
 			shift 2
 			;;
+		--image)
+			[ "$#" -ge 2 ] || fail '--image requires an image reference'
+			[ -n "$2" ] || fail '--image requires a nonempty image reference'
+			image=$2
+			shift 2
+			;;
+		--fix-target-owner)
+			fix_target_owner=true
+			shift
+			;;
 		--replace-env)
 			replace_env=true
 			shift
@@ -82,6 +96,12 @@ while [ "$#" -gt 0 ]; do
 			;;
 	esac
 done
+
+if [ -n "$image" ]; then
+	case "$image" in
+		*[!A-Za-z0-9._/:@+-]*) fail '--image contains characters that are not valid in a Docker image reference' ;;
+	esac
+fi
 
 if [ -z "$profile" ]; then
 	model=$(tr -d '\000' </proc/device-tree/model 2>/dev/null || true)
@@ -139,7 +159,21 @@ fi
 
 if [ -e "$target_dir" ]; then
 	[ -d "$target_dir" ] || fail "deployment target '$target_dir' exists and is not a directory"
-	[ -w "$target_dir" ] || fail "deployment target '$target_dir' is not writable; make it owned by $(id -un) or choose --target DIR"
+	if [ ! -w "$target_dir" ]; then
+		[ "$fix_target_owner" = true ] || fail "deployment target '$target_dir' is not writable; if it is empty and root-owned, rerun with --fix-target-owner, or choose --target DIR"
+		[ ! -L "$target_dir" ] || fail "--fix-target-owner cannot repair a symlink target"
+		for entry in "$target_dir"/* "$target_dir"/.[!.]* "$target_dir"/..?*; do
+			if [ -e "$entry" ] || [ -L "$entry" ]; then
+				fail "--fix-target-owner only repairs an empty root-owned target; '$target_dir' contains files"
+			fi
+		done
+		target_owner=$(stat -c '%u' "$target_dir" 2>/dev/null || stat -f '%u' "$target_dir" 2>/dev/null || true)
+		[ "$target_owner" = 0 ] || fail "--fix-target-owner only repairs an empty root-owned target; '$target_dir' is owned by UID ${target_owner:-unknown}"
+		command -v sudo >/dev/null 2>&1 || fail 'sudo is required to fix the root-owned deployment target'
+		sudo chown "$(id -u):$(id -g)" "$target_dir" || fail "could not change ownership of '$target_dir'"
+		[ -w "$target_dir" ] || fail "deployment target '$target_dir' is still not writable after ownership repair"
+		printf 'Changed ownership of empty deployment directory %s to %s\n' "$target_dir" "$(id -un)"
+	fi
 else
 	parent_dir=$(dirname -- "$target_dir")
 	while [ ! -d "$parent_dir" ]; do
@@ -167,11 +201,15 @@ stage_file "$script_dir/prepare-deployment.sh" prepare-deployment.sh
 stage_file "$script_dir/verify-deployment.sh" verify-deployment.sh
 chmod 0755 "$target_dir/install.sh" "$target_dir/prepare-deployment.sh" "$target_dir/verify-deployment.sh"
 
-if [ -e "$target_dir/.env" ] && [ "$replace_env" = true ]; then
+backup_env() {
 	backup="$target_dir/.env.backup.$(date -u +%Y%m%dT%H%M%SZ).$$"
 	cp "$target_dir/.env" "$backup"
 	chmod 0600 "$backup"
 	printf 'Backed up existing environment to %s\n' "$backup"
+}
+
+if [ -e "$target_dir/.env" ] && [ "$replace_env" = true ]; then
+	backup_env
 fi
 
 if [ ! -e "$target_dir/.env" ] || [ "$replace_env" = true ]; then
@@ -188,15 +226,39 @@ RIBBONFISH_DRM_DEVICE=$drm_device
 RIBBONFISH_DRM_GID=$drm_gid
 RIBBONFISH_NETWORK_MODE=$network_mode
 EOF
+	if [ -n "$image" ]; then
+		printf 'RIBBONFISH_IMAGE=%s\n' "$image" >>"$environment_tmp"
+	fi
 	if [ -n "$sync_url" ]; then
 		printf 'RIBBONFISH_SYNC_URL=%s\nRIBBONFISH_DEVICE_ID=%s\n' "$sync_url" "$device_id" >>"$environment_tmp"
 	fi
 	chmod 0600 "$environment_tmp"
 	mv -f "$environment_tmp" "$target_dir/.env"
-	printf 'Created %s/.env with profile %s, image latest, and network mode %s\n' "$target_dir" "$profile" "$network_mode"
+	printf 'Created %s/.env with profile %s, image %s, and network mode %s\n' "$target_dir" "$profile" "${image:-cyanautomation/ribbonfish:latest}" "$network_mode"
 else
 	printf 'Preserved existing %s/.env; validate it with verify-deployment.sh\n' "$target_dir"
 fi
 
+if [ -e "$target_dir/.env" ] && [ "$replace_env" != true ] && [ -n "$image" ]; then
+	existing_image=$(awk -F= '$1 == "RIBBONFISH_IMAGE" { sub(/^[^=]*=/, ""); value=$0 } END { print value }' "$target_dir/.env")
+	if [ "$existing_image" != "$image" ]; then
+		backup_env
+		environment_tmp="$target_dir/.env.$$"
+		awk -F= -v image="$image" '
+			BEGIN { written = 0 }
+			$1 == "RIBBONFISH_IMAGE" {
+				if (!written) print "RIBBONFISH_IMAGE=" image
+				written = 1
+				next
+			}
+			{ print }
+			END { if (!written) print "RIBBONFISH_IMAGE=" image }
+		' "$target_dir/.env" >"$environment_tmp"
+		chmod 0600 "$environment_tmp"
+		mv -f "$environment_tmp" "$target_dir/.env"
+		printf 'Updated image reference in %s/.env to %s\n' "$target_dir" "$image"
+	fi
+fi
+
 printf 'Prepared Ribbonfish deployment in %s\n' "$target_dir"
-printf 'Run: cd %s && ./verify-deployment.sh --preflight\n' "$target_dir"
+printf 'Run: cd %s && docker compose -p ribbonfish pull && ./verify-deployment.sh --preflight\n' "$target_dir"

@@ -45,6 +45,8 @@ drm_gid=$(env_value RIBBONFISH_DRM_GID)
 network_mode=$(env_value RIBBONFISH_NETWORK_MODE)
 sync_url=$(env_value RIBBONFISH_SYNC_URL)
 device_id=$(env_value RIBBONFISH_DEVICE_ID)
+expected_image=$(env_value RIBBONFISH_IMAGE)
+expected_image=${expected_image:-cyanautomation/ribbonfish:latest}
 
 case "$profile" in
 	pi3a-plus|pi3b|pi4) ;;
@@ -61,10 +63,15 @@ else
 	[ "$network_mode" = none ] || fail 'network access is only enabled when Cloudflare sync is configured'
 fi
 
-expected_image='cyanautomation/ribbonfish:latest'
 config_images=$(docker compose --project-directory "$deployment_dir" -p ribbonfish config --images) || fail 'docker compose config failed'
 printf '%s\n' "$config_images" | grep -Fx "$expected_image" >/dev/null || fail "Compose resolves to '$config_images', expected '$expected_image'"
 docker compose --project-directory "$deployment_dir" -p ribbonfish config --quiet || fail 'docker compose config is invalid'
+
+image_id=$(docker image inspect --format '{{.Id}}' "$expected_image") || fail "image '$expected_image' is not present locally; pull it with docker compose pull first"
+[ -n "$image_id" ] || fail "could not resolve local image ID for '$expected_image'"
+
+connector_report=$(docker compose --project-directory "$deployment_dir" -p ribbonfish run --rm --no-deps -T agent -check-displays 2>&1) || fail "configured DRM connectors are unavailable or do not advertise the configured mode: $connector_report"
+printf '%s\n' "$connector_report"
 
 if [ "$preflight" = true ]; then
 	printf 'Preflight passed: profile=%s image=%s device=%s gid=%s network=%s\n' "$profile" "$expected_image" "$drm_device" "$drm_gid" "$network_mode"
@@ -73,8 +80,6 @@ fi
 
 container_id=$(docker compose --project-directory "$deployment_dir" -p ribbonfish ps -q agent)
 [ -n "$container_id" ] || fail 'agent container is not running; start it with docker compose up -d'
-image_id=$(docker image inspect --format '{{.Id}}' "$expected_image") || fail "image '$expected_image' is not present locally"
-[ -n "$image_id" ] || fail "could not resolve local image ID for '$expected_image'"
 runtime=$(docker inspect --format '{{.Config.Image}}|{{.Image}}|{{.State.Status}}|{{.HostConfig.NetworkMode}}' "$container_id") || fail 'could not inspect agent container'
 expected_runtime="$expected_image|$image_id|running|$network_mode"
 [ "$runtime" = "$expected_runtime" ] || fail "container state '$runtime' does not match '$expected_runtime'"
@@ -95,9 +100,6 @@ while [ "$attempt" -le "$verify_timeout" ]; do
 	[ "$attempt" -gt "$verify_timeout" ] || sleep 1
 done
 [ "$attempt" -le "$verify_timeout" ] || fail "timed out after ${verify_timeout}s waiting for a usable display configuration"
-
-connector_report=$(docker compose --project-directory "$deployment_dir" -p ribbonfish exec -T agent /ribbonfish -check-displays 2>&1) || fail "configured DRM connectors are unavailable or do not advertise the configured mode: $connector_report"
-printf '%s\n' "$connector_report"
 
 attempt=0
 while [ "$attempt" -le "$verify_timeout" ]; do
