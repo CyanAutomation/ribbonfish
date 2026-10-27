@@ -22,6 +22,7 @@ while [ "$#" -gt 0 ]; do
 			;;
 		-h|--help)
 			printf 'Usage: verify-deployment.sh [--target DIR] [--preflight]\n'
+			printf 'Full verification waits up to 30 seconds for startup logs by default; set RIBBONFISH_VERIFY_TIMEOUT to change it.\n'
 			exit 0
 			;;
 		*)
@@ -91,10 +92,38 @@ runtime=$(docker inspect --format '{{.Config.Image}}|{{.Image}}|{{.State.Status}
 expected_runtime="$expected_image|$image_id|running|$network_mode"
 [ "$runtime" = "$expected_runtime" ] || fail "container state '$runtime' does not match '$expected_runtime'"
 
-logs=$(docker logs --tail 200 "$container_id" 2>&1) || fail 'could not read agent logs'
-printf '%s\n' "$logs" | grep -F 'msg="agent configuration loaded"' | grep -Eq 'displays=[1-9][0-9]*' || fail 'agent has not logged a usable display configuration'
+verify_timeout=${RIBBONFISH_VERIFY_TIMEOUT:-30}
+case "$verify_timeout" in
+	''|*[!0-9]*) fail 'RIBBONFISH_VERIFY_TIMEOUT must be a positive integer' ;;
+esac
+[ "$verify_timeout" -gt 0 ] || fail 'RIBBONFISH_VERIFY_TIMEOUT must be a positive integer'
+
+attempt=0
+while [ "$attempt" -le "$verify_timeout" ]; do
+	logs=$(docker logs --tail 200 "$container_id" 2>&1) || fail 'could not read agent logs'
+	if printf '%s\n' "$logs" | grep -F 'msg="agent configuration loaded"' | grep -Eq 'displays=[1-9][0-9]*'; then
+		break
+	fi
+	attempt=$((attempt + 1))
+	[ "$attempt" -gt "$verify_timeout" ] || sleep 1
+done
+[ "$attempt" -le "$verify_timeout" ] || fail "timed out after ${verify_timeout}s waiting for a usable display configuration"
+
 connector_report=$(docker compose --project-directory "$deployment_dir" -p ribbonfish exec -T agent /ribbonfish -check-displays 2>&1) || fail "configured DRM connectors are unavailable or do not advertise the configured mode: $connector_report"
 printf '%s\n' "$connector_report"
+
+attempt=0
+while [ "$attempt" -le "$verify_timeout" ]; do
+	logs=$(docker logs --tail 200 "$container_id" 2>&1) || fail 'could not read agent logs'
+	if printf '%s\n' "$logs" | grep -F 'msg="display frame updated"' >/dev/null; then
+		break
+	fi
+	attempt=$((attempt + 1))
+	[ "$attempt" -gt "$verify_timeout" ] || sleep 1
+done
+[ "$attempt" -le "$verify_timeout" ] || fail "timed out after ${verify_timeout}s waiting for a successful display frame update"
+
+logs=$(docker logs --tail 200 "$container_id" 2>&1) || fail 'could not read agent logs'
 printf '%s\n' "$logs" | grep -F 'msg="display frame updated"' >/dev/null || fail 'agent has not logged a successful display frame update'
 
 printf 'Deployment verified: profile=%s image=%s status=running network=%s; DRM connectors ready and display frame updated\n' "$profile" "$expected_image" "$network_mode"

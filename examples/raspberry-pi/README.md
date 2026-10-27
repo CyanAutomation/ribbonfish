@@ -19,6 +19,8 @@ Pi 4 dual-display acceptance remain open.
 - `docker-compose.published.yaml`: published-image simulation
 - `.env.example`: image tag, profile, DRM device/group, and optional sync
   settings
+- `install.sh`: clone-free bootstrap that downloads the deployment kit at the
+  current main commit into a temporary directory
 - `prepare-deployment.sh`: detects the Pi profile and DRM group, pins the
   published image, and stages the complete deployment kit under
   `~/containers/ribbonfish`
@@ -29,11 +31,19 @@ Pi 4 dual-display acceptance remain open.
 
 ## Install and start
 
-From a clean, verified repository checkout on the Pi, stage the deployment
-files:
+On a prepared Pi with `curl` and Docker Compose, download and run the
+clone-free installer:
+
+If `~/containers/ribbonfish` already exists as an empty root-owned directory,
+make it user-owned before running the installer:
 
 ```sh
-sh examples/raspberry-pi/prepare-deployment.sh
+sudo chown "$(id -u):$(id -g)" "$HOME/containers/ribbonfish"
+```
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/CyanAutomation/ribbonfish/main/examples/raspberry-pi/install.sh -o /tmp/ribbonfish-install.sh
+sh /tmp/ribbonfish-install.sh
 cd ~/containers/ribbonfish
 ./verify-deployment.sh --preflight
 docker compose -p ribbonfish pull
@@ -41,37 +51,55 @@ docker compose -p ribbonfish up -d
 ./verify-deployment.sh
 ```
 
-The script detects Pi 3 A+, Pi 3 B, or Pi 4, reads the numeric group from the
-selected DRM card, and writes an immutable `sha-<commit>` image pin into `.env`.
-It starts in offline mode (`network_mode: none`). The generated environment is
-mode `0600`; existing `.env` files are preserved by default. To replace a
-legacy `.env`, the script makes a private timestamped backup first:
+The installer reads the current main commit from GitHub, downloads the
+deployment files pinned to that commit into a temporary directory, and removes
+the temporary files after staging. It does not require Git or a repository
+clone. It needs outbound HTTPS access to GitHub and the image registry. The
+Pi profile helper detects Pi 3 A+, Pi 3 B, or Pi 4, reads the numeric group
+from the selected DRM card, and writes an immutable `sha-<commit>` image pin
+into `.env`. The service starts offline (`network_mode: none`). The generated
+environment is mode `0600`; existing `.env` files are preserved by default.
+The pinned image must have been published for the current main commit before
+`docker compose pull` can succeed.
+
+If you already have a repository checkout, you can stage from it directly:
+
+```sh
+sh examples/raspberry-pi/prepare-deployment.sh
+```
+
+To replace a legacy `.env`, the helper makes a private timestamped backup
+first:
 
 ```sh
 sh examples/raspberry-pi/prepare-deployment.sh --profile pi3a-plus \
   --version sha-<published-commit> --replace-env
 ```
 
-The script stages `docker-compose.yaml`, `.env`, `.env.example`, both helper
-scripts, `.gitignore`, and this README in the deployment directory. It does not
-copy config or image assets. Use `--profile`, `--version`, `--drm-device`, or
-`--drm-gid` to override detection. The Pi profile mapping is:
+The script stages `docker-compose.yaml`, `.env`, `.env.example`, the installer
+and helper scripts, `.gitignore`, and this README in the deployment directory.
+It does not copy config or image assets. Use `--profile`, `--version`,
+`--drm-device`, or `--drm-gid` to override detection. The Pi profile mapping
+is:
 
 - Pi 4 uses profile `pi4`; inspect the host to select its card and group.
 - Ribbonfish is a Pi 3 A+ using profile `pi3a-plus`, `/dev/dri/card0`, and GID `44`.
 - For Pi 3B, select `pi3b` and inspect the actual card and group first.
 
 If `~/containers/ribbonfish` exists but is not writable, the script stops and
-reports that directly. Make the deployment directory user-owned once, then
-rerun the script. `verify-deployment.sh --preflight` checks the device and
-GID, sync/network consistency, configured image tag (`latest` or an immutable
-SHA tag), and resolved Compose configuration. The setup helper continues to
-generate immutable SHA pins by default. After `up -d`, the full verifier also
-checks that the running container uses the image ID currently resolved by its
-configured tag, checks connected DRM targets through sysfs without opening the
-device or changing scanout, and confirms a successful frame update. Use
-these commands to inspect connector metadata, validate configured targets in
-the running image, or follow the agent logs:
+reports that directly. Choose a user-writable target or fix its ownership
+before rerunning the installer.
+
+`verify-deployment.sh --preflight` checks the device and GID, sync/network
+consistency, configured image tag (`latest` or an immutable SHA tag), and
+resolved Compose configuration. The setup helper generates immutable SHA pins
+by default. After `up -d`, the full verifier checks that the running container
+uses the image ID currently resolved by its configured tag, checks connected
+DRM targets through sysfs without opening the device or changing scanout, and
+waits up to 30 seconds for the agent to log a successful frame update. Set
+`RIBBONFISH_VERIFY_TIMEOUT` to change that startup wait. Use these commands to
+inspect connector metadata, validate configured targets in the running image,
+or follow the agent logs:
 
 ```sh
 docker compose -p ribbonfish run --rm agent -list-displays

@@ -31,8 +31,9 @@ Options:
   --replace-env         Back up and replace an existing .env
   -h, --help            Show this help
 
-The source repository must be on a commit whose image has been published.
-Existing .env files are preserved.
+When --version is omitted, the source repository must be a Git checkout whose
+image has been published. Pass --version sha-<published commit> when running
+from a downloaded deployment kit. Existing .env files are preserved.
 EOF
 }
 
@@ -185,9 +186,10 @@ stage_file "$script_dir/docker-compose.yaml" docker-compose.yaml
 stage_file "$script_dir/.env.example" .env.example
 stage_file "$script_dir/.gitignore" .gitignore
 stage_file "$script_dir/README.md" README.md
+stage_file "$script_dir/install.sh" install.sh
 stage_file "$script_dir/prepare-deployment.sh" prepare-deployment.sh
 stage_file "$script_dir/verify-deployment.sh" verify-deployment.sh
-chmod 0755 "$target_dir/prepare-deployment.sh" "$target_dir/verify-deployment.sh"
+chmod 0755 "$target_dir/install.sh" "$target_dir/prepare-deployment.sh" "$target_dir/verify-deployment.sh"
 
 if [ -e "$target_dir/.env" ] && [ "$replace_env" = true ]; then
 	backup="$target_dir/.env.backup.$(date -u +%Y%m%dT%H%M%SZ).$$"
