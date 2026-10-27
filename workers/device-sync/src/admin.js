@@ -148,7 +148,12 @@ async function readOverview(env) {
     active_playlist: active,
     asset_health: { missing },
     audit: (audit.results ?? []).map((event) => ({
-      ...event,
+      event_id: event.event_id,
+      actor_id: event.actor_id,
+      event_type: event.event_type,
+      subject_type: event.subject_type,
+      subject_id: event.subject_id,
+      occurred_at: event.occurred_at,
       metadata: parseMetadata(event.metadata_json),
     })),
   };
