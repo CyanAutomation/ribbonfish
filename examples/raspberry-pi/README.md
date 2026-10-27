@@ -9,7 +9,10 @@ when the Worker cannot be reached.
 
 The DRM/KMS output is experimental. One-display mode-setting, frame updates,
 and visible sample slides have been confirmed on a Pi 3 A+. Pi 3B scanout and
-Pi 4 dual-display acceptance remain open.
+Pi 4 dual-display acceptance remain open. The Pi 4 hardware profile expects
+both `HDMI-A-1` and `HDMI-A-2` to be connected and active; a headless Pi 4
+cannot pass preflight or verify physical scanout until both displays are
+connected.
 
 ## Files
 
@@ -33,10 +36,11 @@ Pi 4 dual-display acceptance remain open.
 On a prepared Pi with `curl` and Docker Compose, download and run the
 clone-free installer:
 
-If `~/containers/ribbonfish` already exists as an empty root-owned directory,
-pass `--fix-target-owner` to let the installer use `sudo chown` on that
-directory. The helper only repairs an empty root-owned target; it does not
-change ownership of a populated directory.
+Run this as your regular Pi user. If `~/containers/ribbonfish` already exists
+as an empty root-owned directory, pass `--fix-target-owner`; the installer may
+ask for your sudo password to take ownership of that empty directory. It does
+not change ownership of a populated directory. If the target contains files,
+choose another target or fix its ownership yourself.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/CyanAutomation/ribbonfish/main/examples/raspberry-pi/install.sh -o /tmp/ribbonfish-install.sh
@@ -84,13 +88,14 @@ sh examples/raspberry-pi/prepare-deployment.sh --profile pi3a-plus \
   --replace-env
 ```
 
-The script stages `docker-compose.yaml`, `.env`, `.env.example`, the installer
-and helper scripts, `.gitignore`, and this README in the deployment directory.
-It does not copy config or image assets. Use `--profile`, `--drm-device`, or
-`--drm-gid` to override detection. The Pi profile mapping
-is:
+The script stages `docker-compose.yaml`, `docker-compose.published.yaml`,
+`.env`, `.env.example`, the installer and helper scripts, `.gitignore`, and
+this README in the deployment directory. It does not copy config or image
+assets. Use `--profile`, `--drm-device`, or `--drm-gid` to override detection.
+The Pi profile mapping is:
 
-- Pi 4 uses profile `pi4`; inspect the host to select its card and group.
+- Pi 4 uses profile `pi4`, which requires both HDMI connectors listed above;
+  inspect the host to select its card and group.
 - Ribbonfish is a Pi 3 A+ using profile `pi3a-plus`, `/dev/dri/card0`, and GID `44`.
 - For Pi 3B, select `pi3b` and inspect the actual card and group first.
 
@@ -163,6 +168,14 @@ RIBBONFISH_SYNC_URL=https://ribbonfish.scheimann.workers.dev
 RIBBONFISH_DEVICE_ID=ribbonfish-01
 ```
 
+After enrollment, the agent downloads the currently active playlist and its
+verified assets from the Worker automatically, then keeps a last-good local
+copy for offline playback. The Worker supplies playlist content only; the Pi's
+DRM card, connectors, and display profile still come from the local image and
+must match the attached hardware. Production management routes are disabled,
+and the separate development management panel is unauthenticated, so do not
+use it to provision production devices.
+
 Exchange a one-time code through stdin. This writes the device token to the
 same named volume used by the service and does not print the token:
 
@@ -209,12 +222,21 @@ model.
 The published-image simulator can run without a source checkout:
 
 ```sh
-docker compose -f examples/raspberry-pi/docker-compose.published.yaml up -d
-docker compose -f examples/raspberry-pi/docker-compose.published.yaml logs -f agent
+cd ~/containers/ribbonfish
+docker compose -f docker-compose.published.yaml up -d
+docker compose -f docker-compose.published.yaml logs -f agent
 ```
 
 The published-image simulator uses the `latest` image. Both simulator examples
-disable container networking and need no config or asset mounts.
+disable container networking and need no config or asset mounts. Select the
+two-display Pi 4 software profile with:
+
+```sh
+RIBBONFISH_SIMULATOR_PROFILE=simulator-pi4 docker compose -f docker-compose.published.yaml up -d
+```
+
+Omit the environment assignment to use the default single-display Pi 3 A+
+simulator profile.
 Simulator output and emulated ARM containers validate software behavior, not
 physical scanout, GPU timing, or thermal performance.
 
@@ -242,9 +264,18 @@ Engine 26.1.5. It verified `/dev/dri/card0` as `root:video` (GID 44),
 HDMI-A-1 at 1920x1080@60, non-root read-only operation with capabilities
 dropped and no network, repeated framebuffer updates, and visible sample
 slides. The HDMI display is currently connected and outputting as expected.
-The agent used about 26 MiB RSS on the 512 MiB Pi. This did not measure visual
-quality or scaling. Docker memory limits were unavailable on that kernel, so
-do not rely on `docker stats` for memory accounting there.
+The agent used about 26 MiB RSS on the 512 MiB Pi. On the Pi 4, the published
+simulator's two 1920x1080 frames rendered successfully; its agent process used
+about 198–252 MiB RSS during the observed run. The Pi 4 had no HDMI displays
+connected, so this validated software rendering only. On that host,
+`docker stats` reported `0B / 0B`, so it was not useful for memory accounting.
+For a running container, inspect process RSS with `docker top` instead; its
+`RSS` column is in KiB and reflects resident process memory, not all container
+memory or GPU allocations:
+
+```sh
+docker top "$(docker compose -f docker-compose.published.yaml ps -q agent)" -eo pid,rss,comm
+```
 
 `-list-displays` reports sysfs metadata. `-check-displays` additionally
 compares the configured card, connector, connection status, and requested
