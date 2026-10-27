@@ -31,8 +31,21 @@ export function formatAuditEventType(eventType) {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+export function formatActorLabel(actorID) {
+  if (actorID === null || actorID === undefined || actorID === "") return "Unknown";
+  if (String(actorID).toLowerCase() === "anonymous") return "Unauthenticated";
+  return String(actorID);
+}
+
+export function compactIdentifier(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  const identifier = String(value);
+  if (identifier.length <= 24) return identifier;
+  return `${identifier.slice(0, 10)}…${identifier.slice(-6)}`;
+}
+
 export function formatDeviceEnabledMessage(deviceID, enabled) {
-  return `${deviceID} ${enabled ? "enabled" : "disabled"}`;
+  return `Device ${deviceID} is now ${enabled ? "enabled" : "disabled"}.`;
 }
 
 export function formatAuditDetails(metadata, locale) {
@@ -45,7 +58,7 @@ export function formatAuditDetails(metadata, locale) {
 
 export async function confirmBeforeAction(confirmFn, message, action) {
   if (typeof confirmFn !== "function") throw new TypeError("A confirmation function is required");
-  if (!confirmFn(message)) return false;
+  if (!(await confirmFn(message))) return false;
   await action();
   return true;
 }

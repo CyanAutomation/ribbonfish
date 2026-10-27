@@ -2,8 +2,8 @@
 
 The Worker serves one globally active playlist to enrolled devices. D1 stores
 versioned playlists, the active-playlist pointer, device credential hashes,
-one-time enrollment codes, last-poll timestamps, and development management
-events. R2 stores private content-addressed PNG assets. Devices receive only
+one-time enrollment codes, last-poll timestamps, and management audit events.
+R2 stores private content-addressed PNG assets. Devices receive only
 their application credential; they never receive a Cloudflare account token.
 
 ## Status and environments
@@ -14,12 +14,22 @@ Device sync and `/healthz` remain available.
 
 `wrangler.dev.toml` points to separate development D1 and R2 resources and sets
 `ADMIN_ENABLED = "true"`. The panel has no administrator authentication yet and
-is available through a public Workers URL when deployed. Use only development
-data there. Audit rows use `actor_id = "anonymous"`; they record actions but do
-not identify who performed them. Add administrator authentication and an
-attributable actor before enabling the API against production fleet data. The
-panel files live in the private development R2 bucket and are returned only by
-the Worker's fixed `/admin/` routes.
+is available through a public Workers URL when deployed. Its existing public
+Worker and preview URLs are currently disabled; deploying this config again
+will re-enable them. Use only development data there. Audit rows use
+`actor_id = "anonymous"`; they record actions but do not identify who performed
+them. Keep this Worker on its development resources.
+The panel files live in the private development R2 bucket and are returned only
+by the Worker's fixed `/admin/` routes.
+
+`wrangler.management.toml` defines a separate production management Worker named
+`ribbonfish-mgmt`. It uses the live `ribbonfish-devices` D1 database and
+`ribbonfish-assets` R2 bucket, with `ADMIN_ACCESS_REQUIRED = "true"`. Cloudflare
+Access protects the Worker for members of the Cloudflare account. The admin
+routes also fail closed unless the Worker receives an Access identity.
+Management audit events record the authenticated email as the actor. The
+existing `wrangler.toml` device-sync Worker remains at
+`ribbonfish.scheimann.workers.dev` with admin routes disabled.
 
 The existing GitHub `docker` environment is reserved for the Docker Hub image
 publisher. Worker deployment uses the separate `cloudflare-dev` environment and
@@ -72,20 +82,26 @@ apply the migration files in order with Wrangler.
 
 Deploy the isolated development Worker from a local authenticated Wrangler
 session with `npm run deploy:dev`; this uploads the panel files to development
-R2 before deploying the Worker. Or run the manual **Cloudflare device sync
-Worker** GitHub workflow. For the workflow, create the `cloudflare-dev` GitHub
-environment and add its `CLOUDFLARE_API_TOKEN` secret. The workflow runs tests
-and configuration validation before deploying only `wrangler.dev.toml`.
+R2 before deploying the Worker. After a pull request that changes
+`workers/device-sync/**` is merged to `main`, the **Cloudflare device sync
+Worker** GitHub workflow builds the console, runs tests and configuration
+validation, then deploys only `wrangler.dev.toml`. The workflow can also be run
+manually. Create the `cloudflare-dev` GitHub environment and add its
+`CLOUDFLARE_API_TOKEN` secret before the first automated deployment.
 
-The default `wrangler.toml` config is the existing fleet environment. Do not
-use `npm run deploy:production` until administrator authentication and a
-production rollout plan are in place.
+`npm run deploy:management` publishes the management panel to the production R2
+bucket and deploys `wrangler.management.toml`. Run `npm run migrate:management`
+before deployment when migrations change. The Access policy is configured on
+the Worker in Cloudflare and must stay enabled; `ADMIN_ACCESS_REQUIRED` also
+blocks `/admin/` and `/admin/api/*` if an Access identity is missing.
 
 ## Management API
 
-All management routes require `ADMIN_ENABLED = "true"`. They are intentionally
-unauthenticated during pre-production and must stay on the isolated development
-Worker.
+All management routes require `ADMIN_ENABLED = "true"`. The production
+management Worker additionally requires a Cloudflare Access identity for every
+`/admin/` and `/admin/api/*` request. Its Access policy is limited to members of
+the Cloudflare account. The isolated development Worker remains unauthenticated
+and must only use its separate development D1 and R2 resources.
 
 | Method and path | Behavior |
 | --- | --- |

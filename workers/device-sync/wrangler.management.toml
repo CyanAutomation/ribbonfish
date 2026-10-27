@@ -1,0 +1,22 @@
+name = "ribbonfish-mgmt"
+account_id = "c40f3cb30efbf8c6d081cf9e50a61931"
+main = "src/index.js"
+compatibility_date = "2026-10-26"
+workers_dev = true
+
+[vars]
+ADMIN_ENABLED = "true"
+ADMIN_ACCESS_REQUIRED = "true"
+
+[observability]
+enabled = true
+
+[[r2_buckets]]
+binding = "ASSETS"
+bucket_name = "ribbonfish-assets"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ribbonfish-devices"
+database_id = "f17f5835-614a-4896-bb4c-12edc1b3546a"
+migrations_dir = "migrations"
