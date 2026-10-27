@@ -80,10 +80,12 @@ case "\$1" in
       printf '%s\\n' "\$count" >"\$count_file"
       config_after=\${FAKE_DOCKER_CONFIG_AFTER:-0}
       frame_after=\${FAKE_DOCKER_FRAME_AFTER:-0}
+      frame_disappears_after=\${FAKE_DOCKER_FRAME_DISAPPEARS_AFTER:-0}
       if [ "\$config_after" -eq 0 ] || [ "\$count" -ge "\$config_after" ]; then
         printf '%s\\n' 'level=INFO msg="agent configuration loaded" displays=1 playlist_id=default'
       fi
-      if [ "\$frame_after" -eq 0 ] || [ "\$count" -ge "\$frame_after" ]; then
+      if { [ "\$frame_after" -eq 0 ] || [ "\$count" -ge "\$frame_after" ]; } && \\
+        { [ "\$frame_disappears_after" -eq 0 ] || [ "\$count" -lt "\$frame_disappears_after" ]; }; then
         printf '%s\\n' 'level=INFO msg="display frame updated" display_id=display-main'
       fi
     else
@@ -132,6 +134,19 @@ else
 	exit 1
 fi
 test "$(cat "$temp_dir/config-count")" -ge 3
+if output=$(FAKE_DOCKER_FRAME_AFTER=2 FAKE_DOCKER_FRAME_DISAPPEARS_AFTER=3 \
+	FAKE_DOCKER_LOG_COUNT_FILE="$temp_dir/evicted-frame-count" \
+	RIBBONFISH_VERIFY_TIMEOUT=3 PATH="$temp_dir/bin:$PATH" \
+	sh "$script_dir/verify-deployment.sh" 2>&1); then
+	case "$output" in
+		*'Deployment verified:'*) ;;
+		*) echo "evicted frame log returned unclear output: $output" >&2; exit 1 ;;
+	esac
+else
+	echo "verified frame log disappearing from the tail caused failure: $output" >&2
+	exit 1
+fi
+test "$(cat "$temp_dir/evicted-frame-count")" -eq 2
 if output=$(FAKE_DOCKER_FRAME_AFTER=99 FAKE_DOCKER_LOG_COUNT_FILE="$temp_dir/no-frame-count" \
 	RIBBONFISH_VERIFY_TIMEOUT=2 PATH="$temp_dir/bin:$PATH" \
 	sh "$script_dir/verify-deployment.sh" 2>&1); then

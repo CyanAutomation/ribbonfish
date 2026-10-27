@@ -110,7 +110,4 @@ while [ "$attempt" -le "$verify_timeout" ]; do
 done
 [ "$attempt" -le "$verify_timeout" ] || fail "timed out after ${verify_timeout}s waiting for a successful display frame update"
 
-logs=$(docker logs --tail 200 "$container_id" 2>&1) || fail 'could not read agent logs'
-printf '%s\n' "$logs" | grep -F 'msg="display frame updated"' >/dev/null || fail 'agent has not logged a successful display frame update'
-
 printf 'Deployment verified: profile=%s image=%s status=running network=%s; DRM connectors ready and display frame updated\n' "$profile" "$expected_image" "$network_mode"
