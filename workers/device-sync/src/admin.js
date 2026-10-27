@@ -24,16 +24,17 @@ export async function handleAdminRequest(request, env) {
   if (env.ADMIN_ENABLED !== "true") return new Response("not found", { status: 404 });
 
   const url = new URL(request.url);
-  if (url.pathname === "/admin" || url.pathname === "/admin/") {
-    if (request.method !== "GET") return methodNotAllowed("GET");
-    return fetchAdminAsset(env, "/admin/index.html");
-  }
-
-  if (!url.pathname.startsWith("/admin/api/")) {
-    return fetchAdminAsset(env, url.pathname);
-  }
-
   try {
+    if (url.pathname === "/admin" || url.pathname === "/admin/") {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      return await fetchAdminAsset(env, "/admin/index.html");
+    }
+
+    if (!url.pathname.startsWith("/admin/api/")) {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      return await fetchAdminAsset(env, url.pathname);
+    }
+
     if (url.pathname === "/admin/api/overview") {
       if (request.method !== "GET") return methodNotAllowed("GET");
       return jsonResponse(await readOverview(env));

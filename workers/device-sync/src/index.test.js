@@ -73,6 +73,7 @@ class FakeDatabase {
       },
       async run() {
         if (sql.startsWith("UPDATE devices SET last_seen_at")) {
+          if (database.lastSeenUpdateHandler) return database.lastSeenUpdateHandler();
           database.device.last_seen_at = values[0];
           return { meta: { changes: 1 } };
         }
@@ -153,6 +154,34 @@ test("version 2 playlist endpoint authenticates the device and returns a revisio
 
   const unchanged = await fetchHandler(request({ "If-None-Match": '"revision-1"' }), env);
   assert.equal(unchanged.status, 304);
+});
+
+test("last-seen telemetry runs in the background and cannot block playlist delivery", async () => {
+  const { env, db } = testEnvironment();
+  await authorize(db);
+  let rejectUpdate;
+  db.lastSeenUpdateHandler = () => new Promise((_, reject) => { rejectUpdate = reject; });
+  let telemetryPromise;
+  const context = { waitUntil(promise) { telemetryPromise = promise; } };
+  const request = new Request("https://worker.test/v2/playlist", {
+    headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office" },
+  });
+  const responsePromise = fetchHandler(request, env, context);
+  let timeout;
+  const result = await Promise.race([
+    responsePromise.then((response) => ({ response })),
+    new Promise((resolve) => { timeout = setTimeout(() => resolve({ timedOut: true }), 100); }),
+  ]);
+  clearTimeout(timeout);
+  if (result.timedOut) {
+    rejectUpdate?.(new Error("simulated D1 failure"));
+    await responsePromise;
+    assert.fail("playlist response waited for the telemetry write");
+  }
+  assert.equal(result.response.status, 200);
+  assert.equal(typeof telemetryPromise, "object");
+  rejectUpdate(new Error("simulated D1 failure"));
+  await telemetryPromise;
 });
 
 test("health endpoint is healthy only when active playlist assets are present", async () => {
