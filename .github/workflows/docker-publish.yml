@@ -56,6 +56,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: docker
+    concurrency:
+      group: docker-hub-publish
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -67,14 +70,29 @@ jobs:
           DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
-      - name: Build and publish multi-architecture image
+      - name: Build and publish multi-architecture image by commit
         env:
           DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
           docker buildx build \
             --platform linux/amd64,linux/arm64,linux/arm/v7 \
-            --tag "docker.io/${DOCKERHUB_USERNAME}/ribbonfish:latest" \
             --tag "docker.io/${DOCKERHUB_USERNAME}/ribbonfish:sha-${MERGE_COMMIT_SHA}" \
+            --provenance=mode=max \
+            --sbom=true \
             --push \
             ./agent
+      - name: Promote current main image to latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [ "$main_sha" != "$MERGE_COMMIT_SHA" ]; then
+            echo "main has advanced; keeping latest on the newer publish"
+            exit 0
+          fi
+          docker buildx imagetools create \
+            --tag "docker.io/${DOCKERHUB_USERNAME}/ribbonfish:latest" \
+            "docker.io/${DOCKERHUB_USERNAME}/ribbonfish:sha-${MERGE_COMMIT_SHA}"

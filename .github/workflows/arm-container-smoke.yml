@@ -9,12 +9,8 @@ on:
       - "examples/agent/simulator/**"
       - "examples/raspberry-pi/**"
       - ".github/workflows/arm-container-smoke.yml"
+  # Keep this unfiltered so required checks are reported for every PR.
   pull_request:
-    paths:
-      - "agent/**"
-      - "examples/agent/simulator/**"
-      - "examples/raspberry-pi/**"
-      - ".github/workflows/arm-container-smoke.yml"
 
 # Keep one run per PR or main branch and stop superseded QEMU work.
 concurrency:
