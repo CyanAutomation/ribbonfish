@@ -161,6 +161,21 @@ test("management page is served from the private R2 bucket", async () => {
   assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'none'/);
 });
 
+test("static management assets only accept GET requests", async () => {
+  const env = testEnvironment();
+  const response = await handleAdminRequest(request("/admin/app.js", { method: "DELETE" }), env);
+  assert.equal(response.status, 405);
+  assert.equal(response.headers.get("allow"), "GET");
+});
+
+test("R2 failures while serving management assets become an admin error response", async () => {
+  const env = testEnvironment();
+  env.ASSETS.get = async () => { throw new Error("R2 unavailable"); };
+  const response = await handleAdminRequest(request("/admin/app.js"), env);
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), { error: "internal error" });
+});
+
 test("overview omits device token hashes and reports missing active assets", async () => {
   const env = testEnvironment();
   const response = await handleAdminRequest(request("/admin/api/overview"), env);
