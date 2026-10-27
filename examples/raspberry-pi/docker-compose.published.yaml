@@ -1,13 +1,12 @@
 # Run the published image with bundled simulator config and images.
-# Set RIBBONFISH_VERSION to a sha tag to pin a run. No config or assets are mounted.
+# The published-image simulator uses the latest image. No config or assets are mounted.
 name: ribbonfish-published-simulator
 
 services:
   agent:
-    image: cyanautomation/ribbonfish:${RIBBONFISH_VERSION:-latest}
+    image: cyanautomation/ribbonfish:latest
     environment:
       RIBBONFISH_PROFILE: ${RIBBONFISH_SIMULATOR_PROFILE:-simulator-pi3a-plus}
-      RIBBONFISH_CACHE_DIR: /var/lib/ribbonfish/cache
     user: "65532:65532"
     init: true
     restart: unless-stopped

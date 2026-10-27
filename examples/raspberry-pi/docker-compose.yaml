@@ -2,7 +2,7 @@ name: ribbonfish
 
 services:
   agent:
-    image: cyanautomation/ribbonfish:${RIBBONFISH_VERSION:?Set RIBBONFISH_VERSION to latest or a published sha-<commit> tag}
+    image: cyanautomation/ribbonfish:latest
     restart: unless-stopped
     init: true
     stop_grace_period: 15s
@@ -15,19 +15,18 @@ services:
     network_mode: ${RIBBONFISH_NETWORK_MODE:-none}
 
     environment:
-      RIBBONFISH_PROFILE: ${RIBBONFISH_PROFILE:-pi4}
-      RIBBONFISH_DRM_DEVICE: ${RIBBONFISH_DRM_DEVICE:-/dev/dri/card1}
-      RIBBONFISH_CACHE_DIR: ${RIBBONFISH_CACHE_DIR:-/var/lib/ribbonfish/cache}
+      RIBBONFISH_PROFILE: ${RIBBONFISH_PROFILE:?Set RIBBONFISH_PROFILE in .env}
+      RIBBONFISH_DRM_DEVICE: ${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE in .env}
       RIBBONFISH_SYNC_URL: ${RIBBONFISH_SYNC_URL:-}
       RIBBONFISH_SYNC_INTERVAL: ${RIBBONFISH_SYNC_INTERVAL:-1m}
       RIBBONFISH_DEVICE_ID: ${RIBBONFISH_DEVICE_ID:-}
       RIBBONFISH_DEVICE_TOKEN_FILE: /var/lib/ribbonfish/device-token
 
     devices:
-      - "${RIBBONFISH_DRM_DEVICE:-/dev/dri/card1}:${RIBBONFISH_DRM_DEVICE:-/dev/dri/card1}"
+      - "${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE in .env}:${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE in .env}"
 
     group_add:
-      - "${RIBBONFISH_DRM_GID:-44}"
+      - "${RIBBONFISH_DRM_GID:?Set RIBBONFISH_DRM_GID in .env}"
 
     volumes:
       - ribbonfish-state:/var/lib/ribbonfish

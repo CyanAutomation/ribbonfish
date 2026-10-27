@@ -9,7 +9,6 @@ services:
       context: ../../agent
     environment:
       RIBBONFISH_PROFILE: ${RIBBONFISH_SIMULATOR_PROFILE:-simulator-pi3a-plus}
-      RIBBONFISH_CACHE_DIR: /var/lib/ribbonfish/cache
     user: "65532:65532"
     init: true
     restart: unless-stopped
