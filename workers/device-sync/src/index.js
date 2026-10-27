@@ -1,4 +1,5 @@
 import { isValidPositiveDuration } from "./duration.js";
+import { handleAdminRequest } from "./admin.js";
 
 const MAX_ENROLLMENT_BYTES = 4 << 10;
 const MAX_ASSET_BYTES = 32 << 20;
@@ -13,14 +14,23 @@ class HTTPError extends Error {
 }
 
 export default {
-  fetch(request, env) {
-    return fetchHandler(request, env);
+  fetch(request, env, ctx) {
+    return fetchHandler(request, env, ctx);
   },
 };
 
-export async function fetchHandler(request, env) {
+export async function fetchHandler(request, env, ctx) {
   const url = new URL(request.url);
   try {
+    if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
+      return await handleAdminRequest(request, env);
+    }
+
+    if (url.pathname === "/healthz") {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      return await healthCheck(env);
+    }
+
     if (url.pathname === "/v1/enroll") {
       if (request.method !== "POST") return methodNotAllowed("POST");
       return await enroll(request, env);
@@ -30,6 +40,7 @@ export async function fetchHandler(request, env) {
       if (request.method !== "GET") return methodNotAllowed("GET");
       const deviceID = request.headers.get("X-Ribbonfish-Device-ID") ?? "";
       await authenticate(request, env, deviceID);
+      await updateLastSeen(env, deviceID, ctx);
       const { playlist, etag } = await readActivePlaylist(env);
       if (matchesETag(request.headers.get("If-None-Match"), etag)) {
         return new Response(null, { status: 304, headers: privateHeaders({ ETag: etag }) });
@@ -69,6 +80,33 @@ export async function fetchHandler(request, env) {
       return jsonResponse({ error: error.message }, error.status);
     }
     return jsonResponse({ error: "internal error" }, 500);
+  }
+}
+
+function updateLastSeen(env, deviceID, ctx) {
+  const update = Promise.resolve()
+    .then(() => env.DB.prepare("UPDATE devices SET last_seen_at = ? WHERE device_id = ? AND enabled = 1")
+      .bind(Date.now(), deviceID).run())
+    .catch(() => {});
+  if (ctx?.waitUntil) {
+    ctx.waitUntil(update);
+    return;
+  }
+  return update;
+}
+
+async function healthCheck(env) {
+  try {
+    const { playlist } = await readActivePlaylist(env);
+    for (const asset of playlist.assets) {
+      const object = await env.ASSETS.head(`assets/${asset.sha256}`);
+      if (!object || object.size !== asset.size) {
+        return jsonResponse({ status: "degraded" }, 503);
+      }
+    }
+    return jsonResponse({ status: "ok" });
+  } catch {
+    return jsonResponse({ status: "degraded" }, 503);
   }
 }
 
