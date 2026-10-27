@@ -4,7 +4,7 @@
 
 **Ribbonfish** is a Cloudflare-native platform for centrally managing information-only screens on lightweight Linux devices (primarily Raspberry Pi 3B/4). It renders websites remotely, distributes versioned screenshots, and displays them through Linux DRM/KMS without requiring a browser or desktop environment on the device.
 
-**Status:** The repository includes a hardware-independent Go agent foundation, offline playlist/cache, and PNG display simulator, alongside proposed architecture and hardware deployment templates. The Cloudflare services and physical Raspberry Pi DRM/KMS backend are not implemented or validated.
+**Status:** The repository includes the Go agent, authenticated Cloudflare device sync, and an unauthenticated playlist/device management UI and API for an isolated development Worker. Management routes are disabled in the default Worker config and administrator authentication is deferred until production. Screenshot capture remains proposed; physical Raspberry Pi DRM/KMS support is only partially validated.
 
 ## Key Architectural Principles
 
@@ -46,16 +46,16 @@ This is a **proposed monorepo layout** for the full implementation (not yet in p
 └── README.md
 ```
 
-Current state: design documents and deployment templates, plus a tested Go agent prototype under `agent/` and an offline simulator demo under `examples/agent/simulator/`. No production control plane, remote synchronization, or physical display backend yet.
+Current state: the Go agent and device sync Worker are implemented. The development management API supports playlist revisions, enrollment codes, device controls, token rotation, audit events, and asset health. Browser rendering/scheduling remains design-stage, and the DRM/KMS backend still needs Pi 3B and Pi 4 dual-output acceptance.
 
 ## Cloudflare Services and Responsibilities
 
 | Service | Role |
 |---------|------|
-| **Workers** | Management API, authenticated device endpoints, config/manifest delivery |
-| **D1** | Sites, variants, playlists, devices, outputs, capture state, audit records |
-| **Browser Run** | Headless page rendering and screenshot capture with configurable viewport/wait policies |
-| **R2** | Versioned screenshot objects with 10-capture / 30-day hard retention limits |
+| **Workers** | Authenticated device endpoints and a development-only management API/UI; capture services remain proposed |
+| **D1** | Playlists, devices, enrollment codes, last-poll time, and management audit events; site/variant/capture state remains proposed |
+| **Browser Run** | Proposed headless page rendering and screenshot capture |
+| **R2** | Private content-addressed playlist assets; screenshot publication and retention remain proposed |
 | **Queues** | Single-consumer, single-message capture execution with bounded retries |
 | **Cron (Scheduled Worker)** | Runs every minute; enqueues deduplicated due-variant captures from D1 |
 
@@ -137,7 +137,7 @@ Variants are **keyed by rendering inputs + access permissions**; reuse across di
 ## Security Principles
 
 - Per-device identities, TLS transport, credential rotation and revocation
-- Role-based authorization; distinct admin authentication
+- Per-device authorization is implemented. Administrator authentication is deferred for pre-production and required before production; the default Worker config disables the development admin API.
 - No secrets in screenshots, configs, logs, or repository history
 - Allow-listed render targets; SSRF protection (private networks, metadata endpoints)
 - Isolate credentials for protected pages; no credential reuse across unrelated scopes
@@ -197,4 +197,4 @@ it does not satisfy physical hardware acceptance criteria.
 
 - **Architecture:** `/README.md` (comprehensive design doc with constraints, workflows, hardware criteria)
 - **Deployment template:** `/examples/raspberry-pi/` (Docker Compose proof of concept)
-- **Current status:** Proposed architecture; no production implementation yet
+- **Current status:** Device sync and development management controls are implemented; screenshot capture remains proposed

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Ribbonfish management</title>
+    <link rel="stylesheet" href="/admin/styles.css">
+    <script src="/admin/app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <div>
+        <p class="eyebrow">Ribbonfish · development</p>
+        <h1>Fleet management</h1>
+      </div>
+      <button id="reload" class="secondary" type="button">Refresh</button>
+    </header>
+
+    <main>
+      <p class="warning">This development panel has no administrator sign-in. Keep it on the isolated development Worker. The production Worker disables this API.</p>
+      <p id="message" class="message" role="status" aria-live="polite"></p>
+      <section id="asset-health" class="panel" hidden></section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">Content</p><h2>Playlists</h2></div>
+        </div>
+        <div id="playlists" class="table-wrap"></div>
+        <form id="playlist-form" class="form-grid">
+          <h3>Stage a playlist revision</h3>
+          <label>Playlist ID <input name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" value="operations"></label>
+          <label>Rotation interval <input name="rotation_interval" required value="15s" placeholder="15s"></label>
+          <label class="wide">PNG images <input name="assets" type="file" accept="image/png" multiple required></label>
+          <button type="submit">Upload and stage</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading"><div><p class="eyebrow">Fleet</p><h2>Devices</h2></div></div>
+        <div id="devices" class="table-wrap"></div>
+        <form id="enrollment-form" class="inline-form">
+          <label>Code expires in minutes <input name="expires_in_minutes" type="number" min="1" max="1440" value="30" required></label>
+          <button type="submit">Create enrollment code</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading"><div><p class="eyebrow">Changes</p><h2>Recent activity</h2></div></div>
+        <div id="audit" class="table-wrap"></div>
+      </section>
+
+      <section id="secret-panel" class="panel secret-panel" hidden>
+        <div class="section-heading"><div><p class="eyebrow">Shown once</p><h2 id="secret-title">Credential</h2></div></div>
+        <p>Copy this value to the device now. It will not be shown again.</p>
+        <code id="secret-value"></code>
+        <div class="inline-form">
+          <button id="copy-secret" type="button">Copy</button>
+          <button id="hide-secret" class="secondary" type="button">Hide</button>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

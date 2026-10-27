@@ -2,7 +2,8 @@ CREATE TABLE IF NOT EXISTS devices (
   device_id TEXT PRIMARY KEY,
   token_hash TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS enrollments (
@@ -38,3 +39,15 @@ CREATE TABLE IF NOT EXISTS active_playlist (
   playlist_id TEXT NOT NULL,
   revision TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS audit_events (
+  event_id TEXT PRIMARY KEY,
+  actor_id TEXT NOT NULL DEFAULT 'anonymous',
+  event_type TEXT NOT NULL,
+  subject_type TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  occurred_at INTEGER NOT NULL,
+  metadata_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS audit_events_occurred_at_idx ON audit_events(occurred_at DESC);
