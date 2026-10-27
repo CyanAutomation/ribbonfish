@@ -7,10 +7,8 @@ on:
     paths:
       - "workers/device-sync/**"
       - ".github/workflows/device-sync.yml"
+  # Keep this unfiltered so required checks are reported for every PR.
   pull_request:
-    paths:
-      - "workers/device-sync/**"
-      - ".github/workflows/device-sync.yml"
   workflow_dispatch:
 
 permissions:
@@ -24,6 +22,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: workers/device-sync/.nvmrc
+          cache: npm
+          cache-dependency-path: workers/device-sync/package-lock.json
       - name: Install pinned Wrangler
         working-directory: workers/device-sync
         run: npm ci
@@ -38,10 +41,12 @@ jobs:
         run: npm run check:config
 
   deploy-dev:
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event_name == 'push')
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Restrict this environment to main and store CLOUDFLARE_API_TOKEN in it.
+    environment: device-sync-dev
     concurrency:
       group: management-console-dev-deploy
       cancel-in-progress: false
@@ -49,6 +54,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: workers/device-sync/.nvmrc
+          cache: npm
+          cache-dependency-path: workers/device-sync/package-lock.json
       - name: Install pinned Wrangler
         working-directory: workers/device-sync
         run: npm ci
