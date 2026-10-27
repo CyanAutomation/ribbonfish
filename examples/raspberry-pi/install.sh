@@ -14,8 +14,9 @@ Download the current main-branch Raspberry Pi deployment kit and stage it in
 outbound HTTPS access to api.github.com and raw.githubusercontent.com.
 
 Options are passed to prepare-deployment.sh. Use --target, --profile,
---drm-device, --drm-gid, --sync-url, --device-id, or --replace-env. The
-deployment always uses the latest published image.
+--drm-device, --drm-gid, --sync-url, --device-id, --image,
+--fix-target-owner, or --replace-env. The deployment defaults to the latest
+published image; pass --image to pin an immutable tag or digest.
 EOF
 }
 
