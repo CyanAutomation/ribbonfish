@@ -13,6 +13,12 @@ if (!config || config.startsWith("--") || args.some((arg) => arg !== "--local" &
   throw new Error("usage: publish-admin-assets.mjs [--config wrangler.dev.toml] [--local]");
 }
 
+execFileSync(process.execPath, [resolve(scriptDirectory, "build-admin.mjs")], {
+  cwd: workerDirectory,
+  stdio: "inherit",
+});
+
+const buildDirectory = resolve(workerDirectory, ".admin-build");
 const files = [
   ["index.html", "text/html; charset=utf-8"],
   ["app.js", "text/javascript; charset=utf-8"],
@@ -22,7 +28,7 @@ const files = [
 for (const [file, contentType] of files) {
   execFileSync("npx", [
     "wrangler", "r2", "object", "put", `ribbonfish-management-dev/admin/${file}`,
-    "--file", resolve(workerDirectory, "public/admin", file),
+    "--file", resolve(buildDirectory, file),
     "--content-type", contentType,
     local ? "--local" : "--remote",
     "--force",

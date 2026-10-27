@@ -4,8 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Ribbonfish management</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23102a43'/%3E%3Ctext x='50%25' y='52%25' text-anchor='middle' dominant-baseline='middle' font-family='Arial,sans-serif' font-size='44' font-weight='700' fill='white'%3ER%3C/text%3E%3C/svg%3E">
     <link rel="stylesheet" href="/admin/styles.css">
-    <script src="/admin/app.js" defer></script>
+    <script src="/admin/app.js" type="module"></script>
   </head>
   <body>
     <header>
@@ -21,6 +22,29 @@
       <p id="message" class="message" role="status" aria-live="polite"></p>
       <section id="asset-health" class="panel" hidden></section>
 
+      <section class="panel" aria-labelledby="openui-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">OpenUI Lang · read only</p><h2 id="openui-title">Fleet snapshot</h2></div>
+        </div>
+        <div id="openui-preview" role="region" aria-label="OpenUI fleet snapshot" aria-live="polite"></div>
+        <details class="openui-editor">
+          <summary>Customize this view with OpenUI Lang</summary>
+          <p class="muted">Use the generated prompt with your preferred model, then paste its OpenUI Lang view below. Only the existing read-only fleet overview is available.</p>
+          <label>OpenUI Lang program <textarea id="openui-source" rows="8" spellcheck="false"></textarea></label>
+          <div class="inline-form">
+            <button id="openui-preview-button" type="button">Render view</button>
+            <button id="openui-merge-button" class="secondary" type="button">Merge patch</button>
+            <button id="openui-reset-button" class="secondary" type="button">Restore starter</button>
+          </div>
+          <p id="openui-message" class="message" role="status" aria-live="polite"></p>
+          <details class="openui-prompt-details">
+            <summary>View generation prompt</summary>
+            <pre id="openui-prompt-text"></pre>
+            <button id="openui-copy-prompt" class="secondary" type="button">Copy prompt</button>
+          </details>
+        </details>
+      </section>
+
       <section class="panel">
         <div class="section-heading">
           <div><p class="eyebrow">Content</p><h2>Playlists</h2></div>
@@ -28,7 +52,7 @@
         <div id="playlists" class="table-wrap"></div>
         <form id="playlist-form" class="form-grid">
           <h3>Stage a playlist revision</h3>
-          <label>Playlist ID <input name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" value="operations"></label>
+          <label>Playlist ID <input name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" placeholder="e.g. operations"></label>
           <label>Rotation interval <input name="rotation_interval" required value="15s" placeholder="15s"></label>
           <label class="wide">PNG images <input name="assets" type="file" accept="image/png" multiple required></label>
           <button type="submit">Upload and stage</button>

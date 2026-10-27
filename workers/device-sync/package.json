@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
+    "build:admin": "node scripts/build-admin.mjs",
     "check:config": "wrangler deploy --dry-run --config wrangler.toml && wrangler deploy --dry-run --config wrangler.dev.toml",
     "dev": "npm run publish:admin:local && wrangler dev --config wrangler.dev.toml",
     "deploy:dev": "npm run publish:admin:dev && wrangler deploy --config wrangler.dev.toml",
@@ -16,6 +17,8 @@
     "migrate:dev-remote": "wrangler d1 migrations apply ribbonfish-management-dev --remote --config wrangler.dev.toml"
   },
   "devDependencies": {
+    "@openuidev/lang-core": "^1.0.2",
+    "esbuild": "^0.28.2",
     "wrangler": "4.154.0"
   }
 }

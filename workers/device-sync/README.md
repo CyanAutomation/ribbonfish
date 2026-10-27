@@ -46,8 +46,16 @@ npm run dev
 ```
 
 `npm run dev` places the panel files in the local R2 emulator before starting
-the Worker. Open `http://localhost:8787/admin/`. Upload PNG files through the
-panel, stage a playlist, then activate the revision.
+the Worker. It bundles the browser app before publishing those files. Open
+`http://localhost:8787/admin/`. Upload PNG files through the panel, stage a
+playlist, then activate the revision.
+
+The panel's OpenUI Lang view uses only the framework-independent
+`@openuidev/lang-core` package. Its custom-view editor can parse and preview
+OpenUI programs and copy a generated prompt for use with an external model. The
+view exposes only the read-only fleet overview query; it does not execute
+OpenUI mutations or actions. The native DOM adapter is bundled with esbuild;
+no OpenUI framework renderer is installed.
 
 For a fresh remote development database, initialize its schema and migration
 ledger once, then upload the bundled default playlist:
