@@ -20,11 +20,15 @@ grep -Fx 'RIBBONFISH_PROFILE=pi3a-plus' "$target_dir/.env"
 grep -Fx 'RIBBONFISH_DRM_DEVICE=/dev/null' "$target_dir/.env"
 grep -Fx 'RIBBONFISH_DRM_GID=0' "$target_dir/.env"
 grep -Fx 'RIBBONFISH_NETWORK_MODE=none' "$target_dir/.env"
+if grep -q '^RIBBONFISH_IMAGE=' "$target_dir/.env"; then
+	echo 'default .env should leave the image on the documented default' >&2
+	exit 1
+fi
 if grep -Eq '^(RIBBONFISH_VERSION|RIBBONFISH_CACHE_DIR|RIBBONFISH_SYNC_URL|RIBBONFISH_SYNC_INTERVAL|RIBBONFISH_DEVICE_ID)=' "$target_dir/.env"; then
 	echo 'generated .env contains a fixed tag or redundant defaults' >&2
 	exit 1
 fi
-grep -F 'image: cyanautomation/ribbonfish:latest' "$target_dir/docker-compose.yaml"
+grep -F 'image: ${RIBBONFISH_IMAGE:-cyanautomation/ribbonfish:latest}' "$target_dir/docker-compose.yaml"
 grep -F 'RIBBONFISH_PROFILE: ${RIBBONFISH_PROFILE:?Set RIBBONFISH_PROFILE in .env}' "$target_dir/docker-compose.yaml"
 grep -F 'RIBBONFISH_DRM_DEVICE: ${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE in .env}' "$target_dir/docker-compose.yaml"
 grep -F '${RIBBONFISH_DRM_GID:?Set RIBBONFISH_DRM_GID in .env}' "$target_dir/docker-compose.yaml"
@@ -34,6 +38,26 @@ if grep -Eq '^(RIBBONFISH_VERSION|RIBBONFISH_CACHE_DIR|RIBBONFISH_SYNC_INTERVAL)
 fi
 
 mkdir -p "$temp_dir/bin"
+cat > "$temp_dir/bin/stat" <<'EOF'
+#!/bin/sh
+format=
+path=
+if [ "$1" = -c ] || [ "$1" = -f ]; then
+	format=$2
+	path=$3
+fi
+if [ "$path" = "${FAKE_OWNER_TARGET:-}" ] && [ "$format" = '%u' ]; then
+	printf '%s\n' 0
+	exit 0
+fi
+exec /usr/bin/stat "$@"
+EOF
+cat > "$temp_dir/bin/sudo" <<'EOF'
+#!/bin/sh
+[ "$1" = chown ] && [ "$#" -eq 3 ] || { echo "unexpected sudo command: $*" >&2; exit 2; }
+printf '%s\n' "$*" > "${FAKE_SUDO_LOG:?set FAKE_SUDO_LOG}"
+chmod u+rwx "$3"
+EOF
 cat > "$temp_dir/bin/docker" <<EOF
 #!/bin/sh
 case "\$1" in
@@ -44,6 +68,7 @@ case "\$1" in
         --project-directory|-p) shift 2 ;;
         config) command=config; shift; break ;;
         ps) command=ps; shift; break ;;
+        run) command=run; shift; break ;;
         exec) command=exec; shift; break ;;
         *) echo "unexpected docker compose option: \$1" >&2; exit 2 ;;
       esac
@@ -52,8 +77,8 @@ case "\$1" in
       'config --quiet') exit 0 ;;
       'config --images') printf '%s\\n' "\${FAKE_DOCKER_IMAGE:-cyanautomation/ribbonfish:latest}" ;;
       'ps -q') [ "\${2:-}" = agent ] && printf '%s\\n' test-container ;;
-      'exec -T')
-        [ "\${2:-}" = agent ] && [ "\${3:-}" = /ribbonfish ] && [ "\${4:-}" = -check-displays ] || { echo "unexpected docker compose exec command: \$*" >&2; exit 2; }
+      'run --rm')
+        [ "\${1:-}" = --rm ] && [ "\${2:-}" = --no-deps ] && [ "\${3:-}" = -T ] && [ "\${4:-}" = agent ] && [ "\${5:-}" = -check-displays ] || { echo "unexpected docker compose run command: \$*" >&2; exit 2; }
         if [ "\${FAKE_DOCKER_DISPLAY_CHECK_FAIL:-0}" = 1 ]; then
           printf '%s\\n' 'DRM connector HDMI-A-1 is disconnected' >&2
           exit 1
@@ -61,10 +86,16 @@ case "\$1" in
         printf '%s\\n' 'DRM display preflight passed: device=/dev/dri/card0 displays=1'
         printf '%s\\n' 'display_id=display-main connector=HDMI-A-1 status=connected requested_mode=preferred advertised_modes=32'
         ;;
+      'exec -T')
+        echo "unexpected legacy docker compose exec command: \$*" >&2; exit 2 ;;
       *) echo "unexpected docker compose call: \$*" >&2; exit 2 ;;
     esac
     ;;
   image)
+    if [ "\${FAKE_DOCKER_IMAGE_INSPECT_FAIL:-0}" = 1 ]; then
+      printf '%s\\n' 'Error: No such image' >&2
+      exit 1
+    fi
     [ "\${2:-}" = inspect ] || { echo "unexpected docker image call: \$*" >&2; exit 2; }
     printf '%s\\n' "\${FAKE_DOCKER_IMAGE_ID:-sha256:test-image-id}"
     ;;
@@ -97,6 +128,7 @@ case "\$1" in
 esac
 EOF
 chmod +x "$temp_dir/bin/docker"
+chmod +x "$temp_dir/bin/stat" "$temp_dir/bin/sudo"
 cat > "$temp_dir/bin/sleep" <<'EOF'
 #!/bin/sh
 exit 0
@@ -107,7 +139,59 @@ echo 'installer unexpectedly invoked git' >&2
 exit 99
 EOF
 chmod +x "$temp_dir/bin/sleep" "$temp_dir/bin/git"
-PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" --preflight
+owner_repair_target="$HOME/containers/root-owned-empty"
+mkdir -p "$owner_repair_target"
+chmod 0555 "$owner_repair_target"
+FAKE_OWNER_TARGET="$owner_repair_target" FAKE_SUDO_LOG="$temp_dir/sudo-log" \
+	PATH="$temp_dir/bin:$PATH" sh "$script_dir/prepare-deployment.sh" \
+	--target "$owner_repair_target" --profile pi3a-plus --drm-device /dev/null --drm-gid 0 \
+	--fix-target-owner
+test -w "$owner_repair_target"
+grep -Fx "chown $(id -u):$(id -g) $owner_repair_target" "$temp_dir/sudo-log"
+
+nonempty_root_target="$HOME/containers/root-owned-nonempty"
+mkdir -p "$nonempty_root_target"
+touch "$nonempty_root_target/keep-me"
+chmod 0555 "$nonempty_root_target"
+if output=$(FAKE_OWNER_TARGET="$nonempty_root_target" FAKE_SUDO_LOG="$temp_dir/should-not-sudo" \
+	PATH="$temp_dir/bin:$PATH" sh "$script_dir/prepare-deployment.sh" \
+	--target "$nonempty_root_target" --profile pi3a-plus --drm-device /dev/null --drm-gid 0 \
+	--fix-target-owner 2>&1); then
+	echo 'nonempty root-owned target unexpectedly received automatic ownership repair' >&2
+	exit 1
+fi
+case "$output" in
+	*'only repairs an empty root-owned target'*) ;;
+	*) echo "nonempty target returned an unclear repair error: $output" >&2; exit 1 ;;
+esac
+test ! -e "$temp_dir/should-not-sudo"
+test -f "$nonempty_root_target/keep-me"
+chmod 0755 "$nonempty_root_target"
+
+symlink_target="$HOME/containers/root-owned-symlink"
+symlink_real_target="$HOME/containers/root-owned-empty-for-symlink"
+mkdir -p "$symlink_real_target"
+chmod 0555 "$symlink_real_target"
+ln -s "$symlink_real_target" "$symlink_target"
+if output=$(FAKE_OWNER_TARGET="$symlink_target" FAKE_SUDO_LOG="$temp_dir/symlink-should-not-sudo" \
+	PATH="$temp_dir/bin:$PATH" sh "$script_dir/prepare-deployment.sh" \
+	--target "$symlink_target" --profile pi3a-plus --drm-device /dev/null --drm-gid 0 \
+	--fix-target-owner 2>&1); then
+	echo 'symlink target unexpectedly received automatic ownership repair' >&2
+	exit 1
+fi
+case "$output" in
+	*'cannot repair a symlink target'*) ;;
+	*) echo "symlink target returned an unclear repair error: $output" >&2; exit 1 ;;
+esac
+test ! -e "$temp_dir/symlink-should-not-sudo"
+chmod 0755 "$symlink_real_target"
+
+preflight_output=$(PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" --preflight 2>&1)
+case "$preflight_output" in
+	*'DRM display preflight passed:'*'Preflight passed:'*) ;;
+	*) echo "preflight did not report hardware verification: $preflight_output" >&2; exit 1 ;;
+esac
 PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh"
 if output=$(FAKE_DOCKER_FRAME_AFTER=2 FAKE_DOCKER_LOG_COUNT_FILE="$temp_dir/log-count" \
 	RIBBONFISH_VERIFY_TIMEOUT=3 PATH="$temp_dir/bin:$PATH" \
@@ -161,17 +245,43 @@ if FAKE_DOCKER_DISPLAY_CHECK_FAIL=1 PATH="$temp_dir/bin:$PATH" sh "$script_dir/v
 	echo 'disconnected DRM connector unexpectedly passed deployment verification' >&2
 	exit 1
 fi
+if output=$(FAKE_DOCKER_DISPLAY_CHECK_FAIL=1 PATH="$temp_dir/bin:$PATH" \
+	sh "$script_dir/verify-deployment.sh" --preflight 2>&1); then
+	echo 'disconnected DRM connector unexpectedly passed preflight' >&2
+	exit 1
+fi
+case "$output" in
+	*'configured DRM connectors are unavailable'*'HDMI-A-1 is disconnected'*) ;;
+	*) echo "disconnected HDMI returned an unclear preflight error: $output" >&2; exit 1 ;;
+esac
+if output=$(FAKE_DOCKER_IMAGE_INSPECT_FAIL=1 PATH="$temp_dir/bin:$PATH" \
+	sh "$script_dir/verify-deployment.sh" --preflight 2>&1); then
+	echo 'preflight unexpectedly passed without the configured image present locally' >&2
+	exit 1
+fi
+case "$output" in
+	*'not present locally; pull it with docker compose pull first'*) ;;
+	*) echo "missing local image returned an unclear preflight error: $output" >&2; exit 1 ;;
+esac
 
 FAKE_DOCKER_IMAGE=cyanautomation/ribbonfish:latest PATH="$temp_dir/bin:$PATH" \
 	sh "$script_dir/verify-deployment.sh" --preflight
 FAKE_DOCKER_IMAGE=cyanautomation/ribbonfish:latest PATH="$temp_dir/bin:$PATH" \
 	sh "$script_dir/verify-deployment.sh"
-if FAKE_DOCKER_IMAGE=cyanautomation/ribbonfish:sha-128b052157f2b3c0d80e282eb1f7ab982ccb9411 \
+digest_image='cyanautomation/ribbonfish@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+sh "$script_dir/prepare-deployment.sh" \
+	--profile pi3a-plus --drm-device /dev/null --drm-gid 0 --image "$digest_image"
+grep -Fx "RIBBONFISH_IMAGE=$digest_image" "$target_dir/.env"
+FAKE_DOCKER_IMAGE="$digest_image" PATH="$temp_dir/bin:$PATH" \
+	sh "$script_dir/verify-deployment.sh" --preflight
+FAKE_DOCKER_IMAGE="$digest_image" PATH="$temp_dir/bin:$PATH" \
+	sh "$script_dir/verify-deployment.sh"
+if FAKE_DOCKER_IMAGE=cyanautomation/ribbonfish:latest \
 	PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" --preflight >/dev/null 2>&1; then
-	echo 'non-latest image unexpectedly passed verification' >&2
+	echo 'mismatched configured image unexpectedly passed verification' >&2
 	exit 1
 fi
-if FAKE_DOCKER_IMAGE=cyanautomation/ribbonfish:latest FAKE_DOCKER_RUNTIME_IMAGE_ID=sha256:stale-image \
+if FAKE_DOCKER_IMAGE="$digest_image" FAKE_DOCKER_RUNTIME_IMAGE_ID=sha256:stale-image \
 	PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" >/dev/null 2>&1; then
 	echo 'stale container image unexpectedly passed verification' >&2
 	exit 1
@@ -183,6 +293,7 @@ sh "$script_dir/prepare-deployment.sh" \
 	--drm-device /dev/null \
 	--drm-gid 0
 grep -Fx 'RIBBONFISH_SYNC_URL=https://sync.example.workers.dev' "$target_dir/.env"
+grep -Fx "RIBBONFISH_IMAGE=$digest_image" "$target_dir/.env"
 if PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" --preflight >/dev/null 2>&1; then
 	echo 'sync configuration without bridge networking unexpectedly passed' >&2
 	exit 1
@@ -192,7 +303,7 @@ sh "$script_dir/prepare-deployment.sh" \
 	--drm-device /dev/null \
 	--drm-gid 0 \
 	--replace-env
-backup=$(find "$target_dir" -maxdepth 1 -name '.env.backup.*' -print -quit)
+backup=$(find "$target_dir" -maxdepth 1 -name '.env.backup.*' -print | sort | tail -n 1)
 test -n "$backup"
 grep -Fx 'RIBBONFISH_SYNC_URL=https://sync.example.workers.dev' "$backup"
 grep -Fx 'RIBBONFISH_NETWORK_MODE=none' "$target_dir/.env"
@@ -281,14 +392,12 @@ RIBBONFISH_GITHUB_API_URL=https://api.github.test/commits/main \
 	RIBBONFISH_RAW_BASE_URL=https://raw.github.test/CyanAutomation/ribbonfish \
 	TMPDIR="$temp_dir" \
 	PATH="$temp_dir/bin:$PATH" sh "$script_dir/install.sh" \
-	--target "$install_target" --profile pi3a-plus --drm-device /dev/null --drm-gid 0
+	--target "$install_target" --profile pi3a-plus --drm-device /dev/null --drm-gid 0 \
+	--fix-target-owner --image "$digest_image"
 test -f "$install_target/docker-compose.yaml"
 test -x "$install_target/install.sh"
 test -f "$install_target/verify-deployment.sh"
-if grep -q '^RIBBONFISH_VERSION=' "$install_target/.env"; then
-	echo 'installer generated an image-version setting' >&2
-	exit 1
-fi
+grep -Fx "RIBBONFISH_IMAGE=$digest_image" "$install_target/.env"
 test -z "$(find "$temp_dir" -maxdepth 1 -name 'ribbonfish-install.*' -print -quit)"
 
 printf '%s\n' 'prepare-deployment tests passed'

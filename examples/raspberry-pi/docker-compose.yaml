@@ -2,7 +2,7 @@ name: ribbonfish
 
 services:
   agent:
-    image: cyanautomation/ribbonfish:latest
+    image: ${RIBBONFISH_IMAGE:-cyanautomation/ribbonfish:latest}
     restart: unless-stopped
     init: true
     stop_grace_period: 15s
