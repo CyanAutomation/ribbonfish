@@ -193,6 +193,7 @@ stage_file() {
 }
 
 stage_file "$script_dir/docker-compose.yaml" docker-compose.yaml
+stage_file "$script_dir/docker-compose.published.yaml" docker-compose.published.yaml
 stage_file "$script_dir/.env.example" .env.example
 stage_file "$script_dir/.gitignore" .gitignore
 stage_file "$script_dir/README.md" README.md

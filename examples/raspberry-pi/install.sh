@@ -50,7 +50,7 @@ trap 'exit 1' HUP INT TERM
 
 source_dir="$temp_dir/examples/raspberry-pi"
 mkdir -p "$source_dir"
-for file in docker-compose.yaml .env.example .gitignore README.md install.sh prepare-deployment.sh verify-deployment.sh; do
+for file in docker-compose.yaml docker-compose.published.yaml .env.example .gitignore README.md install.sh prepare-deployment.sh verify-deployment.sh; do
 	url="$raw_base_url/$commit/examples/raspberry-pi/$file"
 	curl -fsSL "$url" -o "$source_dir/$file" || fail "could not download $file from commit $commit"
 done

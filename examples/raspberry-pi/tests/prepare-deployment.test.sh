@@ -14,6 +14,8 @@ sh "$script_dir/prepare-deployment.sh" \
 
 target_dir="$HOME/containers/ribbonfish"
 test -f "$target_dir/docker-compose.yaml"
+test -f "$target_dir/docker-compose.published.yaml"
+grep -F 'RIBBONFISH_SIMULATOR_PROFILE:-simulator-pi3a-plus' "$target_dir/docker-compose.published.yaml"
 test -x "$target_dir/install.sh"
 test -f "$target_dir/.env"
 grep -Fx 'RIBBONFISH_PROFILE=pi3a-plus' "$target_dir/.env"
@@ -395,6 +397,8 @@ RIBBONFISH_GITHUB_API_URL=https://api.github.test/commits/main \
 	--target "$install_target" --profile pi3a-plus --drm-device /dev/null --drm-gid 0 \
 	--fix-target-owner --image "$digest_image"
 test -f "$install_target/docker-compose.yaml"
+test -f "$install_target/docker-compose.published.yaml"
+grep -F 'RIBBONFISH_SIMULATOR_PROFILE:-simulator-pi3a-plus' "$install_target/docker-compose.published.yaml"
 test -x "$install_target/install.sh"
 test -f "$install_target/verify-deployment.sh"
 grep -Fx "RIBBONFISH_IMAGE=$digest_image" "$install_target/.env"
