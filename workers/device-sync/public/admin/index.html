@@ -9,79 +9,114 @@
     <script src="/admin/app.js" type="module"></script>
   </head>
   <body>
-    <header>
-      <div>
-        <p class="eyebrow">Ribbonfish · development</p>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="app-header">
+      <div class="header-inner">
+        <div class="brand-line">
+          <p class="wordmark">Ribbonfish</p>
+          <span id="environment-tag" class="environment-tag">Management</span>
+        </div>
         <h1>Fleet management</h1>
       </div>
-      <button id="reload" class="secondary" type="button">Refresh</button>
+      <button id="reload" class="button button--secondary" type="button">Refresh overview</button>
     </header>
 
-    <main>
-      <p class="warning">This development panel has no administrator sign-in. Keep it on the isolated development Worker. The production Worker disables this API.</p>
-      <p id="message" class="message" role="status" aria-live="polite"></p>
-      <section id="asset-health" class="panel" hidden></section>
+    <main id="main-content">
+      <p id="environment-notice" class="alert alert--warning" hidden></p>
+      <div id="message" class="toast" hidden role="status" aria-live="polite" aria-atomic="true">
+        <span id="message-text"></span>
+        <button id="dismiss-message" class="button button--quiet" type="button" aria-label="Dismiss message">Dismiss</button>
+      </div>
+      <section id="asset-health" class="panel panel--alert" hidden role="alert" aria-live="assertive"></section>
 
-      <section class="panel" aria-labelledby="openui-title">
+      <nav class="section-nav" aria-label="Management sections">
+        <a href="#overview-section">Overview</a>
+        <a href="#playlist-section">Playlists</a>
+        <a href="#device-section">Devices</a>
+        <a href="#activity-section">Recent activity</a>
+      </nav>
+
+      <section id="overview-section" class="panel" aria-labelledby="overview-title">
         <div class="section-heading">
-          <div><p class="eyebrow">OpenUI Lang · read only</p><h2 id="openui-title">Fleet snapshot</h2></div>
+          <div><p class="eyebrow">Overview</p><h2 id="overview-title">Fleet snapshot</h2></div>
         </div>
-        <div id="openui-preview" role="region" aria-label="OpenUI fleet snapshot" aria-live="polite"></div>
-        <details class="openui-editor">
-          <summary>Customize this view with OpenUI Lang</summary>
-          <p class="muted">Use the generated prompt with your preferred model, then paste its OpenUI Lang view below. Only the existing read-only fleet overview is available.</p>
-          <label>OpenUI Lang program <textarea id="openui-source" rows="8" spellcheck="false"></textarea></label>
-          <div class="inline-form">
-            <button id="openui-preview-button" type="button">Render view</button>
-            <button id="openui-merge-button" class="secondary" type="button">Merge patch</button>
-            <button id="openui-reset-button" class="secondary" type="button">Restore starter</button>
+        <div id="openui-preview" role="region" aria-label="Fleet snapshot" aria-live="polite"></div>
+        <details class="developer-tools">
+          <summary>Customize the overview (developer tool)</summary>
+          <p class="muted">For developers: use OpenUI Lang with an external model to create a read-only fleet summary.</p>
+          <label>OpenUI Lang program <textarea id="openui-source" class="field-control" rows="8" spellcheck="false"></textarea></label>
+          <div class="action-row">
+            <button id="openui-preview-button" class="button button--primary" type="button">Render view</button>
+            <button id="openui-merge-button" class="button button--secondary" type="button">Merge patch</button>
+            <button id="openui-reset-button" class="button button--secondary" type="button">Restore starter</button>
           </div>
-          <p id="openui-message" class="message" role="status" aria-live="polite"></p>
+          <p id="openui-message" class="inline-feedback" role="status" aria-live="polite"></p>
           <details class="openui-prompt-details">
             <summary>View generation prompt</summary>
             <pre id="openui-prompt-text"></pre>
-            <button id="openui-copy-prompt" class="secondary" type="button">Copy prompt</button>
+            <button id="openui-copy-prompt" class="button button--secondary" type="button">Copy prompt</button>
           </details>
         </details>
       </section>
 
-      <section class="panel">
+      <section id="playlist-section" class="panel" aria-labelledby="playlist-title">
         <div class="section-heading">
-          <div><p class="eyebrow">Content</p><h2>Playlists</h2></div>
+          <div><p class="eyebrow">Content</p><h2 id="playlist-title">Playlists</h2></div>
         </div>
-        <div id="playlists" class="table-wrap"></div>
+        <div id="playlists" class="table-scroll" role="region" aria-label="Playlist revisions" tabindex="0"></div>
+        <p class="scroll-hint">On narrow screens, scroll horizontally to see all playlist columns.</p>
         <form id="playlist-form" class="form-grid">
           <h3>Stage a playlist revision</h3>
-          <label>Playlist ID <input name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" placeholder="e.g. operations"></label>
-          <label>Rotation interval <input name="rotation_interval" required value="15s" placeholder="15s"></label>
-          <label class="wide">PNG images <input name="assets" type="file" accept="image/png" multiple required></label>
-          <button type="submit">Upload and stage</button>
+          <label>Playlist name or ID <input class="field-control" name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" placeholder="e.g. operations"></label>
+          <label>Rotation interval <input class="field-control" name="rotation_interval" required value="15s" placeholder="15s"></label>
+          <label class="field--wide">PNG images to upload <input class="field-control file-control" name="assets" type="file" accept="image/png" multiple required></label>
+          <button class="button button--primary" type="submit">Upload and stage playlist</button>
+          <p id="playlist-feedback" class="form-feedback" hidden role="status" aria-live="polite"></p>
         </form>
       </section>
 
-      <section class="panel">
-        <div class="section-heading"><div><p class="eyebrow">Fleet</p><h2>Devices</h2></div></div>
-        <div id="devices" class="table-wrap"></div>
+      <section id="device-section" class="panel" aria-labelledby="device-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">Fleet</p><h2 id="device-title">Devices</h2></div>
+        </div>
+        <div id="devices" class="table-scroll desktop-data" role="region" aria-label="Enrolled devices" tabindex="0"></div>
+        <div id="devices-mobile" class="mobile-card-list" role="region" aria-label="Enrolled devices"></div>
         <form id="enrollment-form" class="inline-form">
-          <label>Code expires in minutes <input name="expires_in_minutes" type="number" min="1" max="1440" value="30" required></label>
-          <button type="submit">Create enrollment code</button>
+          <label>Valid for (minutes) <input class="field-control" name="expires_in_minutes" type="number" min="1" max="1440" value="30" required></label>
+          <button class="button button--primary" type="submit">Create enrollment code</button>
+          <p id="enrollment-feedback" class="form-feedback" hidden role="status" aria-live="polite"></p>
         </form>
       </section>
 
-      <section class="panel">
-        <div class="section-heading"><div><p class="eyebrow">Changes</p><h2>Recent activity</h2></div></div>
-        <div id="audit" class="table-wrap"></div>
+      <section id="activity-section" class="panel" aria-labelledby="activity-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">Changes</p><h2 id="activity-title">Recent activity</h2></div>
+        </div>
+        <div id="audit" class="table-scroll desktop-data" role="region" aria-label="Recent management activity" tabindex="0"></div>
+        <div id="audit-mobile" class="mobile-card-list" role="region" aria-label="Recent management activity"></div>
       </section>
 
-      <section id="secret-panel" class="panel secret-panel" hidden>
+      <section id="secret-panel" class="panel secret-panel" hidden aria-labelledby="secret-title">
         <div class="section-heading"><div><p class="eyebrow">Shown once</p><h2 id="secret-title">Credential</h2></div></div>
         <p>Copy this value to the device now. It will not be shown again.</p>
         <code id="secret-value"></code>
-        <div class="inline-form">
-          <button id="copy-secret" type="button">Copy</button>
-          <button id="hide-secret" class="secondary" type="button">Hide</button>
+        <div class="action-row">
+          <button id="copy-secret" class="button button--primary" type="button">Copy value</button>
+          <button id="hide-secret" class="button button--secondary" type="button">Hide</button>
         </div>
       </section>
     </main>
+
+    <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-description">
+      <form method="dialog">
+        <p class="eyebrow">Confirm action</p>
+        <h2 id="confirm-title">Are you sure?</h2>
+        <p id="confirm-description"></p>
+        <div class="dialog-actions">
+          <button id="confirm-cancel" class="button button--secondary" type="submit" value="cancel">Cancel</button>
+          <button id="confirm-submit" class="button button--primary" type="submit" value="confirm">Confirm</button>
+        </div>
+      </form>
+    </dialog>
   </body>
 </html>

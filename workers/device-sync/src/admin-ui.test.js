@@ -8,6 +8,8 @@ import {
   confirmBeforeAction,
   formatAuditDetails,
   formatAuditEventType,
+  formatActorLabel,
+  compactIdentifier,
   formatDeviceEnabledMessage,
   formatTimestamp,
 } from "../public/admin/ui-utils.js";
@@ -57,6 +59,43 @@ test("OpenUI Core reports missing assets as a warning", async () => {
   const notice = runtime.getView().root.props.children[3];
   assert.equal(notice.props.tone, "warning");
   assert.equal(notice.props.body, "1 missing active asset");
+  runtime.dispose();
+});
+
+test("fleet snapshot is concise and accurate when no playlist is active", async () => {
+  const runtime = createFleetOpenUI({
+    getOverview: async () => ({
+      ...overview,
+      playlists: [],
+      active_playlist: null,
+      asset_health: { missing: [] },
+    }),
+  });
+
+  runtime.renderProgram(OPENUI_STARTER_SOURCE);
+  await runtime.waitForQueries();
+
+  const [devices, active, staged, health] = runtime.getView().root.props.children;
+  assert.equal(active.props.value, "No active playlist");
+  assert.equal(active.props.detail, "No playlist is being sent to devices");
+  assert.equal(staged.props.detail, "No revisions are waiting to be activated");
+  assert.equal(health.props.body, "No active playlist");
+  runtime.dispose();
+});
+
+test("fleet snapshot compacts long active playlist revisions", async () => {
+  const runtime = createFleetOpenUI({
+    getOverview: async () => ({
+      ...overview,
+      active_playlist: { playlist_id: "operations", revision: "r-0123456789abcdef0123456789abcd" },
+    }),
+  });
+
+  runtime.renderProgram(OPENUI_STARTER_SOURCE);
+  await runtime.waitForQueries();
+
+  const active = runtime.getView().root.props.children[1];
+  assert.equal(active.props.value, "operations / r-01234567…89abcd");
   runtime.dispose();
 });
 
@@ -132,8 +171,8 @@ test("audit timestamps are explicit UTC and preserve the Unix epoch", () => {
 });
 
 test("device enabled messages report the state just applied", () => {
-  assert.equal(formatDeviceEnabledMessage("pi-1", true), "pi-1 enabled");
-  assert.equal(formatDeviceEnabledMessage("pi-1", false), "pi-1 disabled");
+  assert.equal(formatDeviceEnabledMessage("pi-1", true), "Device pi-1 is now enabled.");
+  assert.equal(formatDeviceEnabledMessage("pi-1", false), "Device pi-1 is now disabled.");
 });
 
 test("audit events and metadata are presented as readable labels", () => {
@@ -149,9 +188,24 @@ test("audit events and metadata are presented as readable labels", () => {
   ]);
 });
 
+test("audit actors use a consistent readable fallback", () => {
+  assert.equal(formatActorLabel("anonymous"), "Unauthenticated");
+  assert.equal(formatActorLabel("operator-7"), "operator-7");
+  assert.equal(formatActorLabel(null), "Unknown");
+});
+
+test("long identifiers are compacted without hiding their distinguishing ends", () => {
+  assert.equal(compactIdentifier("r-short"), "r-short");
+  assert.equal(
+    compactIdentifier("r-080e675162b7477d9a8a96a3a9281a09"),
+    "r-080e6751…281a09",
+  );
+  assert.equal(compactIdentifier(null), "—");
+});
+
 test("consequential actions only run after explicit confirmation", async () => {
   let actions = 0;
-  const declined = await confirmBeforeAction(() => false, "Disable device?", async () => {
+  const declined = await confirmBeforeAction(() => Promise.resolve(false), "Disable device?", async () => {
     actions += 1;
   });
   assert.equal(declined, false);
