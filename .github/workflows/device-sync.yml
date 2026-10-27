@@ -27,6 +27,9 @@ jobs:
       - name: Install pinned Wrangler
         working-directory: workers/device-sync
         run: npm ci
+      - name: Build management console assets
+        working-directory: workers/device-sync
+        run: npm run build:admin
       - name: Test Worker routes and authorization
         working-directory: workers/device-sync
         run: npm test
@@ -35,11 +38,13 @@ jobs:
         run: npm run check:config
 
   deploy-dev:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: cloudflare-dev
+    concurrency:
+      group: management-console-dev-deploy
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

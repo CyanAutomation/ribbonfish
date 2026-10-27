@@ -18,10 +18,23 @@ class HTTPError extends Error {
   }
 }
 
-// This panel is intentionally unauthenticated in the isolated development Worker.
-// Keep ADMIN_ENABLED unset/false on any deployment that contains real fleet data.
-export async function handleAdminRequest(request, env) {
+// Production management deployments require Cloudflare Access identity in addition
+// to the edge Access policy, so the admin API fails closed if that policy is missing.
+export async function handleAdminRequest(request, env, ctx) {
   if (env.ADMIN_ENABLED !== "true") return new Response("not found", { status: 404 });
+
+  let actorID = "anonymous";
+  if (env.ADMIN_ACCESS_REQUIRED === "true") {
+    try {
+      const identity = await ctx?.access?.getIdentity();
+      if (typeof identity?.email !== "string" || !identity.email.trim()) {
+        return new Response("access required", { status: 401 });
+      }
+      actorID = identity.email;
+    } catch {
+      return new Response("access required", { status: 401 });
+    }
+  }
 
   const url = new URL(request.url);
   try {
@@ -42,34 +55,34 @@ export async function handleAdminRequest(request, env) {
 
     if (url.pathname === "/admin/api/enrollment-codes") {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      return await createEnrollmentCode(request, env);
+      return await createEnrollmentCode(request, env, actorID);
     }
 
     if (url.pathname === "/admin/api/assets") {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      return await uploadAsset(request, env);
+      return await uploadAsset(request, env, actorID);
     }
 
     if (url.pathname === "/admin/api/playlists") {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      return await createPlaylist(request, env);
+      return await createPlaylist(request, env, actorID);
     }
 
     if (url.pathname === "/admin/api/active-playlist") {
       if (request.method !== "PUT") return methodNotAllowed("PUT");
-      return await activatePlaylist(request, env);
+      return await activatePlaylist(request, env, actorID);
     }
 
     const rotateMatch = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/rotate$/);
     if (rotateMatch) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      return await rotateDeviceCredential(request, decodeURIComponent(rotateMatch[1]), env);
+      return await rotateDeviceCredential(request, decodeURIComponent(rotateMatch[1]), env, actorID);
     }
 
     const deviceMatch = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/);
     if (deviceMatch) {
       if (request.method !== "PATCH") return methodNotAllowed("PATCH");
-      return await setDeviceEnabled(request, decodeURIComponent(deviceMatch[1]), env);
+      return await setDeviceEnabled(request, decodeURIComponent(deviceMatch[1]), env, actorID);
     }
 
     return jsonResponse({ error: "not found" }, 404);
@@ -129,18 +142,24 @@ async function readOverview(env) {
   }
 
   return {
+    environment: env.ADMIN_ACCESS_REQUIRED === "true" ? "production" : "development",
     devices: devices.results ?? [],
     playlists: playlists.results ?? [],
     active_playlist: active,
     asset_health: { missing },
     audit: (audit.results ?? []).map((event) => ({
-      ...event,
+      event_id: event.event_id,
+      actor_id: event.actor_id,
+      event_type: event.event_type,
+      subject_type: event.subject_type,
+      subject_id: event.subject_id,
+      occurred_at: event.occurred_at,
       metadata: parseMetadata(event.metadata_json),
     })),
   };
 }
 
-async function createEnrollmentCode(request, env) {
+async function createEnrollmentCode(request, env, actorID) {
   const data = await readJSON(request);
   if (!hasExactKeys(data, ["expires_in_minutes"]) || !Number.isSafeInteger(data.expires_in_minutes) ||
       data.expires_in_minutes < 1 || data.expires_in_minutes > 1440) {
@@ -151,12 +170,12 @@ async function createEnrollmentCode(request, env) {
   await env.DB.batch([
     env.DB.prepare("INSERT INTO enrollments (code_hash, expires_at) VALUES (?, ?)")
       .bind(await sha256Hex(code), expiresAt),
-    auditStatement(env, "enrollment_code.created", "enrollment", "new", { expires_at: expiresAt }),
+    auditStatement(env, actorID, "enrollment_code.created", "enrollment", "new", { expires_at: expiresAt }),
   ]);
   return jsonResponse({ code, expires_at: expiresAt }, 201);
 }
 
-async function uploadAsset(request, env) {
+async function uploadAsset(request, env, actorID) {
   if (request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !== "image/png") {
     throw new HTTPError(415, "only PNG image uploads are supported");
   }
@@ -169,14 +188,14 @@ async function uploadAsset(request, env) {
   if (!existing || existing.size !== bytes.byteLength) {
     await env.ASSETS.put(key, bytes, { httpMetadata: { contentType: "image/png" } });
     await env.DB.batch([
-      auditStatement(env, "asset.uploaded", "asset", sha256, { size: bytes.byteLength }),
+      auditStatement(env, actorID, "asset.uploaded", "asset", sha256, { size: bytes.byteLength }),
     ]);
     return jsonResponse({ sha256, size: bytes.byteLength }, 201);
   }
   return jsonResponse({ sha256, size: bytes.byteLength }, 200);
 }
 
-async function createPlaylist(request, env) {
+async function createPlaylist(request, env, actorID) {
   const data = await readJSON(request);
   if (!hasExactKeys(data, ["id", "rotation_interval", "assets"]) || !ID_PATTERN.test(data.id ?? "") ||
       !isValidPositiveDuration(data.rotation_interval) || !Array.isArray(data.assets) ||
@@ -204,7 +223,7 @@ async function createPlaylist(request, env) {
       "INSERT INTO playlist_assets (playlist_id, revision, position, sha256, size) VALUES (?, ?, ?, ?, ?)",
     ).bind(data.id, revision, position, asset.sha256, asset.size));
   }
-  statements.push(auditStatement(env, "playlist.revision_created", "playlist", data.id, {
+  statements.push(auditStatement(env, actorID, "playlist.revision_created", "playlist", data.id, {
     revision,
     asset_count: data.assets.length,
   }));
@@ -212,7 +231,7 @@ async function createPlaylist(request, env) {
   return jsonResponse({ id: data.id, revision, rotation_interval: data.rotation_interval, asset_count: data.assets.length }, 201);
 }
 
-async function activatePlaylist(request, env) {
+async function activatePlaylist(request, env, actorID) {
   const data = await readJSON(request);
   if (!hasExactKeys(data, ["playlist_id", "revision"]) || !ID_PATTERN.test(data.playlist_id ?? "") ||
       !ID_PATTERN.test(data.revision ?? "")) {
@@ -231,7 +250,7 @@ async function activatePlaylist(request, env) {
       "INSERT INTO active_playlist (singleton, playlist_id, revision) VALUES (1, ?, ?) " +
       "ON CONFLICT(singleton) DO UPDATE SET playlist_id = excluded.playlist_id, revision = excluded.revision",
     ).bind(data.playlist_id, data.revision),
-    auditStatement(env, "playlist.activated", "playlist", data.playlist_id, {
+    auditStatement(env, actorID, "playlist.activated", "playlist", data.playlist_id, {
       revision: data.revision,
       previous,
     }),
@@ -239,7 +258,7 @@ async function activatePlaylist(request, env) {
   return jsonResponse({ active_playlist: { playlist_id: data.playlist_id, revision: data.revision } });
 }
 
-async function setDeviceEnabled(request, deviceID, env) {
+async function setDeviceEnabled(request, deviceID, env, actorID) {
   const data = await readJSON(request);
   if (!hasExactKeys(data, ["enabled"]) || typeof data.enabled !== "boolean") {
     throw new HTTPError(400, "enabled must be a boolean");
@@ -248,12 +267,12 @@ async function setDeviceEnabled(request, deviceID, env) {
   if (!device) throw new HTTPError(404, "device not found");
   await env.DB.batch([
     env.DB.prepare("UPDATE devices SET enabled = ? WHERE device_id = ?").bind(data.enabled ? 1 : 0, deviceID),
-    auditStatement(env, data.enabled ? "device.enabled" : "device.disabled", "device", deviceID, {}),
+    auditStatement(env, actorID, data.enabled ? "device.enabled" : "device.disabled", "device", deviceID, {}),
   ]);
   return jsonResponse({ device_id: deviceID, enabled: data.enabled });
 }
 
-async function rotateDeviceCredential(request, deviceID, env) {
+async function rotateDeviceCredential(request, deviceID, env, actorID) {
   const data = await readJSON(request);
   if (!hasExactKeys(data, [])) throw new HTTPError(400, "request body must be an empty JSON object");
   const device = await env.DB.prepare("SELECT device_id FROM devices WHERE device_id = ?").bind(deviceID).first();
@@ -262,16 +281,16 @@ async function rotateDeviceCredential(request, deviceID, env) {
   await env.DB.batch([
     env.DB.prepare("UPDATE devices SET token_hash = ? WHERE device_id = ?")
       .bind(await sha256Hex(deviceToken), deviceID),
-    auditStatement(env, "device.credential_rotated", "device", deviceID, {}),
+    auditStatement(env, actorID, "device.credential_rotated", "device", deviceID, {}),
   ]);
   return jsonResponse({ device_token: deviceToken });
 }
 
-function auditStatement(env, eventType, subjectType, subjectID, metadata) {
+function auditStatement(env, actorID, eventType, subjectType, subjectID, metadata) {
   return env.DB.prepare(
     "INSERT INTO audit_events (event_id, actor_id, event_type, subject_type, subject_id, occurred_at, metadata_json) " +
     "VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).bind(crypto.randomUUID(), "anonymous", eventType, subjectType, subjectID, Date.now(), JSON.stringify(metadata));
+  ).bind(crypto.randomUUID(), actorID, eventType, subjectType, subjectID, Date.now(), JSON.stringify(metadata));
 }
 
 async function readJSON(request) {
