@@ -39,7 +39,6 @@ env_value() {
 	awk -F= -v key="$1" '$1 == key { sub(/^[^=]*=/, ""); value=$0 } END { print value }' "$deployment_dir/.env"
 }
 
-version=$(env_value RIBBONFISH_VERSION)
 profile=$(env_value RIBBONFISH_PROFILE)
 drm_device=$(env_value RIBBONFISH_DRM_DEVICE)
 drm_gid=$(env_value RIBBONFISH_DRM_GID)
@@ -47,18 +46,6 @@ network_mode=$(env_value RIBBONFISH_NETWORK_MODE)
 sync_url=$(env_value RIBBONFISH_SYNC_URL)
 device_id=$(env_value RIBBONFISH_DEVICE_ID)
 
-case "$version" in
-	latest)
-		;;
-	sha-*) image_commit=${version#sha-} ;;
-	*) fail "RIBBONFISH_VERSION='$version' must be 'latest' or a pinned sha-<40-character commit>" ;;
-esac
-if [ "$version" != latest ]; then
-	[ "${#image_commit}" -eq 40 ] || fail "RIBBONFISH_VERSION='$version' must contain a 40-character commit SHA"
-	case "$image_commit" in
-		*[!0-9a-f]*) fail "RIBBONFISH_VERSION='$version' must use lowercase hexadecimal" ;;
-	esac
-fi
 case "$profile" in
 	pi3a-plus|pi3b|pi4) ;;
 	*) fail "unsupported RIBBONFISH_PROFILE='$profile'" ;;
@@ -74,7 +61,7 @@ else
 	[ "$network_mode" = none ] || fail 'network access is only enabled when Cloudflare sync is configured'
 fi
 
-expected_image="cyanautomation/ribbonfish:$version"
+expected_image='cyanautomation/ribbonfish:latest'
 config_images=$(docker compose --project-directory "$deployment_dir" -p ribbonfish config --images) || fail 'docker compose config failed'
 printf '%s\n' "$config_images" | grep -Fx "$expected_image" >/dev/null || fail "Compose resolves to '$config_images', expected '$expected_image'"
 docker compose --project-directory "$deployment_dir" -p ribbonfish config --quiet || fail 'docker compose config is invalid'

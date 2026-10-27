@@ -7,11 +7,8 @@ trap 'rm -rf "$temp_dir"' EXIT HUP INT TERM
 
 export HOME="$temp_dir/home"
 mkdir -p "$HOME"
-version=sha-128b052157f2b3c0d80e282eb1f7ab982ccb9411
-
 sh "$script_dir/prepare-deployment.sh" \
 	--profile pi3a-plus \
-	--version "$version" \
 	--drm-device /dev/null \
 	--drm-gid 0
 
@@ -19,11 +16,22 @@ target_dir="$HOME/containers/ribbonfish"
 test -f "$target_dir/docker-compose.yaml"
 test -x "$target_dir/install.sh"
 test -f "$target_dir/.env"
-grep -Fx "RIBBONFISH_VERSION=$version" "$target_dir/.env"
 grep -Fx 'RIBBONFISH_PROFILE=pi3a-plus' "$target_dir/.env"
 grep -Fx 'RIBBONFISH_DRM_DEVICE=/dev/null' "$target_dir/.env"
 grep -Fx 'RIBBONFISH_DRM_GID=0' "$target_dir/.env"
 grep -Fx 'RIBBONFISH_NETWORK_MODE=none' "$target_dir/.env"
+if grep -Eq '^(RIBBONFISH_VERSION|RIBBONFISH_CACHE_DIR|RIBBONFISH_SYNC_URL|RIBBONFISH_SYNC_INTERVAL|RIBBONFISH_DEVICE_ID)=' "$target_dir/.env"; then
+	echo 'generated .env contains a fixed tag or redundant defaults' >&2
+	exit 1
+fi
+grep -F 'image: cyanautomation/ribbonfish:latest' "$target_dir/docker-compose.yaml"
+grep -F 'RIBBONFISH_PROFILE: ${RIBBONFISH_PROFILE:?Set RIBBONFISH_PROFILE in .env}' "$target_dir/docker-compose.yaml"
+grep -F 'RIBBONFISH_DRM_DEVICE: ${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE in .env}' "$target_dir/docker-compose.yaml"
+grep -F '${RIBBONFISH_DRM_GID:?Set RIBBONFISH_DRM_GID in .env}' "$target_dir/docker-compose.yaml"
+if grep -Eq '^(RIBBONFISH_VERSION|RIBBONFISH_CACHE_DIR|RIBBONFISH_SYNC_INTERVAL)=' "$target_dir/.env.example"; then
+	echo '.env.example contains a fixed tag or redundant defaults' >&2
+	exit 1
+fi
 
 mkdir -p "$temp_dir/bin"
 cat > "$temp_dir/bin/docker" <<EOF
@@ -42,7 +50,7 @@ case "\$1" in
     done
     case "\$command \${1:-}" in
       'config --quiet') exit 0 ;;
-      'config --images') printf '%s\\n' "\${FAKE_DOCKER_IMAGE:-cyanautomation/ribbonfish:$version}" ;;
+      'config --images') printf '%s\\n' "\${FAKE_DOCKER_IMAGE:-cyanautomation/ribbonfish:latest}" ;;
       'ps -q') [ "\${2:-}" = agent ] && printf '%s\\n' test-container ;;
       'exec -T')
         [ "\${2:-}" = agent ] && [ "\${3:-}" = /ribbonfish ] && [ "\${4:-}" = -check-displays ] || { echo "unexpected docker compose exec command: \$*" >&2; exit 2; }
@@ -61,7 +69,7 @@ case "\$1" in
     printf '%s\\n' "\${FAKE_DOCKER_IMAGE_ID:-sha256:test-image-id}"
     ;;
   inspect)
-    printf '%s\\n' "\${FAKE_DOCKER_IMAGE:-cyanautomation/ribbonfish:$version}|\${FAKE_DOCKER_RUNTIME_IMAGE_ID:-sha256:test-image-id}|running|none"
+    printf '%s\\n' "\${FAKE_DOCKER_IMAGE:-cyanautomation/ribbonfish:latest}|\${FAKE_DOCKER_RUNTIME_IMAGE_ID:-sha256:test-image-id}|running|none"
     ;;
   logs)
     if [ "\${FAKE_DOCKER_FRAME_AFTER:-0}" -gt 0 ] || [ "\${FAKE_DOCKER_CONFIG_AFTER:-0}" -gt 0 ]; then
@@ -139,35 +147,24 @@ if FAKE_DOCKER_DISPLAY_CHECK_FAIL=1 PATH="$temp_dir/bin:$PATH" sh "$script_dir/v
 	exit 1
 fi
 
-awk -F= '$1 == "RIBBONFISH_VERSION" { $0 = "RIBBONFISH_VERSION=latest" } { print }' \
-	"$target_dir/.env" >"$target_dir/.env.tmp"
-mv "$target_dir/.env.tmp" "$target_dir/.env"
 FAKE_DOCKER_IMAGE=cyanautomation/ribbonfish:latest PATH="$temp_dir/bin:$PATH" \
 	sh "$script_dir/verify-deployment.sh" --preflight
 FAKE_DOCKER_IMAGE=cyanautomation/ribbonfish:latest PATH="$temp_dir/bin:$PATH" \
 	sh "$script_dir/verify-deployment.sh"
+if FAKE_DOCKER_IMAGE=cyanautomation/ribbonfish:sha-128b052157f2b3c0d80e282eb1f7ab982ccb9411 \
+	PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" --preflight >/dev/null 2>&1; then
+	echo 'non-latest image unexpectedly passed verification' >&2
+	exit 1
+fi
 if FAKE_DOCKER_IMAGE=cyanautomation/ribbonfish:latest FAKE_DOCKER_RUNTIME_IMAGE_ID=sha256:stale-image \
 	PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" >/dev/null 2>&1; then
 	echo 'stale container image unexpectedly passed verification' >&2
 	exit 1
 fi
 
-awk -F= '$1 == "RIBBONFISH_VERSION" { $0 = "RIBBONFISH_VERSION=nightly" } { print }' \
-	"$target_dir/.env" >"$target_dir/.env.tmp"
-mv "$target_dir/.env.tmp" "$target_dir/.env"
-if PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" --preflight >/dev/null 2>&1; then
-	echo 'unsupported mutable image tag unexpectedly passed verification' >&2
-	exit 1
-fi
-
-awk -F= -v version="$version" '$1 == "RIBBONFISH_VERSION" { $0 = "RIBBONFISH_VERSION=" version } { print }' \
-	"$target_dir/.env" >"$target_dir/.env.tmp"
-mv "$target_dir/.env.tmp" "$target_dir/.env"
-
 printf '%s\n' 'RIBBONFISH_SYNC_URL=https://sync.example.workers.dev' >> "$target_dir/.env"
 sh "$script_dir/prepare-deployment.sh" \
 	--profile pi3a-plus \
-	--version "$version" \
 	--drm-device /dev/null \
 	--drm-gid 0
 grep -Fx 'RIBBONFISH_SYNC_URL=https://sync.example.workers.dev' "$target_dir/.env"
@@ -177,7 +174,6 @@ if PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" --preflight 
 fi
 sh "$script_dir/prepare-deployment.sh" \
 	--profile pi3a-plus \
-	--version "$version" \
 	--drm-device /dev/null \
 	--drm-gid 0 \
 	--replace-env
@@ -188,7 +184,6 @@ grep -Fx 'RIBBONFISH_NETWORK_MODE=none' "$target_dir/.env"
 
 sh "$script_dir/prepare-deployment.sh" \
 	--profile pi3a-plus \
-	--version "$version" \
 	--drm-device /dev/null \
 	--drm-gid 0 \
 	--sync-url https://ribbonfish.scheimann.workers.dev \
@@ -199,7 +194,7 @@ grep -Fx 'RIBBONFISH_DEVICE_ID=ribbonfish-01' "$target_dir/.env"
 PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" --preflight
 
 if output=$(sh "$script_dir/prepare-deployment.sh" \
-	--profile pi3a-plus --version "$version" --drm-device /dev/null --drm-gid 0 \
+	--profile pi3a-plus --drm-device /dev/null --drm-gid 0 \
 	--sync-url https://ribbonfish.scheimann.workers.dev 2>&1); then
 	echo 'sync URL without a device ID unexpectedly succeeded' >&2
 	exit 1
@@ -210,7 +205,7 @@ case "$output" in
 esac
 
 if output=$(sh "$script_dir/prepare-deployment.sh" \
-	--profile pi3a-plus --version "$version" --drm-device /dev/null --drm-gid 0 \
+	--profile pi3a-plus --drm-device /dev/null --drm-gid 0 \
 	--device-id ribbonfish-01 2>&1); then
 	echo 'device ID without a sync URL unexpectedly succeeded' >&2
 	exit 1
@@ -221,19 +216,19 @@ case "$output" in
 esac
 
 if sh "$script_dir/prepare-deployment.sh" \
-	--profile pi3a-plus --version "$version" --drm-device /dev/null --drm-gid 0 \
+	--profile pi3a-plus --drm-device /dev/null --drm-gid 0 \
 	--sync-url http://insecure.example --device-id ribbonfish-01 >/dev/null 2>&1; then
 	echo 'HTTP sync URL unexpectedly succeeded' >&2
 	exit 1
 fi
 
-if sh "$script_dir/prepare-deployment.sh" --profile invalid --version "$version" >/dev/null 2>&1; then
+if sh "$script_dir/prepare-deployment.sh" --profile invalid >/dev/null 2>&1; then
 	echo 'invalid profile unexpectedly succeeded' >&2
 	exit 1
 fi
 
-if sh "$script_dir/prepare-deployment.sh" --profile pi3a-plus --version latest >/dev/null 2>&1; then
-	echo 'mutable image tag unexpectedly succeeded' >&2
+if sh "$script_dir/prepare-deployment.sh" --version latest >/dev/null 2>&1; then
+	echo 'removed image-version option unexpectedly succeeded' >&2
 	exit 1
 fi
 
@@ -275,7 +270,10 @@ RIBBONFISH_GITHUB_API_URL=https://api.github.test/commits/main \
 test -f "$install_target/docker-compose.yaml"
 test -x "$install_target/install.sh"
 test -f "$install_target/verify-deployment.sh"
-grep -Fx "RIBBONFISH_VERSION=sha-$FAKE_RIBBONFISH_COMMIT" "$install_target/.env"
+if grep -q '^RIBBONFISH_VERSION=' "$install_target/.env"; then
+	echo 'installer generated an image-version setting' >&2
+	exit 1
+fi
 test -z "$(find "$temp_dir" -maxdepth 1 -name 'ribbonfish-install.*' -print -quit)"
 
 printf '%s\n' 'prepare-deployment tests passed'
