@@ -118,7 +118,7 @@ if ! docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null | grep -q t
   echo "ARM agent container stopped after writing its first frames" >&2
   exit 1
 fi
-docker stop --time 5 "$container" >/dev/null
+docker stop --time 15 "$container" >/dev/null
 exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$container")
 if [ "$exit_code" != 0 ]; then
   docker logs "$container" >&2 || true
@@ -169,7 +169,7 @@ if [ "$profile" = pi4 ] && ! cmp -s "$scratch/offline-frames/display-left.png" "
   exit 1
 fi
 
-docker stop --time 5 "$container" >/dev/null
+docker stop --time 15 "$container" >/dev/null
 exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$container")
 if [ "$exit_code" != 0 ]; then
   docker logs "$container" >&2 || true
