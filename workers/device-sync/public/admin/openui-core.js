@@ -12,6 +12,7 @@ import {
   mergeStatements,
 } from "@openuidev/lang-core";
 import { z } from "zod";
+import { compactIdentifier } from "./ui-utils.js";
 
 const READ_ONLY_TOOL = "get_fleet_overview";
 
@@ -86,7 +87,16 @@ const functions = [
     description: "Names the active playlist and its revision.",
     params: z.object({ active: z.any().optional() }),
     returns: z.string(),
-    fn: ({ active }) => active ? `${active.playlist_id} / ${active.revision}` : "None active",
+    fn: ({ active }) => active
+      ? `${active.playlist_id} / ${compactIdentifier(active.revision)}`
+      : "No active playlist",
+  }),
+  defineFunction({
+    name: "PlaylistDetail",
+    description: "Explains whether an active playlist is being sent to devices.",
+    params: z.object({ active: z.any().optional() }),
+    returns: z.string(),
+    fn: ({ active }) => active ? "Current content sent to devices" : "No playlist is being sent to devices",
   }),
   defineFunction({
     name: "StagedCount",
@@ -94,6 +104,15 @@ const functions = [
     params: z.object({ playlists: z.array(z.any()).optional().default([]) }),
     returns: z.string(),
     fn: ({ playlists }) => `${playlists.filter((playlist) => !playlist.active).length} staged`,
+  }),
+  defineFunction({
+    name: "StagedDetail",
+    description: "Explains whether a staged playlist revision is ready to activate.",
+    params: z.object({ playlists: z.array(z.any()).optional().default([]) }),
+    returns: z.string(),
+    fn: ({ playlists }) => playlists.some((playlist) => !playlist.active)
+      ? "Ready to activate from the playlist list"
+      : "No revisions are waiting to be activated",
   }),
   defineFunction({
     name: "AssetTone",
@@ -105,11 +124,13 @@ const functions = [
   defineFunction({
     name: "AssetHealth",
     description: "Summarizes missing assets in the active playlist.",
-    params: z.object({ assets: z.array(z.any()).optional().default([]) }),
+    params: z.object({ assets: z.array(z.any()).optional().default([]), active: z.any().optional() }),
     returns: z.string(),
-    fn: ({ assets }) => assets.length
-      ? `${assets.length} missing active asset${assets.length === 1 ? "" : "s"}`
-      : "All active assets available",
+    fn: ({ assets, active }) => !active
+      ? "No active playlist"
+      : assets.length
+        ? `${assets.length} missing active asset${assets.length === 1 ? "" : "s"}`
+        : "All active assets available",
   }),
 ];
 
@@ -127,9 +148,9 @@ export const OPENUI_STARTER_SOURCE = [
   'overview = Query("get_fleet_overview", {}, {})',
   "root = Dashboard([deviceMetric, activeMetric, stagedMetric, assetHealth])",
   'deviceMetric = Metric("Devices", @DeviceCount(overview.devices), @DeviceStatus(overview.devices))',
-  'activeMetric = Metric("Active playlist", @PlaylistLabel(overview.active_playlist), "Current content sent to devices")',
-  'stagedMetric = Metric("Staged revisions", @StagedCount(overview.playlists), "Ready to activate from the playlist list")',
-  'assetHealth = Notice(@AssetTone(overview.asset_health.missing), "Asset health", @AssetHealth(overview.asset_health.missing))',
+  'activeMetric = Metric("Active playlist", @PlaylistLabel(overview.active_playlist), @PlaylistDetail(overview.active_playlist))',
+  'stagedMetric = Metric("Staged revisions", @StagedCount(overview.playlists), @StagedDetail(overview.playlists))',
+  'assetHealth = Notice(@AssetTone(overview.asset_health.missing), "Asset health", @AssetHealth(overview.asset_health.missing, overview.active_playlist))',
 ].join("\n");
 
 export const OPENUI_SYSTEM_PROMPT = generateSystemPrompt({

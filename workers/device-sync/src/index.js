@@ -23,7 +23,7 @@ export async function fetchHandler(request, env, ctx) {
   const url = new URL(request.url);
   try {
     if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
-      return await handleAdminRequest(request, env);
+      return await handleAdminRequest(request, env, ctx);
     }
 
     if (url.pathname === "/healthz") {

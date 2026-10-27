@@ -5,12 +5,32 @@ import { dirname, resolve } from "node:path";
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const workerDirectory = resolve(scriptDirectory, "..");
 const args = process.argv.slice(2);
-const configArgumentIndex = args.indexOf("--config");
-const config = configArgumentIndex < 0 ? "wrangler.dev.toml" : args[configArgumentIndex + 1];
-const local = args.includes("--local");
+let config = "wrangler.dev.toml";
+let bucket = "ribbonfish-management-dev";
+let local = false;
+const seenOptions = new Set();
 
-if (!config || config.startsWith("--") || args.some((arg) => arg !== "--local" && arg !== "--config" && arg !== config)) {
-  throw new Error("usage: publish-admin-assets.mjs [--config wrangler.dev.toml] [--local]");
+for (let index = 0; index < args.length; index += 1) {
+  const option = args[index];
+  if (option === "--local") {
+    if (seenOptions.has(option)) throw new Error("--local may only be specified once");
+    seenOptions.add(option);
+    local = true;
+    continue;
+  }
+  if (option === "--config" || option === "--bucket") {
+    if (seenOptions.has(option)) throw new Error(`${option} may only be specified once`);
+    seenOptions.add(option);
+    const value = args[index + 1];
+    if (!value || value.startsWith("--")) {
+      throw new Error(`usage: publish-admin-assets.mjs [--config wrangler.toml] [--bucket bucket-name] [--local]`);
+    }
+    if (option === "--config") config = value;
+    else bucket = value;
+    index += 1;
+    continue;
+  }
+  throw new Error("usage: publish-admin-assets.mjs [--config wrangler.toml] [--bucket bucket-name] [--local]");
 }
 
 execFileSync(process.execPath, [resolve(scriptDirectory, "build-admin.mjs")], {
@@ -27,7 +47,7 @@ const files = [
 
 for (const [file, contentType] of files) {
   execFileSync("npx", [
-    "wrangler", "r2", "object", "put", `ribbonfish-management-dev/admin/${file}`,
+    "wrangler", "r2", "object", "put", `${bucket}/admin/${file}`,
     "--file", resolve(buildDirectory, file),
     "--content-type", contentType,
     local ? "--local" : "--remote",

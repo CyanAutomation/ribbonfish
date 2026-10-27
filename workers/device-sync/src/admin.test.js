@@ -107,7 +107,7 @@ class FakeDatabase {
   }
 }
 
-function testEnvironment({ enabled = true } = {}) {
+function testEnvironment({ enabled = true, accessRequired = false } = {}) {
   const DB = new FakeDatabase();
   const objects = new Map();
   const writes = [];
@@ -116,6 +116,7 @@ function testEnvironment({ enabled = true } = {}) {
     objects,
     writes,
     ADMIN_ENABLED: enabled ? "true" : "false",
+    ADMIN_ACCESS_REQUIRED: accessRequired ? "true" : "false",
     ASSETS: {
       async get(key) {
         const bytes = objects.get(key);
@@ -151,6 +152,13 @@ test("management routes fail closed when the environment flag is disabled", asyn
   assert.equal(env.DB.auditEvents.length, 0);
 });
 
+test("Access-protected management routes reject requests without an identity", async () => {
+  const env = testEnvironment({ accessRequired: true });
+  const response = await handleAdminRequest(request("/admin/api/overview"), env);
+  assert.equal(response.status, 401);
+  assert.equal(await response.text(), "access required");
+});
+
 test("management page is served from the private R2 bucket", async () => {
   const env = testEnvironment();
   env.objects.set("admin/index.html", new TextEncoder().encode("<main>Ribbonfish</main>"));
@@ -183,7 +191,17 @@ test("overview omits device token hashes and reports missing active assets", asy
   const body = await response.json();
   assert.equal(JSON.stringify(body).includes("do-not-return-this"), false);
   assert.equal(body.devices[0].device_id, "pi-office");
+  assert.equal(body.environment, "development");
   assert.deepEqual(body.asset_health.missing, [{ sha256: digest, expected_size: 4, actual_size: null }]);
+});
+
+test("overview identifies an Access-protected management deployment", async () => {
+  const env = testEnvironment({ accessRequired: true });
+  const response = await handleAdminRequest(request("/admin/api/overview"), env, {
+    access: { async getIdentity() { return { email: "admin@example.com" }; } },
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).environment, "production");
 });
 
 test("enrollment codes are stored only as hashes and are audited", async () => {
