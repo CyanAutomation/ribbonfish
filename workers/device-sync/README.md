@@ -31,9 +31,8 @@ Management audit events record the authenticated email as the actor. The
 existing `wrangler.toml` device-sync Worker remains at
 `ribbonfish.scheimann.workers.dev` with admin routes disabled.
 
-The existing GitHub `docker` environment is reserved for the Docker Hub image
-publisher. Worker deployment uses the separate `cloudflare-dev` environment and
-requires a `CLOUDFLARE_API_TOKEN` secret. The account ID and development resource
+Worker deployment reads `CLOUDFLARE_API_TOKEN` from the repository or
+organization GitHub Actions secrets. The account ID and development resource
 IDs are in the Wrangler configurations; no Cloudflare credential is stored in
 the repository.
 
@@ -86,8 +85,8 @@ R2 before deploying the Worker. After a pull request that changes
 `workers/device-sync/**` is merged to `main`, the **Cloudflare device sync
 Worker** GitHub workflow builds the console, runs tests and configuration
 validation, then deploys only `wrangler.dev.toml`. The workflow can also be run
-manually. Create the `cloudflare-dev` GitHub environment and add its
-`CLOUDFLARE_API_TOKEN` secret before the first automated deployment.
+manually. Add a repository- or organization-level `CLOUDFLARE_API_TOKEN` secret
+accessible to this repository before the first automated deployment.
 
 `npm run deploy:management` publishes the management panel to the production R2
 bucket and deploys `wrangler.management.toml`. Run `npm run migrate:management`
