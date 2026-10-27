@@ -1,4 +1,29 @@
+import {
+  createFleetOpenUI,
+  OPENUI_STARTER_SOURCE,
+  OPENUI_SYSTEM_PROMPT,
+  renderOpenUIElement,
+} from "./openui-core.js";
+import {
+  confirmBeforeAction,
+  formatAuditDetails,
+  formatAuditEventType,
+  formatTimestamp,
+} from "./ui-utils.js";
+
 const message = document.querySelector("#message");
+const openuiPreview = document.querySelector("#openui-preview");
+const openuiSource = document.querySelector("#openui-source");
+const openuiMessage = document.querySelector("#openui-message");
+const openuiPrompt = document.querySelector("#openui-prompt-text");
+let latestOverview = null;
+let openuiProgram = OPENUI_STARTER_SOURCE;
+let openuiInitialized = false;
+const openuiRuntime = createFleetOpenUI({ getOverview: async () => latestOverview });
+openuiSource.value = OPENUI_STARTER_SOURCE;
+openuiPrompt.textContent = OPENUI_SYSTEM_PROMPT;
+
+openuiRuntime.subscribe(renderOpenUIView);
 
 function node(tag, text, className) {
   const value = document.createElement(tag);
@@ -19,19 +44,27 @@ function showMessage(text, isError = false) {
   message.classList.toggle("error", isError);
 }
 
-function timestamp(value) {
-  return value ? new Date(value).toLocaleString() : "Never seen";
-}
-
-function table(headers, rows) {
+function table(caption, headers, rows, emptyMessage) {
   const element = node("table");
+  element.append(node("caption", caption, "visually-hidden"));
   const head = node("thead");
   const headerRow = node("tr");
-  headers.forEach((label) => headerRow.append(node("th", label)));
+  headers.forEach((label) => {
+    const cell = node("th", label);
+    cell.scope = "col";
+    headerRow.append(cell);
+  });
   head.append(headerRow);
   element.append(head);
   const body = node("tbody");
   rows.forEach((row) => body.append(row));
+  if (!rows.length && emptyMessage) {
+    const row = node("tr", undefined, "empty-row");
+    const cell = node("td", emptyMessage, "empty-state");
+    cell.colSpan = headers.length;
+    row.append(cell);
+    body.append(row);
+  }
   element.append(body);
   return element;
 }
@@ -58,7 +91,7 @@ function renderPlaylists(playlists) {
     row.append(node("td", playlist.revision));
     row.append(node("td", playlist.rotation_interval));
     row.append(node("td", playlist.asset_count));
-    row.append(node("td", timestamp(playlist.created_at)));
+    row.append(node("td", formatTimestamp(playlist.created_at)));
     const state = node("td");
     state.append(node("span", playlist.active ? "Active" : "Staged", playlist.active ? "badge" : "badge inactive"));
     row.append(state);
@@ -68,11 +101,16 @@ function renderPlaylists(playlists) {
     button.disabled = Boolean(playlist.active);
     button.addEventListener("click", async () => {
       try {
-        await api("/admin/api/active-playlist", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ playlist_id: playlist.playlist_id, revision: playlist.revision }),
-        });
+        const confirmed = await confirmBeforeAction(
+          (prompt) => window.confirm(prompt),
+          `Activate ${playlist.playlist_id} / ${playlist.revision}? This will replace the playlist sent to devices.`,
+          () => api("/admin/api/active-playlist", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ playlist_id: playlist.playlist_id, revision: playlist.revision }),
+          }),
+        );
+        if (!confirmed) return;
         showMessage("Activated " + playlist.playlist_id + " / " + playlist.revision);
         await refresh();
       } catch (error) { showMessage(error.message, true); }
@@ -82,7 +120,9 @@ function renderPlaylists(playlists) {
     return row;
   });
   document.querySelector("#playlists").replaceChildren(table(
-    ["Playlist", "Revision", "Rotation", "Assets", "Created", "State", ""], rows,
+    "Playlist revisions",
+    ["Playlist", "Revision", "Rotation", "Assets", "Created (UTC)", "State", ""], rows,
+    "No playlist revisions yet. Upload PNG images below to stage the first revision.",
   ));
 }
 
@@ -91,17 +131,23 @@ function renderDevices(devices) {
     const row = node("tr");
     row.append(node("td", device.device_id));
     row.append(node("td", device.enabled ? "Enabled" : "Disabled"));
-    row.append(node("td", timestamp(device.last_seen_at)));
+    row.append(node("td", formatTimestamp(device.last_seen_at)));
     const actions = node("td");
     const toggle = node("button", device.enabled ? "Disable" : "Enable", "secondary");
     toggle.type = "button";
     toggle.addEventListener("click", async () => {
       try {
-        await api("/admin/api/devices/" + encodeURIComponent(device.device_id), {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled: !device.enabled }),
-        });
+        const nextEnabled = !device.enabled;
+        const confirmed = await confirmBeforeAction(
+          (prompt) => window.confirm(prompt),
+          `${nextEnabled ? "Enable" : "Disable"} device ${device.device_id}?${nextEnabled ? "" : " It will stop syncing until enabled again."}`,
+          () => api("/admin/api/devices/" + encodeURIComponent(device.device_id), {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: nextEnabled }),
+          }),
+        );
+        if (!confirmed) return;
         showMessage(device.device_id + (device.enabled ? " disabled" : " enabled"));
         await refresh();
       } catch (error) { showMessage(error.message, true); }
@@ -110,11 +156,19 @@ function renderDevices(devices) {
     rotate.type = "button";
     rotate.addEventListener("click", async () => {
       try {
-        const result = await api("/admin/api/devices/" + encodeURIComponent(device.device_id) + "/rotate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: "{}",
-        });
+        let result;
+        const confirmed = await confirmBeforeAction(
+          (prompt) => window.confirm(prompt),
+          `Rotate the token for ${device.device_id}? The existing token will stop working. Store the new token on the device immediately.`,
+          async () => {
+            result = await api("/admin/api/devices/" + encodeURIComponent(device.device_id) + "/rotate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: "{}",
+            });
+          },
+        );
+        if (!confirmed) return;
         displaySecret("New token for " + device.device_id, result.device_token);
       } catch (error) { showMessage(error.message, true); }
     });
@@ -122,29 +176,136 @@ function renderDevices(devices) {
     row.append(actions);
     return row;
   });
-  document.querySelector("#devices").replaceChildren(table(["Device", "Status", "Last poll", "Actions"], rows));
+  document.querySelector("#devices").replaceChildren(table(
+    "Enrolled devices",
+    ["Device", "Status", "Last poll (UTC)", "Actions"],
+    rows,
+    "No devices enrolled yet. Create an enrollment code below to add the first device.",
+  ));
 }
 
 function renderAudit(events) {
   const rows = events.map((event) => {
     const row = node("tr");
-    row.append(node("td", timestamp(event.occurred_at)));
-    row.append(node("td", event.actor_id));
-    row.append(node("td", event.event_type));
+    row.append(node("td", formatTimestamp(event.occurred_at)));
+    row.append(node("td", event.actor_id || "Unknown"));
+    row.append(node("td", formatAuditEventType(event.event_type)));
     row.append(node("td", event.subject_type + " · " + event.subject_id));
-    row.append(node("td", JSON.stringify(event.metadata)));
+    const details = node("td");
+    details.append(renderAuditDetails(event.metadata));
+    row.append(details);
     return row;
   });
-  document.querySelector("#audit").replaceChildren(table(["Time", "Actor", "Action", "Subject", "Details"], rows));
+  document.querySelector("#audit").replaceChildren(table(
+    "Recent management activity",
+    ["Time (UTC)", "Actor", "Action", "Subject", "Details"],
+    rows,
+    "No management activity yet.",
+  ));
 }
 
 async function refresh() {
   const overview = await api("/admin/api/overview");
+  latestOverview = overview;
   renderHealth(overview.asset_health);
   renderPlaylists(overview.playlists);
   renderDevices(overview.devices);
   renderAudit(overview.audit);
+  if (!openuiInitialized) {
+    renderOpenUIProgram(OPENUI_STARTER_SOURCE, false);
+    openuiInitialized = true;
+  } else {
+    openuiRuntime.refresh();
+  }
 }
+
+function renderAuditDetails(metadata) {
+  const details = formatAuditDetails(metadata);
+  if (!details.length) return node("span", "—", "muted");
+  const list = node("ul", undefined, "audit-details");
+  details.forEach(({ label, value }) => {
+    const item = node("li");
+    item.append(node("span", label + ": ", "audit-detail-label"), node("span", value));
+    list.append(item);
+  });
+  return list;
+}
+
+function renderOpenUIView(view) {
+  if (!view) return;
+  if (view.loading) {
+    openuiPreview.setAttribute("aria-busy", "true");
+    openuiPreview.replaceChildren(node("p", "Loading read-only fleet view…", "muted"));
+    return;
+  }
+  openuiPreview.removeAttribute("aria-busy");
+  if (view.errors.length) {
+    openuiPreview.replaceChildren(node("p", view.errors.map((error) => error.message).join(" "), "error-title"));
+    return;
+  }
+  try {
+    openuiPreview.replaceChildren(renderOpenUIElement(view.root));
+  } catch (error) {
+    openuiPreview.replaceChildren(node("p", error.message, "error-title"));
+  }
+}
+
+function showOpenUIMessage(text, isError = false) {
+  openuiMessage.textContent = text;
+  openuiMessage.classList.toggle("error", isError);
+}
+
+function renderOpenUIProgram(source, announce = true) {
+  try {
+    const view = openuiRuntime.renderProgram(source);
+    openuiProgram = source;
+    renderOpenUIView(view);
+    if (announce) showOpenUIMessage("OpenUI view rendered.");
+    return true;
+  } catch (error) {
+    showOpenUIMessage(error.message, true);
+    return false;
+  }
+}
+
+document.querySelector("#openui-preview-button").addEventListener("click", () => {
+  renderOpenUIProgram(openuiSource.value);
+});
+
+document.querySelector("#openui-merge-button").addEventListener("click", () => {
+  try {
+    const merged = openuiRuntime.mergePatch(openuiProgram, openuiSource.value);
+    openuiSource.value = merged;
+    renderOpenUIProgram(merged, false);
+  } catch (error) { showOpenUIMessage(error.message, true); }
+});
+
+document.querySelector("#openui-reset-button").addEventListener("click", () => {
+  openuiSource.value = OPENUI_STARTER_SOURCE;
+  renderOpenUIProgram(OPENUI_STARTER_SOURCE);
+});
+
+document.querySelector("#openui-copy-prompt").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(OPENUI_SYSTEM_PROMPT);
+    showOpenUIMessage("OpenUI prompt copied. Use it with your preferred model, then paste the result above.");
+  } catch {
+    showOpenUIMessage("Clipboard access failed. Expand the prompt below and copy it manually.", true);
+  }
+});
+
+let openuiInputTimer;
+openuiSource.addEventListener("input", () => {
+  clearTimeout(openuiInputTimer);
+  openuiInputTimer = setTimeout(() => {
+    const status = openuiRuntime.inspectProgram(openuiSource.value);
+    if (status.errors.length) {
+      showOpenUIMessage(status.errors[0].message, true);
+    } else {
+      showOpenUIMessage(`${status.statementCount} OpenUI statement${status.statementCount === 1 ? "" : "s"}${status.incomplete ? " · input is still streaming" : " · ready to preview"}`);
+    }
+  }, 200);
+});
 
 function displaySecret(title, value) {
   document.querySelector("#secret-title").textContent = title;
