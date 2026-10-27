@@ -20,6 +20,7 @@ class FakeDatabase {
       device_id: "pi-office",
       token_hash: "",
       enabled: 1,
+      last_seen_at: null,
     };
     this.enrollment = { code_hash: "", expires_at: Date.now() + 60_000, consumed_at: null };
     this.insertedDevice = null;
@@ -70,6 +71,13 @@ class FakeDatabase {
         const value = database.playlists.get(`${values[0]}:${values[1]}`);
         return { results: value?.assets ?? [] };
       },
+      async run() {
+        if (sql.startsWith("UPDATE devices SET last_seen_at")) {
+          database.device.last_seen_at = values[0];
+          return { meta: { changes: 1 } };
+        }
+        return { meta: { changes: 0 } };
+      },
       get values() { return values; },
     };
     return statement;
@@ -110,11 +118,16 @@ function testEnvironment({ playlistValue = playlist, assetBytes = new Uint8Array
   const assetObjects = new Map([[digest, assetBytes]]);
   const env = {
     DB: db,
+    ADMIN_ENABLED: "false",
     ASSETS: {
       async get(key) {
         r2Gets.push(key);
         const bytes = assetObjects.get(key.slice("assets/".length));
         return bytes ? { size: bytes.byteLength, body: new Response(bytes).body } : null;
+      },
+      async head(key) {
+        const bytes = assetObjects.get(key.slice("assets/".length));
+        return bytes ? { size: bytes.byteLength } : null;
       },
     },
   };
@@ -136,9 +149,28 @@ test("version 2 playlist endpoint authenticates the device and returns a revisio
   assert.equal(response.headers.get("etag"), '"revision-1"');
   assert.equal(response.headers.get("cache-control"), "private, no-store, no-transform");
   assert.deepEqual(await response.json(), playlist);
+  assert.equal(Number.isSafeInteger(db.device.last_seen_at), true, "playlist polling updates device telemetry");
 
   const unchanged = await fetchHandler(request({ "If-None-Match": '"revision-1"' }), env);
   assert.equal(unchanged.status, 304);
+});
+
+test("health endpoint is healthy only when active playlist assets are present", async () => {
+  const { env, assetObjects } = testEnvironment();
+  const healthy = await fetchHandler(new Request("https://worker.test/healthz"), env);
+  assert.equal(healthy.status, 200);
+  assert.deepEqual(await healthy.json(), { status: "ok" });
+
+  assetObjects.delete(digest);
+  const degraded = await fetchHandler(new Request("https://worker.test/healthz"), env);
+  assert.equal(degraded.status, 503);
+  assert.deepEqual(await degraded.json(), { status: "degraded" });
+});
+
+test("production configuration keeps the management API disabled", async () => {
+  const { env } = testEnvironment();
+  const response = await fetchHandler(new Request("https://worker.test/admin/api/overview"), env);
+  assert.equal(response.status, 404);
 });
 
 test("all enrolled devices receive the same active playlist", async () => {

@@ -1,6 +1,6 @@
 # Ribbonfish Agent Skills
 
-This directory contains focused guidance for working in the Ribbonfish repository. The Go agent and software simulator are implemented; Cloudflare services and physical DRM/KMS output remain proposed and unvalidated.
+This directory contains focused guidance for working in the Ribbonfish repository. The Go agent, authenticated device sync, and unauthenticated development management UI/API are implemented. Screenshot capture remains proposed, and physical DRM/KMS output is only partially validated.
 
 ## Skills by domain
 

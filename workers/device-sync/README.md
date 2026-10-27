@@ -1,131 +1,140 @@
-# Ribbonfish playlist sync Worker
+# Ribbonfish device sync and management Worker
 
-The Worker serves one globally active playlist to every enrolled device. D1
-stores versioned playlists, one active playlist pointer, device token hashes,
-and one-time enrollment code hashes. The R2 bucket stores private,
-content-addressed image objects. The agent receives only its application
-credential; it never receives a Cloudflare account credential.
+The Worker serves one globally active playlist to enrolled devices. D1 stores
+versioned playlists, the active-playlist pointer, device credential hashes,
+one-time enrollment codes, last-poll timestamps, and development management
+events. R2 stores private content-addressed PNG assets. Devices receive only
+their application credential; they never receive a Cloudflare account token.
 
-## Development
+## Status and environments
 
-Run the Worker unit tests with Node.js (no package install is required):
+`wrangler.toml` points to the existing fleet Worker and its D1/R2 resources. It
+sets `ADMIN_ENABLED = "false"`, so `/admin/` and `/admin/api/*` return 404.
+Device sync and `/healthz` remain available.
+
+`wrangler.dev.toml` points to separate development D1 and R2 resources and sets
+`ADMIN_ENABLED = "true"`. The panel has no administrator authentication yet and
+is available through a public Workers URL when deployed. Use only development
+data there. Audit rows use `actor_id = "anonymous"`; they record actions but do
+not identify who performed them. Add administrator authentication and an
+attributable actor before enabling the API against production fleet data. The
+panel files live in the private development R2 bucket and are returned only by
+the Worker's fixed `/admin/` routes.
+
+The existing GitHub `docker` environment is reserved for the Docker Hub image
+publisher. Worker deployment uses the separate `cloudflare-dev` environment and
+requires a `CLOUDFLARE_API_TOKEN` secret. The account ID and development resource
+IDs are in the Wrangler configurations; no Cloudflare credential is stored in
+the repository.
+
+## Local development
+
+Install the pinned Wrangler dependency and run the tests and configuration
+checks:
 
 ```sh
+npm ci
 npm test
+npm run check:config
 ```
 
-Create the Cloudflare resources and apply the current schema:
+Initialize local D1, then start the local development Worker:
 
 ```sh
-npx wrangler r2 bucket create ribbonfish-assets
-npx wrangler d1 create ribbonfish-devices
-npx wrangler d1 execute ribbonfish-devices --remote --file=schema.sql
-node scripts/publish-playlist.mjs defaults/default-playlist.json --activate
-npx wrangler deploy
+npm run init:dev-local
+npm run dev
 ```
 
-For an existing database created by the earlier device-manifest Worker, apply
-the migrations in order. Skip a migration if its change is already present:
+`npm run dev` places the panel files in the local R2 emulator before starting
+the Worker. Open `http://localhost:8787/admin/`. Upload PNG files through the
+panel, stage a playlist, then activate the revision.
+
+For a fresh remote development database, initialize its schema and migration
+ledger once, then upload the bundled default playlist:
 
 ```sh
-npx wrangler d1 execute ribbonfish-devices --remote --file=migrations/0001_add_enrollment_claim_id.sql
-npx wrangler d1 execute ribbonfish-devices --remote --file=migrations/0002_global_playlists.sql
+npm run init:dev-remote
+npm run seed:dev-remote
 ```
 
-If a migration was applied manually but is still listed as pending, first verify
-that its schema change is present and that its name is absent from
-`d1_migrations`. Record only that verified migration before applying the
-remaining migrations. For example, when `claim_id` already exists on
-`enrollments`:
+`init:dev-local` and `init:dev-remote` are bootstrap commands for a fresh
+ database. They apply `schema.sql` and record the migrations already represented
+by that schema. For an existing database, use `npm run migrate:dev-remote` or
+apply the migration files in order with Wrangler.
+
+Deploy the isolated development Worker from a local authenticated Wrangler
+session with `npm run deploy:dev`; this uploads the panel files to development
+R2 before deploying the Worker. Or run the manual **Cloudflare device sync
+Worker** GitHub workflow. For the workflow, create the `cloudflare-dev` GitHub
+environment and add its `CLOUDFLARE_API_TOKEN` secret. The workflow runs tests
+and configuration validation before deploying only `wrangler.dev.toml`.
+
+The default `wrangler.toml` config is the existing fleet environment. Do not
+use `npm run deploy:production` until administrator authentication and a
+production rollout plan are in place.
+
+## Management API
+
+All management routes require `ADMIN_ENABLED = "true"`. They are intentionally
+unauthenticated during pre-production and must stay on the isolated development
+Worker.
+
+| Method and path | Behavior |
+| --- | --- |
+| `GET /admin/` | Browser management panel |
+| `GET /admin/api/overview` | Devices, playlist revisions, current pointer, missing active assets, and recent audit events |
+| `POST /admin/api/enrollment-codes` | Create a one-time code; body: `{"expires_in_minutes":30}`; plaintext code is returned once |
+| `PATCH /admin/api/devices/{device_id}` | Enable or disable a device; body: `{"enabled":false}` |
+| `POST /admin/api/devices/{device_id}/rotate` | Replace a device token and return the new token once; body: `{}` |
+| `POST /admin/api/assets` | Upload one PNG body with `Content-Type: image/png`; returns its SHA-256 and byte size |
+| `POST /admin/api/playlists` | Stage an immutable playlist revision; body includes `id`, `rotation_interval`, and ordered `{sha256,size}` asset references |
+| `PUT /admin/api/active-playlist` | Activate or roll back to an existing revision; body: `{"playlist_id":"operations","revision":"r-…"}` |
+| `GET /healthz` | Minimal readiness check; returns 503 if the active playlist or any referenced R2 object is missing |
+
+Playlist staging verifies every referenced object exists in R2 with the declared
+size. Activation updates the single global pointer only after a revision exists.
+The UI uses text-only DOM rendering and applies a restrictive content security
+policy. Enrollment codes and rotated device tokens are never written to audit
+metadata.
+
+Device sync remains:
+
+- `POST /v1/enroll` exchanges a one-time enrollment code for a random device token.
+- `GET /v2/playlist` returns the active playlist with conditional ETags.
+- `GET /v2/assets/{sha256}` returns an asset only when it is in the active playlist.
+
+Playlist polling updates `devices.last_seen_at`. This is a timestamp of the most
+recent poll, not a persistent connection or a precise online/offline signal.
+
+## Playlist publishing
+
+The panel can stage and activate playlist revisions. A trusted Wrangler script
+is also available for scripted releases:
 
 ```sh
-npx wrangler d1 execute ribbonfish-devices --remote --command \
-  "INSERT INTO d1_migrations (name) VALUES ('0001_add_enrollment_claim_id.sql')"
-npx wrangler d1 migrations apply ribbonfish-devices --remote
+node scripts/publish-playlist.mjs defaults/default-playlist.json --activate \
+  --config wrangler.dev.toml \
+  --database ribbonfish-management-dev \
+  --bucket ribbonfish-management-dev
 ```
 
-## Publish and activate playlists
+The script calculates SHA-256 hashes and sizes, uploads immutable objects under
+`assets/<sha256>`, and records a new D1 revision before moving the active
+pointer. Older revisions and objects are retained; playlist asset garbage
+collection is not implemented.
 
-The Worker has no playlist write endpoint. Playlist releases use the trusted
-Wrangler process in `scripts/publish-playlist.mjs`. The repository ships a
-default playlist containing all four bundled sample images. The setup command
-above uploads the starter images and makes that playlist active before deploy.
+## Existing fleet provisioning
 
-To publish another playlist, create a JSON file with an ID, rotation interval,
-and ordered paths to image files. Paths are relative to the JSON file:
-
-```json
-{
-  "id": "operations",
-  "rotation_interval": "20s",
-  "assets": [
-    { "path": "./images/overview.png" },
-    { "path": "./images/service-health.png" }
-  ]
-}
-```
-
-Publish a staged revision without changing what devices display:
+For the existing fleet environment, apply the current migration after the
+previous migrations have been recorded:
 
 ```sh
-node scripts/publish-playlist.mjs playlists/operations.json
+npx wrangler --config wrangler.toml d1 migrations apply ribbonfish-devices --remote
 ```
 
-When it is ready, activate it by publishing a fresh revision with `--activate`:
+The new migration adds last-poll telemetry and the management audit table. The
+production management API remains disabled by the checked-in configuration.
 
-```sh
-node scripts/publish-playlist.mjs playlists/operations.json --activate
-```
-
-For a single-step release, run the command with `--activate` once. Each command
-creates a new immutable playlist revision. The script calculates SHA-256 hashes
-and sizes, uploads immutable images to `assets/<lowercase-sha256>`, and stores a
-new revision in D1. With `--activate`, it then updates the single active pointer.
-Content is stored before the active pointer changes. Re-publishing an existing
-playlist ID creates a new revision; older revisions remain in D1 and their
-content-addressed objects remain in R2. All enrolled devices see the new active
-revision on their next poll.
-Use `--database NAME` and `--bucket NAME` when publishing to a different
-Wrangler environment.
-
-Agent polls use `GET /v2/playlist`, conditional ETags, and
-`X-Ribbonfish-Device-ID`. The playlist response contains the playlist ID,
-rotation interval, and ordered image hashes and sizes. The Worker serves an
-image only if its hash appears in the active playlist revision. If the active
-playlist changes during a download, the agent rejects the incomplete candidate,
-keeps its last-good playlist, and retries against the new active revision.
-
-## Enroll and revoke devices
-
-Generate a one-time code and insert only its hash into D1:
-
-```sh
-node scripts/make-enrollment-code.mjs 30
-npx wrangler d1 execute ribbonfish-devices --remote --command "INSERT INTO enrollments (code_hash, expires_at) VALUES ('<printed-hash>', <printed-expiry-ms>);"
-```
-
-Deliver the printed code privately to the Pi. Set `RIBBONFISH_SYNC_URL`,
-`RIBBONFISH_DEVICE_ID`, and `RIBBONFISH_NETWORK_MODE=bridge`, then exchange the
-code through stdin:
-
-```sh
-read -r -s -p 'One-time code: ' enrollment_code
-printf '\n'
-printf '%s' "$enrollment_code" | docker compose run --rm -T agent -enroll
-unset enrollment_code
-```
-
-The agent writes the returned random token to
-`/var/lib/ribbonfish/device-token` with mode `0600`. The Worker stores only the
-token hash. After enrollment, configure the Worker URL and device ID, leave the
-token in the named state volume, and restart the service.
-
-Revoke a device by disabling its row:
-
-```sql
-UPDATE devices SET enabled = 0 WHERE device_id = 'pi-office';
-```
-
-Keep enrollment codes, device tokens, and the D1 database private. Playlist
-publishing is a trusted release operation; the Worker exposes no playlist
-write, `PUT`, `DELETE`, list, or arbitrary object-key endpoint.
+To issue or revoke a device manually, use the development panel. For existing
+fleet operations, keep the D1 database private and do not paste enrollment
+codes or device tokens into logs, issues, or chat.

@@ -11,6 +11,7 @@ on:
     paths:
       - "workers/device-sync/**"
       - ".github/workflows/device-sync.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,6 +24,31 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install pinned Wrangler
+        working-directory: workers/device-sync
+        run: npm ci
       - name: Test Worker routes and authorization
         working-directory: workers/device-sync
-        run: node --test
+        run: npm test
+      - name: Validate production and development Worker bundles
+        working-directory: workers/device-sync
+        run: npm run check:config
+
+  deploy-dev:
+    if: github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: cloudflare-dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Wrangler
+        working-directory: workers/device-sync
+        run: npm ci
+      - name: Deploy isolated management Worker
+        working-directory: workers/device-sync
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npm run deploy:dev
