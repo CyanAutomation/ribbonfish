@@ -20,11 +20,13 @@ if (!filename) usage();
 let activate = false;
 let database = "ribbonfish-devices";
 let bucket = "ribbonfish-assets";
+let config = "wrangler.toml";
 while (args.length) {
   const flag = args.shift();
   if (flag === "--activate") activate = true;
   else if (flag === "--database" && args[0]) database = args.shift();
   else if (flag === "--bucket" && args[0]) bucket = args.shift();
+  else if (flag === "--config" && args[0]) config = args.shift();
   else usage();
 }
 
@@ -63,7 +65,7 @@ const run = (command, commandArgs) => {
 
 try {
   for (const asset of assets) {
-    run("npx", ["wrangler", "r2", "object", "put", `${bucket}/assets/${asset.sha256}`, "--file", asset.path]);
+    run("npx", ["wrangler", "--config", config, "r2", "object", "put", `${bucket}/assets/${asset.sha256}`, "--file", asset.path]);
   }
 
   const playlistStatements = [
@@ -73,13 +75,13 @@ try {
   ];
   const playlistSQL = resolve(temporaryDirectory, "playlist.sql");
   await writeFile(playlistSQL, `${playlistStatements.join("\n")}\n`, { mode: 0o600 });
-  run("npx", ["wrangler", "d1", "execute", database, "--remote", "--file", playlistSQL]);
+  run("npx", ["wrangler", "--config", config, "d1", "execute", database, "--remote", "--file", playlistSQL]);
 
   if (activate) {
     const activeSQL = resolve(temporaryDirectory, "activate.sql");
     const activation = `INSERT INTO active_playlist (singleton, playlist_id, revision) VALUES (1, ${sqlString(input.id)}, ${sqlString(revision)}) ON CONFLICT(singleton) DO UPDATE SET playlist_id = excluded.playlist_id, revision = excluded.revision;\n`;
     await writeFile(activeSQL, activation, { mode: 0o600 });
-    run("npx", ["wrangler", "d1", "execute", database, "--remote", "--file", activeSQL]);
+    run("npx", ["wrangler", "--config", config, "d1", "execute", database, "--remote", "--file", activeSQL]);
   }
 
   console.log(`Published playlist ${input.id} revision ${revision}${activate ? " and activated it" : ""}.`);

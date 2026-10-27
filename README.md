@@ -2,7 +2,7 @@
 
 [![Go agent](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml/badge.svg)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml) [![Worker tests](https://github.com/CyanAutomation/ribbonfish/actions/workflows/device-sync.yml/badge.svg?branch=main)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/device-sync.yml) [![ARM container smoke test](https://github.com/CyanAutomation/ribbonfish/actions/workflows/arm-container-smoke.yml/badge.svg?branch=main)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/arm-container-smoke.yml)
 
-> **Project status:** The Go agent supports bundled offline profiles, a verified persistent image cache, optional authenticated Worker/R2 content sync, a software simulator, and an experimental Linux DRM/KMS output backend. Single-display KMS output has been accepted on a Pi 3 A+; Pi 3B and Pi 4 dual-output acceptance remain open. The broader screenshot capture and management platform is still proposed.
+> **Project status:** The Go agent supports bundled offline profiles, a verified persistent image cache, authenticated Worker/R2 content sync, a software simulator, and an experimental Linux DRM/KMS output backend. A playlist/device management UI and API run in a separate development Worker; administrator routes are unauthenticated there and disabled in the default Worker configuration. Screenshot rendering and capture scheduling remain proposed.
 
 ## Render Once. Display Anywhere.
 
@@ -21,7 +21,7 @@ The initial use case is a fleet of Raspberry Pis showing company websites and Up
 3. The Go agent verifies image hashes, caches a local copy, and rotates that shared playlist on each output through the simulator or DRM/KMS.
 4. It keeps the active snapshot and continues displaying it when sync is disabled or the network is unavailable.
 
-**Implementation status:** The agent ships Pi 3 A+, Pi 3B, Pi 4, and simulator profiles with sample images. Optional sync is implemented in the Go agent and the Worker under [`workers/device-sync`](workers/device-sync/README.md): one-time codes enroll devices, D1 stores token hashes and a playlist catalog, and every enrolled agent reads the same active playlist. Candidate snapshots are validated and applied atomically; failed sync leaves the previous snapshot active. Playlist releases use a trusted Wrangler bootstrap process; there is no playlist management UI or write API. The Worker and Go client are tested locally, but a deployed Cloudflare account and end-to-end Cloudflare credentials are not part of this repository setup.
+**Implementation status:** The agent ships Pi 3 A+, Pi 3B, Pi 4, and simulator profiles with sample images. The Worker under [`workers/device-sync`](workers/device-sync/README.md) enrolls devices, serves one global active playlist, and reads private R2 assets. The development management UI/API can stage and activate playlist revisions, upload PNG assets, issue enrollment codes, list and disable devices, rotate credentials, and show asset health and management events. The default Worker configuration keeps those unauthenticated management routes disabled. Candidate snapshots are validated and applied atomically; failed sync leaves the previous snapshot active. Browser rendering and screenshot scheduling remain proposed.
 
 The DRM backend configures named connectors, selects advertised modes, and uses XRGB8888 dumb buffers with page flips. It is experimental: one single-display Pi 3 A+ has passed physical KMS and visible-frame acceptance, while Pi 3B and Pi 4 dual-output behavior remain open.
 
@@ -102,12 +102,30 @@ Ribbonfish deliberately supports **no screenshot capture interval shorter than 6
 
 | Component | Responsibility and implementation status |
 |------------|-------------------------|
-| Workers | The authenticated global playlist sync and enrollment endpoints are implemented in `workers/device-sync`; playlist changes use a trusted Wrangler process; the management UI, renderer API, and capture pipeline remain proposed |
-| D1 | The sync Worker uses D1 for a versioned playlist catalog, the single active-playlist pointer, per-device credential hashes, and one-time enrollment codes; broader capture state remains proposed |
-| Browser Run | Headless page rendering and screenshot capture, with explicit viewport and load/wait policies |
-| R2 | The sync Worker reads private content-addressed images through an R2 binding; screenshot retention and capture publication remain proposed |
+| Workers | Authenticated device sync plus a development-only management API/UI; the renderer API and capture pipeline remain proposed |
+| D1 | Versioned playlists, the global active pointer, credential hashes, enrollment codes, last-poll telemetry, and management audit events; capture state remains proposed |
+| Browser Run | Proposed headless page rendering and screenshot capture, with explicit viewport and load/wait policies |
+| R2 | Private content-addressed playlist assets with PNG upload through the development management API; screenshot publication and retention remain proposed |
 | Queues | Single-consumer, single-message capture execution, bounded retries, and backlog control |
 | Scheduled Worker (Cron Trigger) | Run every minute, check D1 for due variants, and enqueue deduplicated capture jobs |
+
+### Development Management API
+
+The isolated development Worker serves a browser panel at `/admin/` and JSON
+routes under `/admin/api/`. It lists devices and playlist revisions, reports
+missing active-playlist assets, creates enrollment codes, enables or disables
+devices, rotates credentials, uploads content-addressed PNGs, stages playlist
+revisions, activates or rolls back to an existing revision, and shows recent
+audit events. `GET /healthz` returns a minimal status for external uptime checks.
+
+Administrator authentication is deferred during pre-production. The API is
+unauthenticated when enabled, so keep `ADMIN_ENABLED = "true"` only in the
+isolated development Worker, whose D1 and R2 resources are separate from the
+live fleet. The default `wrangler.toml` configuration sets it to `false`. Audit
+entries use the actor label `anonymous` until administrator identity is added.
+The panel is read from fixed keys in the private development R2 bucket.
+See [`workers/device-sync/README.md`](workers/device-sync/README.md) for
+deployment and API details.
 
 Cloudflare Browser Run supports screenshot Quick Actions and browser sessions. The renderer implementation should be replaceable, and all quotas, costs, scheduling limits, and authenticated-page capabilities must be validated before production use. **Serial capture execution limits concurrency, but does not by itself ensure compliance with account-wide browser session creation rates, Quick Action request rates, or daily browser-time quotas.**
 
@@ -484,23 +502,25 @@ Add:
 
 ### Phase 3 — Fleet Management
 
-The device-side fleet slice is implemented: one-time enrollment, per-device
-credentials, authenticated global playlist and asset delivery, verified local
-playlist copies, and local output settings. Remaining fleet-management work includes:
+The device-side fleet slice and development management UI/API are implemented:
+one-time enrollment, per-device credentials, authenticated global playlist and
+asset delivery, verified local playlist copies, playlist staging/activation,
+device controls, credential rotation, asset health, and management events.
+Remaining fleet-management work includes:
 
-- Basic management UI
-- Playlist catalog and active-playlist controls
-- Credential rotation and operator audit events
+- Administrator authentication before production deployment
+- Attributable operator identity in audit events
+- Remote output configuration and device telemetry beyond last poll
 
 ### Phase 4 — Operational Hardening
 
-Add:
+Implemented: last-poll telemetry, management audit events, a health endpoint,
+and Cloudflare Worker observability. Remaining work:
 
-- Telemetry
-- Audit events
-- Offline recovery
-- Integration tests
+- Integration tests against a deployed development Worker
 - Benchmark results
+- D1 backup and restore exercises
+- Alert wiring for degraded health checks and stale device polls
 - Documented manual GitHub release and tag procedures
 
 ### Phase 5 — Extensions
@@ -551,10 +571,11 @@ The repository should ultimately include:
 4. Browser Run Quick Actions versus persistent sessions for complex or authenticated pages.
 5. Device authentication and enrollment are implemented in the sync Worker.
    Authenticated devices receive the same active playlist and managed assets;
-   credential rotation remains open.
+   credential rotation is available through the development management API.
 6. Image format, compression, scaling, storage retention, and delivery method.
 7. Whether a shared 60-second screenshot is sufficiently fresh for operational monitoring.
 8. Container permissions and DRM master ownership on Pi 3B and Pi 4.
 9. Capture concurrency limits, missed-job reconciliation, and capture cost ceilings.
-10. Administrator authentication; asset requests are authenticated per device
-    in the sync Worker.
+10. Administrator authentication is deferred until production. The development
+    management API is unauthenticated and disabled in the default Worker config;
+    asset requests remain authenticated per device.

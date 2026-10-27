@@ -1,13 +1,13 @@
 ---
 name: cloudflare-capture-design
-description: Design future Ribbonfish Cloudflare capture and scheduling services while preserving serial execution, quota, retention, and security constraints.
+description: Design Ribbonfish Cloudflare screenshot capture and scheduling services while preserving serial execution, quota, retention, and security constraints.
 tags: [ribbonfish, cloudflare, architecture, scheduling, capture]
 relatedSkills: [raspberry-pi-deployment, go-agent-development]
 ---
 
 # Cloudflare Capture Design
 
-Use this skill only when planning or implementing the proposed control plane, scheduler, renderer, queues, or screenshot publication flow. These services are not currently implemented in this repository. Confirm current Cloudflare product limits and API behavior before treating proposal details as provider guarantees.
+Use this skill when planning or implementing the proposed screenshot scheduler, renderer, queues, or capture publication flow. Device sync and a development-only playlist/device management API are implemented separately. Confirm current Cloudflare product limits and API behavior before treating proposal details as provider guarantees.
 
 ## Non-negotiable architecture constraints
 
