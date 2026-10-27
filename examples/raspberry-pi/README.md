@@ -21,7 +21,7 @@ Pi 4 dual-display acceptance remain open.
 - `install.sh`: clone-free bootstrap that downloads the deployment kit at the
   current main commit into a temporary directory
 - `prepare-deployment.sh`: detects the Pi profile and DRM group, prepares the
-  `latest` image deployment, and stages the complete deployment kit under
+  deployment image, and stages the complete deployment kit under
   `~/containers/ribbonfish`
 - `verify-deployment.sh`: validates the configured image, checks connected
   DRM targets, and confirms the running container has displayed a frame
@@ -34,18 +34,16 @@ On a prepared Pi with `curl` and Docker Compose, download and run the
 clone-free installer:
 
 If `~/containers/ribbonfish` already exists as an empty root-owned directory,
-make it user-owned before running the installer:
-
-```sh
-sudo chown "$(id -u):$(id -g)" "$HOME/containers/ribbonfish"
-```
+pass `--fix-target-owner` to let the installer use `sudo chown` on that
+directory. The helper only repairs an empty root-owned target; it does not
+change ownership of a populated directory.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/CyanAutomation/ribbonfish/main/examples/raspberry-pi/install.sh -o /tmp/ribbonfish-install.sh
-sh /tmp/ribbonfish-install.sh
+sh /tmp/ribbonfish-install.sh --fix-target-owner
 cd ~/containers/ribbonfish
-./verify-deployment.sh --preflight
 docker compose -p ribbonfish pull
+./verify-deployment.sh --preflight
 docker compose -p ribbonfish up -d
 ./verify-deployment.sh
 ```
@@ -57,9 +55,20 @@ clone. It needs outbound HTTPS access to GitHub and the image registry. The
 Pi profile helper detects Pi 3 A+, Pi 3 B, or Pi 4, reads the numeric group
 from the selected DRM card, and writes the hardware and requested sync settings
 into `.env`.
-Compose always uses the published `latest` image. The service starts offline
-(`network_mode: none`). The generated environment is mode `0600`; existing
-`.env` files are preserved by default.
+Compose defaults to the published `latest` image. For repeatable deployments,
+pin an immutable `sha-<merge-commit-SHA>` tag or a manifest digest with
+`--image`:
+
+```sh
+sh /tmp/ribbonfish-install.sh --image "cyanautomation/ribbonfish:sha-$MERGE_SHA"
+```
+
+Set `MERGE_SHA` to the 40-character merge commit SHA, or use a digest such as
+`cyanautomation/ribbonfish@sha256:<manifest-digest>`. If the deployment already
+has a `.env`, `--image` updates only `RIBBONFISH_IMAGE` and makes a private
+timestamped backup first. The service starts offline (`network_mode: none`).
+The generated environment is mode `0600`; other existing `.env` values are
+preserved by default.
 
 If you already have a repository checkout, you can stage from it directly:
 
@@ -85,16 +94,18 @@ is:
 - Ribbonfish is a Pi 3 A+ using profile `pi3a-plus`, `/dev/dri/card0`, and GID `44`.
 - For Pi 3B, select `pi3b` and inspect the actual card and group first.
 
-If `~/containers/ribbonfish` exists but is not writable, the script stops and
-reports that directly. Choose a user-writable target or fix its ownership
-before rerunning the installer.
+If `~/containers/ribbonfish` exists but is not writable, rerun with
+`--fix-target-owner` only when it is an empty root-owned directory. For a
+populated directory, choose a user-writable target or fix its ownership
+manually.
 
-`verify-deployment.sh --preflight` checks the device and GID, sync/network
-consistency, the `latest` image, and resolved Compose configuration. After
-`up -d`, the full verifier checks that the running container uses the image ID
-currently resolved by `latest`, checks connected DRM targets through sysfs
-without opening the device or changing scanout, and waits up to 30 seconds for
-the agent to log a successful frame update. Set `RIBBONFISH_VERIFY_TIMEOUT` to
+`verify-deployment.sh --preflight` requires the image to be present locally, so
+pull it first. Preflight validates the resolved image and Compose configuration,
+then starts a temporary non-networked container to check the configured DRM
+connector and requested resolution through sysfs. It does not change scanout.
+After `up -d`, the full verifier repeats that check, confirms that the running
+container uses the configured image ID, and waits up to 30 seconds for the
+agent to log a successful frame update. Set `RIBBONFISH_VERIFY_TIMEOUT` to
 change that startup wait. Use these commands to
 inspect connector metadata, validate configured targets in the running image,
 or follow the agent logs:
