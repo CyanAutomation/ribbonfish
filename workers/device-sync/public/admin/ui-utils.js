@@ -6,7 +6,7 @@ const AUDIT_EVENT_LABELS = {
   "enrollment_code.created": "Created enrollment code",
   "playlist.activated": "Activated playlist revision",
   "playlist.revision_created": "Staged playlist revision",
-  "development.bootstrap": "Seeded development playlist",
+  "development.bootstrap": "Initial playlist seeded",
 };
 
 export function formatTimestamp(value, locale) {
@@ -29,6 +29,18 @@ export function formatAuditEventType(eventType) {
   if (Object.hasOwn(AUDIT_EVENT_LABELS, eventType)) return AUDIT_EVENT_LABELS[eventType];
   const words = String(eventType ?? "Unknown event").replace(/[._]+/g, " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+export function formatEnvironmentNotice(environment) {
+  const production = environment === "production";
+  return {
+    production,
+    label: production ? "Production" : "Development",
+    heading: production ? "Production environment." : "Development environment.",
+    detail: production
+      ? "Your session is verified through Cloudflare Access."
+      : "Administrator sign-in is not configured for this deployment.",
+  };
 }
 
 export function formatActorLabel(actorID) {

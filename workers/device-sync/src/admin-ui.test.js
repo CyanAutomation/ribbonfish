@@ -11,6 +11,7 @@ import {
   formatActorLabel,
   compactIdentifier,
   formatDeviceEnabledMessage,
+  formatEnvironmentNotice,
   formatTimestamp,
 } from "../public/admin/ui-utils.js";
 
@@ -178,6 +179,7 @@ test("device enabled messages report the state just applied", () => {
 test("audit events and metadata are presented as readable labels", () => {
   assert.equal(formatAuditEventType("playlist.revision_created"), "Staged playlist revision");
   assert.equal(formatAuditEventType("device.credential_rotated"), "Rotated device token");
+  assert.equal(formatAuditEventType("development.bootstrap"), "Initial playlist seeded");
   assert.equal(formatAuditEventType("sync.detected"), "Sync detected");
   assert.deepEqual(formatAuditDetails({
     asset_count: 2,
@@ -186,6 +188,22 @@ test("audit events and metadata are presented as readable labels", () => {
     { label: "Asset count", value: "2" },
     { label: "Previous", value: "Playlist ID: default; Revision: r-old" },
   ]);
+});
+
+test("management environment copy accurately describes Access and local sign-in", () => {
+  assert.deepEqual(formatEnvironmentNotice("production"), {
+    production: true,
+    label: "Production",
+    heading: "Production environment.",
+    detail: "Your session is verified through Cloudflare Access.",
+  });
+  assert.deepEqual(formatEnvironmentNotice("development"), {
+    production: false,
+    label: "Development",
+    heading: "Development environment.",
+    detail: "Administrator sign-in is not configured for this deployment.",
+  });
+  assert.doesNotMatch(formatEnvironmentNotice("development").detail, /test data only/i);
 });
 
 test("audit actors use a consistent readable fallback", () => {

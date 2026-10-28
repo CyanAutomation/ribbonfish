@@ -5,17 +5,18 @@ import { dirname, resolve } from "node:path";
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const workerDirectory = resolve(scriptDirectory, "..");
 const args = process.argv.slice(2);
-let config = "wrangler.dev.toml";
-let bucket = "ribbonfish-management-dev";
-let local = false;
+let config = "wrangler.management.toml";
+let bucket = "ribbonfish-assets";
+let local = true;
+let modeOptionSeen = false;
 const seenOptions = new Set();
 
 for (let index = 0; index < args.length; index += 1) {
   const option = args[index];
-  if (option === "--local") {
-    if (seenOptions.has(option)) throw new Error("--local may only be specified once");
-    seenOptions.add(option);
-    local = true;
+  if (option === "--local" || option === "--remote") {
+    if (modeOptionSeen) throw new Error("choose either --local or --remote, once");
+    modeOptionSeen = true;
+    local = option === "--local";
     continue;
   }
   if (option === "--config" || option === "--bucket") {
@@ -23,14 +24,14 @@ for (let index = 0; index < args.length; index += 1) {
     seenOptions.add(option);
     const value = args[index + 1];
     if (!value || value.startsWith("--")) {
-      throw new Error(`usage: publish-admin-assets.mjs [--config wrangler.toml] [--bucket bucket-name] [--local]`);
+      throw new Error("usage: publish-admin-assets.mjs [--config wrangler.management.toml] [--bucket bucket-name] [--local|--remote]");
     }
     if (option === "--config") config = value;
     else bucket = value;
     index += 1;
     continue;
   }
-  throw new Error("usage: publish-admin-assets.mjs [--config wrangler.toml] [--bucket bucket-name] [--local]");
+  throw new Error("usage: publish-admin-assets.mjs [--config wrangler.management.toml] [--bucket bucket-name] [--local|--remote]");
 }
 
 execFileSync(process.execPath, [resolve(scriptDirectory, "build-admin.mjs")], {

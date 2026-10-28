@@ -10,18 +10,22 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const workerDirectory = resolve(scriptDirectory, "..");
 const migrationsDirectory = resolve(workerDirectory, "migrations");
 let target = "";
-let config = "wrangler.dev.toml";
-let database = "ribbonfish-management-dev";
+let config = "wrangler.management.toml";
+let database = "ribbonfish-devices";
 
 const args = process.argv.slice(2);
 while (args.length) {
   const argument = args.shift();
-  if (argument === "--local" || argument === "--remote") target = argument;
-  else if (argument === "--config" && args[0]) config = args.shift();
+  if (argument === "--local") {
+    if (target) throw new Error("Choose --local once");
+    target = argument;
+  } else if (argument === "--remote") {
+    throw new Error("Remote database bootstrap is disabled; use the production migration workflow.");
+  } else if (argument === "--config" && args[0]) config = args.shift();
   else if (argument === "--database" && args[0]) database = args.shift();
-  else throw new Error("Usage: node scripts/bootstrap-database.mjs --local|--remote [--config FILE] [--database NAME]");
+  else throw new Error("Usage: node scripts/bootstrap-database.mjs --local [--config FILE] [--database NAME]");
 }
-if (!target) throw new Error("Choose --local or --remote explicitly");
+if (!target) throw new Error("Choose --local explicitly");
 
 const migrations = (await readdir(migrationsDirectory)).filter((name) => name.endsWith(".sql")).sort();
 const ledgerSQL = migrationLedgerSQL(migrations);
@@ -37,7 +41,7 @@ function run(commandArgs) {
 }
 
 try {
-  const common = ["wrangler", "--config", config, "d1", "execute", database, target];
+  const common = ["wrangler", "--config", config, "d1", "execute", database, "--local"];
   run([...common, "--file", schemaPath]);
   run([...common, "--file", ledgerPath]);
   console.log("Initialized " + target.slice(2) + " D1 database " + database + " from schema.sql.");
