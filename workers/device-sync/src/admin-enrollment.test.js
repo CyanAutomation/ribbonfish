@@ -140,6 +140,73 @@ test("approving a pending replacement installs the approved public key and inval
   assert.equal(env.DB.audit[0].event_type, "device.enrollment_approved");
 });
 
+test("approved devices learn approval when polling, while superseded keys stay rejected", async () => {
+  const sqlite = new DatabaseSync(":memory:");
+  try {
+    sqlite.exec(await readFile(new URL("../schema.sql", import.meta.url), "utf8"));
+    const DB = sqliteD1(sqlite);
+    const env = {
+      DB,
+      ADMIN_ENABLED: "true",
+      ADMIN_ACCESS_REQUIRED: "false",
+      ENROLLMENT_RATE_LIMITER: { async limit() { return { success: true }; } },
+      ASSETS: { async get() { return null; }, async head() { return null; } },
+    };
+
+    async function submitEnrollment(pair) {
+      const publicKeyBytes = new Uint8Array(await webcrypto.subtle.exportKey("raw", pair.publicKey));
+      const publicKeyText = Buffer.from(publicKeyBytes).toString("base64url");
+      const body = JSON.stringify({ device_id: "pi-office", public_key: publicKeyText });
+      const timestamp = String(Date.now());
+      const bodyHash = createHash("sha256").update(body).digest("hex");
+      const payload = ["ribbonfish-device-v1", "POST", "/v1/enrollment-requests", "pi-office", timestamp, "", bodyHash].join("\n");
+      const signature = await webcrypto.subtle.sign("Ed25519", pair.privateKey, new TextEncoder().encode(payload));
+      const requestID = createHash("sha256").update(publicKeyBytes).digest("hex");
+      const response = await fetchHandler(new Request("https://worker.test/v1/enrollment-requests", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Ribbonfish-Device-ID": "pi-office",
+          "X-Ribbonfish-Timestamp": timestamp,
+          "X-Ribbonfish-Signature": Buffer.from(signature).toString("base64url"),
+        },
+        body,
+      }), env);
+      return { response, requestID };
+    }
+
+    async function approve(requestID) {
+      return handleAdminRequest(new Request(
+        `https://worker.test/admin/api/enrollment-requests/${requestID}/approve`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+      ), env);
+    }
+
+    const originalPair = await webcrypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+    const original = await submitEnrollment(originalPair);
+    assert.equal(original.response.status, 200, await original.response.clone().text());
+    assert.equal((await original.response.json()).status, "pending");
+
+    const originalApproval = await approve(original.requestID);
+    assert.equal(originalApproval.status, 200, await originalApproval.clone().text());
+    const approvedPoll = await submitEnrollment(originalPair);
+    assert.equal(approvedPoll.response.status, 200, await approvedPoll.response.clone().text());
+    assert.equal((await approvedPoll.response.json()).status, "approved");
+
+    const replacementPair = await webcrypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+    const replacement = await submitEnrollment(replacementPair);
+    assert.equal(replacement.response.status, 200, await replacement.response.clone().text());
+    assert.equal((await replacement.response.json()).status, "pending");
+    const replacementApproval = await approve(replacement.requestID);
+    assert.equal(replacementApproval.status, 200, await replacementApproval.clone().text());
+
+    const supersededPoll = await submitEnrollment(originalPair);
+    assert.equal(supersededPoll.response.status, 409);
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("rejecting a pending request leaves the device table unchanged", async () => {
   const env = environment();
   const response = await handleAdminRequest(new Request(
