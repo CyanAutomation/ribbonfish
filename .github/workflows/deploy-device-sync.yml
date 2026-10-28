@@ -1,0 +1,88 @@
+name: Deploy Ribbonfish Workers
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "workers/device-sync/src/index.js"
+      - "workers/device-sync/src/admin.js"
+      - "workers/device-sync/src/duration.js"
+      - "workers/device-sync/public/admin/**"
+      - "workers/device-sync/scripts/build-admin.mjs"
+      - "workers/device-sync/scripts/publish-admin-assets.mjs"
+      - "workers/device-sync/wrangler.toml"
+      - "workers/device-sync/wrangler.management.toml"
+      - "workers/device-sync/package.json"
+      - "workers/device-sync/package-lock.json"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: workers/device-sync/.nvmrc
+          cache: npm
+          cache-dependency-path: workers/device-sync/package-lock.json
+      - name: Install dependencies
+        working-directory: workers/device-sync
+        run: npm ci
+      - name: Build management console assets
+        working-directory: workers/device-sync
+        run: npm run build:admin
+      - name: Test Worker routes and authorization
+        working-directory: workers/device-sync
+        run: npm test
+      - name: Validate production Worker bundles
+        working-directory: workers/device-sync
+        run: npm run check:config
+
+  deploy:
+    name: Deploy production Workers
+    needs: validate
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && github.ref_protected
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: https://ribbonfish.scheimann.workers.dev
+    concurrency:
+      group: cloudflare-ribbonfish-production
+      cancel-in-progress: false
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: workers/device-sync/.nvmrc
+          cache: npm
+          cache-dependency-path: workers/device-sync/package-lock.json
+      - name: Install dependencies
+        working-directory: workers/device-sync
+        run: npm ci
+      - name: Deploy device-sync Worker
+        working-directory: workers/device-sync
+        run: npm run deploy:production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Publish management assets and deploy Worker
+        working-directory: workers/device-sync
+        run: npm run deploy:management
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
