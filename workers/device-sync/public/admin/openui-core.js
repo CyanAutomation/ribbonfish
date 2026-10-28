@@ -93,10 +93,12 @@ const functions = [
   }),
   defineFunction({
     name: "PlaylistDetail",
-    description: "Explains whether an active playlist is being sent to devices.",
+    description: "Explains whether an active playlist is ready for enrolled devices on their next sync.",
     params: z.object({ active: z.any().optional() }),
     returns: z.string(),
-    fn: ({ active }) => active ? "Current content sent to devices" : "No playlist is being sent to devices",
+    fn: ({ active }) => active
+      ? "Ready for enrolled devices on their next sync"
+      : "No playlist is active for enrolled devices",
   }),
   defineFunction({
     name: "StagedCount",

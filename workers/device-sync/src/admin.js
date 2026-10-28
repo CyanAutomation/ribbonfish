@@ -63,9 +63,27 @@ export async function handleAdminRequest(request, env, ctx) {
       return await uploadAsset(request, env, actorID);
     }
 
+    const assetMatch = url.pathname.match(/^\/admin\/api\/assets\/([a-f0-9]{64})$/);
+    if (assetMatch) {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      return await readPlaylistAsset(assetMatch[1], env);
+    }
+
     if (url.pathname === "/admin/api/playlists") {
       if (request.method !== "POST") return methodNotAllowed("POST");
       return await createPlaylist(request, env, actorID);
+    }
+
+    const revisionMatch = url.pathname.match(/^\/admin\/api\/playlists\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/);
+    if (revisionMatch) {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      return await readPlaylistRevision(decodeURIComponent(revisionMatch[1]), decodeURIComponent(revisionMatch[2]), env);
+    }
+
+    const playlistMatch = url.pathname.match(/^\/admin\/api\/playlists\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/);
+    if (playlistMatch) {
+      if (request.method !== "DELETE") return methodNotAllowed("DELETE");
+      return await deletePlaylist(decodeURIComponent(playlistMatch[1]), env, actorID);
     }
 
     if (url.pathname === "/admin/api/active-playlist") {
@@ -116,10 +134,13 @@ async function readOverview(env) {
     env.DB.prepare(
       "SELECT p.playlist_id, p.revision, p.rotation_interval, p.created_at, " +
       "COUNT(pa.position) AS asset_count, " +
+      "COUNT(*) OVER (PARTITION BY p.playlist_id) AS revision_count, " +
       "CASE WHEN ap.playlist_id = p.playlist_id AND ap.revision = p.revision THEN 1 ELSE 0 END AS active " +
       "FROM playlists p LEFT JOIN playlist_assets pa ON pa.playlist_id = p.playlist_id AND pa.revision = p.revision " +
       "LEFT JOIN active_playlist ap ON ap.singleton = 1 " +
-      "GROUP BY p.playlist_id, p.revision ORDER BY p.created_at DESC LIMIT 100",
+      "GROUP BY p.playlist_id, p.revision " +
+      "ORDER BY CASE WHEN ap.playlist_id = p.playlist_id AND ap.revision = p.revision THEN 0 ELSE 1 END, " +
+      "p.created_at DESC LIMIT 100",
     ).all(),
     env.DB.prepare("SELECT playlist_id, revision FROM active_playlist WHERE singleton = 1").first(),
     env.DB.prepare(
@@ -177,10 +198,10 @@ async function createEnrollmentCode(request, env, actorID) {
 
 async function uploadAsset(request, env, actorID) {
   if (request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !== "image/png") {
-    throw new HTTPError(415, "only PNG image uploads are supported");
+    throw new HTTPError(415, "Please choose a PNG image.");
   }
   const bytes = await readBytes(request, MAX_ASSET_BYTES);
-  if (!isPNG(bytes)) throw new HTTPError(400, "uploaded file is not a valid PNG image");
+  if (!isPNG(bytes)) throw new HTTPError(400, "That file does not look like a valid PNG image.");
 
   const sha256 = await sha256BytesHex(bytes);
   const key = "assets/" + sha256;
@@ -195,22 +216,39 @@ async function uploadAsset(request, env, actorID) {
   return jsonResponse({ sha256, size: bytes.byteLength }, 200);
 }
 
+async function readPlaylistAsset(sha256, env) {
+  const reference = await env.DB.prepare(
+    "SELECT 1 AS present FROM playlist_assets WHERE sha256 = ? LIMIT 1",
+  ).bind(sha256).first();
+  if (!reference) throw new HTTPError(404, "playlist image not found");
+  const object = await env.ASSETS.get("assets/" + sha256);
+  if (!object) throw new HTTPError(404, "playlist image not found");
+  const headers = new Headers({
+    "Cache-Control": "private, no-store",
+    "Content-Length": String(object.size),
+    "Content-Type": "image/png",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "X-Content-Type-Options": "nosniff",
+  });
+  return new Response(object.body, { status: 200, headers });
+}
+
 async function createPlaylist(request, env, actorID) {
   const data = await readJSON(request);
   if (!hasExactKeys(data, ["id", "rotation_interval", "assets"]) || !ID_PATTERN.test(data.id ?? "") ||
       !isValidPositiveDuration(data.rotation_interval) || !Array.isArray(data.assets) ||
       data.assets.length < 1 || data.assets.length > 256) {
-    throw new HTTPError(400, "playlist must have a valid id, rotation_interval, and 1-256 assets");
+    throw new HTTPError(400, "Add a playlist ID, a valid rotation interval and at least one image (up to 256).");
   }
 
   for (const asset of data.assets) {
     if (!hasExactKeys(asset, ["sha256", "size"]) || !DIGEST_PATTERN.test(asset.sha256 ?? "") ||
         !Number.isSafeInteger(asset.size) || asset.size < 1 || asset.size > MAX_ASSET_BYTES) {
-      throw new HTTPError(400, "playlist contains an invalid asset reference");
+      throw new HTTPError(400, "One of the images in this playlist is not valid. Please review the selection.");
     }
     const object = await env.ASSETS.head("assets/" + asset.sha256);
     if (!object || object.size !== asset.size) {
-      throw new HTTPError(409, "playlist references an asset that is missing or has a different size");
+      throw new HTTPError(409, "One of these images is no longer available. Upload it again before saving the playlist.");
     }
   }
 
@@ -229,6 +267,17 @@ async function createPlaylist(request, env, actorID) {
   }));
   await env.DB.batch(statements);
   return jsonResponse({ id: data.id, revision, rotation_interval: data.rotation_interval, asset_count: data.assets.length }, 201);
+}
+
+async function readPlaylistRevision(playlistID, revision, env) {
+  const playlist = await env.DB.prepare(
+    "SELECT playlist_id, revision, rotation_interval FROM playlists WHERE playlist_id = ? AND revision = ?",
+  ).bind(playlistID, revision).first();
+  if (!playlist) throw new HTTPError(404, "That playlist revision could not be found.");
+  const assets = await env.DB.prepare(
+    "SELECT sha256, size FROM playlist_assets WHERE playlist_id = ? AND revision = ? ORDER BY position",
+  ).bind(playlistID, revision).all();
+  return jsonResponse({ ...playlist, assets: assets.results ?? [] });
 }
 
 async function activatePlaylist(request, env, actorID) {
@@ -256,6 +305,43 @@ async function activatePlaylist(request, env, actorID) {
     }),
   ]);
   return jsonResponse({ active_playlist: { playlist_id: data.playlist_id, revision: data.revision } });
+}
+
+async function deletePlaylist(playlistID, env, actorID) {
+  const revisions = await env.DB.prepare(
+    "SELECT revision FROM playlists WHERE playlist_id = ?",
+  ).bind(playlistID).all();
+  if (!revisions.results?.length) throw new HTTPError(404, "That playlist could not be found.");
+
+  const active = await env.DB.prepare(
+    "SELECT playlist_id, revision FROM active_playlist WHERE singleton = 1",
+  ).first();
+  if (active?.playlist_id === playlistID) {
+    throw new HTTPError(409, "Please activate another playlist before deleting this one.");
+  }
+
+  const activeGuard = "NOT EXISTS (SELECT 1 FROM active_playlist WHERE singleton = 1 AND playlist_id = ?)";
+  const results = await env.DB.batch([
+    env.DB.prepare(`DELETE FROM playlist_assets WHERE playlist_id = ? AND ${activeGuard}`)
+      .bind(playlistID, playlistID),
+    env.DB.prepare(`DELETE FROM playlists WHERE playlist_id = ? AND ${activeGuard}`)
+      .bind(playlistID, playlistID),
+    auditStatement(env, actorID, "playlist.deleted", "playlist", playlistID, {
+      revision_count: revisions.results.length,
+    }, { onlyWhenPreviousChanged: true }),
+  ]);
+  const deletedRevisions = results?.[1]?.meta?.changes ?? 0;
+  if (!deletedRevisions) {
+    const current = await env.DB.prepare(
+      "SELECT playlist_id, revision FROM active_playlist WHERE singleton = 1",
+    ).first();
+    if (current?.playlist_id === playlistID) {
+      throw new HTTPError(409, "Please activate another playlist before deleting this one.");
+    }
+    throw new HTTPError(404, "That playlist could not be found.");
+  }
+
+  return jsonResponse({ playlist_id: playlistID, deleted_revisions: deletedRevisions });
 }
 
 async function setDeviceEnabled(request, deviceID, env, actorID) {
@@ -286,10 +372,13 @@ async function rotateDeviceCredential(request, deviceID, env, actorID) {
   return jsonResponse({ device_token: deviceToken });
 }
 
-function auditStatement(env, actorID, eventType, subjectType, subjectID, metadata) {
+function auditStatement(env, actorID, eventType, subjectType, subjectID, metadata, { onlyWhenPreviousChanged = false } = {}) {
+  const insert = onlyWhenPreviousChanged
+    ? "SELECT ?, ?, ?, ?, ?, ?, ? WHERE changes() > 0"
+    : "VALUES (?, ?, ?, ?, ?, ?, ?)";
   return env.DB.prepare(
     "INSERT INTO audit_events (event_id, actor_id, event_type, subject_type, subject_id, occurred_at, metadata_json) " +
-    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+    insert,
   ).bind(crypto.randomUUID(), actorID, eventType, subjectType, subjectID, Date.now(), JSON.stringify(metadata));
 }
 

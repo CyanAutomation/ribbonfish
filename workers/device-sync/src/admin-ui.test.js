@@ -40,6 +40,7 @@ test("OpenUI Core parses and evaluates a read-only fleet view", async () => {
   assert.equal(devices.props.value, "2 enrolled");
   assert.equal(devices.props.detail, "1 enabled · 1 disabled");
   assert.equal(active.props.value, "operations / r-test");
+  assert.equal(active.props.detail, "Ready for enrolled devices on their next sync");
   assert.equal(staged.props.value, "1 staged");
   assert.equal(health.props.body, "All active assets available");
   assert.equal(overviewReads, 1);
@@ -78,7 +79,7 @@ test("fleet snapshot is concise and accurate when no playlist is active", async 
 
   const [devices, active, staged, health] = runtime.getView().root.props.children;
   assert.equal(active.props.value, "No active playlist");
-  assert.equal(active.props.detail, "No playlist is being sent to devices");
+  assert.equal(active.props.detail, "No playlist is active for enrolled devices");
   assert.equal(staged.props.detail, "No revisions are waiting to be activated");
   assert.equal(health.props.body, "No active playlist");
   runtime.dispose();
@@ -178,6 +179,7 @@ test("device enabled messages report the state just applied", () => {
 
 test("audit events and metadata are presented as readable labels", () => {
   assert.equal(formatAuditEventType("playlist.revision_created"), "Staged playlist revision");
+  assert.equal(formatAuditEventType("playlist.deleted"), "Deleted playlist");
   assert.equal(formatAuditEventType("device.credential_rotated"), "Rotated device token");
   assert.equal(formatAuditEventType("development.bootstrap"), "Initial playlist seeded");
   assert.equal(formatAuditEventType("sync.detected"), "Sync detected");
