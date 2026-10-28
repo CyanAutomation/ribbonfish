@@ -11,6 +11,7 @@ import {
   formatAuditDetails,
   formatAuditEventType,
   formatDeviceEnabledMessage,
+  formatEnvironmentNotice,
   formatTimestamp,
 } from "./ui-utils.js";
 
@@ -416,15 +417,13 @@ async function refresh() {
 }
 
 function renderEnvironment(environment) {
-  const production = environment === "production";
-  environmentTag.textContent = production ? "Production" : "Development";
-  environmentNotice.classList.toggle("alert--warning", !production);
-  environmentNotice.classList.toggle("alert--info", production);
+  const status = formatEnvironmentNotice(environment);
+  environmentTag.textContent = status.label;
+  environmentNotice.classList.toggle("alert--warning", !status.production);
+  environmentNotice.classList.toggle("alert--info", status.production);
   environmentNotice.replaceChildren();
-  const lead = node("strong", production ? "Production environment." : "Development environment.");
-  const detail = node("span", production
-    ? " Your session is verified through Cloudflare Access."
-    : " Administrator sign-in is not enabled; use test data only.");
+  const lead = node("strong", status.heading);
+  const detail = node("span", ` ${status.detail}`);
   environmentNotice.append(lead, detail);
   environmentNotice.hidden = false;
 }

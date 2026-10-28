@@ -2,7 +2,7 @@
 
 [![Go agent](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml/badge.svg)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml) [![Worker tests](https://github.com/CyanAutomation/ribbonfish/actions/workflows/device-sync.yml/badge.svg?branch=main)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/device-sync.yml) [![ARM container smoke test](https://github.com/CyanAutomation/ribbonfish/actions/workflows/arm-container-smoke.yml/badge.svg?branch=main)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/arm-container-smoke.yml)
 
-> **Project status:** The Go agent supports bundled offline profiles, a verified persistent image cache, authenticated Worker/R2 content sync, a software simulator, and an experimental Linux DRM/KMS output backend. A separate production management Worker serves the playlist/device UI behind Cloudflare Access; the isolated development Worker uses separate data, and its public Workers URL is currently disabled. Screenshot rendering and capture scheduling remain proposed.
+> **Project status:** The Go agent supports bundled offline profiles, a verified persistent image cache, authenticated Worker/R2 content sync, a software simulator, and an experimental Linux DRM/KMS output backend. The production management Worker serves the playlist/device UI behind Cloudflare Access, while the device-sync Worker keeps management routes disabled. The console runs locally with Wrangler's local D1/R2 emulation; no public development Worker is deployed. Screenshot rendering and capture scheduling remain proposed.
 
 ## Render Once. Display Anywhere.
 
@@ -121,11 +121,10 @@ audit events. `GET /healthz` returns a minimal status for external uptime checks
 Cloudflare Access restricts the production Worker to members of the Cloudflare
 account. Its admin routes also require the authenticated Access identity in
 the Worker runtime, and management audit events store that identity as the
-actor. The isolated development Worker remains unauthenticated and uses separate
-D1/R2 resources; its existing public Workers URL is disabled. The default
-device-sync `wrangler.toml` configuration keeps
-`ADMIN_ENABLED` set to `false`. The panel is read from fixed keys in the private
-production R2 bucket.
+actor. No public development Worker is deployed. The default device-sync
+`wrangler.toml` configuration keeps `ADMIN_ENABLED` set to `false`. The panel is
+read from fixed keys in the private production R2 bucket; local development uses
+Wrangler's local D1/R2 emulation.
 See [`workers/device-sync/README.md`](workers/device-sync/README.md) for
 deployment and API details.
 
@@ -519,7 +518,7 @@ includes:
 Implemented: last-poll telemetry, management audit events, a health endpoint,
 and Cloudflare Worker observability. Remaining work:
 
-- Integration tests against a deployed development Worker
+- Integration tests against the locally emulated Worker and D1/R2 bindings
 - Benchmark results
 - D1 backup and restore exercises
 - Alert wiring for degraded health checks and stale device polls
@@ -579,6 +578,6 @@ The repository should ultimately include:
 8. Container permissions and DRM master ownership on Pi 3B and Pi 4.
 9. Capture concurrency limits, missed-job reconciliation, and capture cost ceilings.
 10. The production management API uses Cloudflare Access and records the
-    authenticated operator in audit events. The isolated development management
-    API remains unauthenticated and uses separate data; device asset requests
-    remain authenticated per device.
+    authenticated operator in audit events. Local management runs use Wrangler's
+    local data emulators; the device-sync Worker keeps admin routes disabled,
+    and device asset requests remain authenticated per device.
