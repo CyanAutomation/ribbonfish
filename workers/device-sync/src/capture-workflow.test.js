@@ -219,6 +219,54 @@ test("scheduled capture updates the playlist slot to a content-addressed screens
   }
 });
 
+test("trusted unchanged HTTP validators skip Browser Run and preserve the cached screenshot", async () => {
+  const sqlite = await freshDatabase();
+  const originalFetch = globalThis.fetch;
+  try {
+    let browserCalls = 0;
+    let probeRequest;
+    const { env, objects } = environment(sqlite, {
+      async quickAction() { browserCalls++; throw new Error("Browser Run should be skipped"); },
+    });
+    env.CAPTURE_VALIDATOR_HOSTS = "example.com";
+    env.DAILY_BROWSER_BUDGET_MS = "1";
+    const created = await createCapturePlaylist(env);
+    const captureID = created.body.captures[0].capture_id;
+    const sha256 = createHash("sha256").update(screenshot).digest("hex");
+    objects.set(`assets/${sha256}`, screenshot);
+    sqlite.prepare(
+      "UPDATE capture_targets SET current_sha256 = ?, current_size = ?, last_success_at = ?, validator_etag = ? WHERE capture_id = ?",
+    ).run(sha256, screenshot.byteLength, Date.now() - 60_000, '"source-v1"', captureID);
+    const requested = await handleAdminRequest(await request(`/admin/api/captures/${captureID}/run`, {
+      method: "POST", body: {},
+    }), env);
+    const jobID = (await requested.json()).job_id;
+    globalThis.fetch = async (url, options) => {
+      probeRequest = { url: String(url), options };
+      return new Response(null, { status: 304 });
+    };
+
+    const message = { body: { job_id: jobID }, acked: false, ack() { this.acked = true; }, retry() { throw new Error("unexpected retry"); } };
+    await queueHandler({ messages: [message] }, env);
+
+    assert.equal(message.acked, true);
+    assert.equal(probeRequest.url, "https://example.com/status");
+    assert.equal(probeRequest.options.method, "HEAD");
+    assert.equal(probeRequest.options.headers.get("If-None-Match"), '"source-v1"');
+    assert.equal(browserCalls, 0);
+    assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(jobID).status, "succeeded");
+    const preserved = sqlite.prepare("SELECT current_sha256, validator_etag FROM capture_targets WHERE capture_id = ?").get(captureID);
+    assert.equal(preserved.current_sha256, sha256);
+    assert.equal(preserved.validator_etag, '"source-v1"');
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_history").get().count, 0);
+    assert.equal(sqlite.prepare("SELECT browser_ms FROM capture_usage WHERE singleton = 1").get() ?? null, null,
+      "a validator hit does not consume Browser Run budget");
+  } finally {
+    globalThis.fetch = originalFetch;
+    sqlite.close();
+  }
+});
+
 test("capture requests reject private targets and queueing coalesces each target", async () => {
   const sqlite = await freshDatabase();
   try {

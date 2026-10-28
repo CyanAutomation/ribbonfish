@@ -6,6 +6,8 @@ workers_dev = true
 
 [vars]
 ADMIN_ENABLED = "false"
+ASSET_RECONCILIATION_INTERVAL_SECONDS = "900"
+CAPTURE_VALIDATOR_HOSTS = ""
 
 [observability]
 enabled = true

@@ -28,6 +28,8 @@ class FakeDatabase {
     this.devices = new Map();
     this.playlists = new Map([[`${playlist.id}:${playlist.revision}`, playlist]]);
     this.activePlaylist = { playlist_id: playlist.id, revision: playlist.revision };
+    this.lastSeenWrites = 0;
+    this.playlistListReads = 0;
   }
 
   prepare(sql) {
@@ -44,6 +46,15 @@ class FakeDatabase {
             await barrier.promise;
           }
           return database.devices.get(values[0]) ?? null;
+        }
+        if (sql.includes("FROM active_playlist ap")) {
+          const value = database.playlists.get(`${database.activePlaylist?.playlist_id}:${database.activePlaylist?.revision}`);
+          return value ? {
+            playlist_id: value.id,
+            revision: value.revision,
+            rotation_interval: value.rotation_interval,
+            has_captures: 0,
+          } : null;
         }
         if (sql.includes("FROM active_playlist")) return database.activePlaylist;
         if (sql.includes("FROM playlists WHERE playlist_id")) {
@@ -68,14 +79,19 @@ class FakeDatabase {
         return null;
       },
       async all() {
+        if (sql.includes("FROM playlist_assets")) database.playlistListReads++;
         const value = database.playlists.get(`${values[0]}:${values[1]}`);
         return { results: value?.assets ?? [] };
       },
       async run() {
         if (sql.startsWith("UPDATE devices SET last_seen_at")) {
           if (database.lastSeenUpdateHandler) return database.lastSeenUpdateHandler();
-          database.device.last_seen_at = values[0];
-          return { meta: { changes: 1 } };
+          database.lastSeenWrites++;
+          if (database.device.last_seen_at === null || database.device.last_seen_at <= values[2]) {
+            database.device.last_seen_at = values[0];
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
         }
         return { meta: { changes: 0 } };
       },
@@ -154,6 +170,21 @@ test("version 2 playlist endpoint authenticates the device and returns a revisio
 
   const unchanged = await fetchHandler(request({ "If-None-Match": '"revision-1"' }), env);
   assert.equal(unchanged.status, 304);
+  assert.equal(db.playlistListReads, 1, "a matching ETag skips playlist asset reads");
+  assert.equal(db.lastSeenWrites, 2, "polls attempt telemetry updates, while D1 applies the write interval");
+  assert.equal(db.device.last_seen_at <= Date.now(), true);
+});
+
+test("conditional playlist reads throttle last-seen writes in D1", async () => {
+  const { env, db } = testEnvironment();
+  await authorize(db);
+  const request = new Request("https://worker.test/v2/playlist", {
+    headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office" },
+  });
+  await fetchHandler(request, env);
+  const firstSeen = db.device.last_seen_at;
+  await fetchHandler(request, env);
+  assert.equal(db.device.last_seen_at, firstSeen, "a second poll inside the throttle window does not rewrite telemetry");
 });
 
 test("last-seen telemetry runs in the background and cannot block playlist delivery", async () => {
