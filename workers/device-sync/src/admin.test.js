@@ -241,6 +241,17 @@ test("management page is served from the private R2 bucket", async () => {
   assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'none'/);
 });
 
+test("ribbonfish favicon is served from the private R2 bucket", async () => {
+  const env = testEnvironment();
+  const favicon = new Uint8Array(await readFile(new URL("../public/admin/favicon.png", import.meta.url)));
+  env.objects.set("admin/favicon.png", favicon);
+  const response = await handleAdminRequest(request("/admin/favicon.png"), env);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "image/png");
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), favicon);
+});
+
 test("management UI validators can return 304 without reading the R2 body", async () => {
   const env = testEnvironment();
   env.objects.set("admin/app.js", new TextEncoder().encode("console.log('cached')"));

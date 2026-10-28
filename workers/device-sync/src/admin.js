@@ -11,6 +11,7 @@ const ADMIN_FILES = new Map([
   ["/admin/index.html", { key: "admin/index.html", contentType: "text/html; charset=utf-8", maxAge: 60 }],
   ["/admin/app.js", { key: "admin/app.js", contentType: "text/javascript; charset=utf-8", maxAge: 300 }],
   ["/admin/styles.css", { key: "admin/styles.css", contentType: "text/css; charset=utf-8", maxAge: 300 }],
+  ["/admin/favicon.png", { key: "admin/favicon.png", contentType: "image/png", maxAge: 3600 }],
   ["/admin/capture-pending.png", { key: "admin/capture-pending.png", contentType: "image/png", maxAge: 3600 }],
 ]);
 
