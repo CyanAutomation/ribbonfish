@@ -110,6 +110,22 @@ test("workflow linting runs for pull requests and main workflow changes", async 
   assert.match(workflow, /actionlint@v1\.7\.12/);
 });
 
+test("Go workflow caches invalidate when their pinned go-run tools change", async () => {
+  const workflows = [
+    ["verify-agent.yml", "golang.org/x/vuln/cmd/govulncheck@v1.1.4"],
+    ["workflow-lint.yml", "github.com/rhysd/actionlint/cmd/actionlint@v1.7.12"],
+  ];
+
+  for (const [name, tool] of workflows) {
+    const workflow = await readFile(new URL(`../../../.github/workflows/${name}`, import.meta.url), "utf8");
+    const cachePath = workflow.match(/cache-dependency-path: \|\n((?:\s+.+\n)+)/)?.[1] ?? "";
+
+    assert.match(cachePath, /agent\/go\.mod/, `${name} cache must follow Go module requirements`);
+    assert.ok(cachePath.includes(`.github/workflows/${name}`), `${name} cache must follow its pinned Go tool version`);
+    assert.ok(workflow.includes(tool), `${name} must keep the Go tool version explicit`);
+  }
+});
+
 test("Dependabot updates npm and pinned Docker base images", async () => {
   const dependabot = await readFile(new URL("../../../.github/dependabot.yml", import.meta.url), "utf8");
   const dockerfile = await readFile(new URL("../../../agent/Dockerfile", import.meta.url), "utf8");
