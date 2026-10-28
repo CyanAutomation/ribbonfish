@@ -5,6 +5,7 @@ const AUDIT_EVENT_LABELS = {
   "device.enabled": "Enabled device",
   "enrollment_code.created": "Created enrollment code",
   "playlist.activated": "Activated playlist revision",
+  "playlist.deleted": "Deleted playlist",
   "playlist.revision_created": "Staged playlist revision",
   "development.bootstrap": "Initial playlist seeded",
 };
