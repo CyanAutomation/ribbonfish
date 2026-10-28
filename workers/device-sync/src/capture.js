@@ -39,6 +39,17 @@ export function normalizeCaptureURL(value) {
   return url.toString();
 }
 
+export function validateCaptureTargetURL(value, allowedHosts) {
+  const normalized = normalizeCaptureURL(value);
+  const hostname = new URL(normalized).hostname.toLowerCase();
+  const allowlist = new Set(String(allowedHosts ?? "")
+    .split(",").map((host) => host.trim().toLowerCase()).filter(Boolean));
+  if (!allowlist.has(hostname)) {
+    throw new Error("The webpage host is not on the configured capture allowlist.");
+  }
+  return normalized;
+}
+
 export function validateCaptureSettings(value) {
   const interval = value?.capture_interval_seconds;
   const viewport = value?.viewport;
@@ -58,7 +69,7 @@ export function validateCaptureSettings(value) {
 }
 
 export async function captureScreenshot(target, env) {
-  const url = normalizeCaptureURL(target.url);
+  const url = validateCaptureTargetURL(target.url, env.CAPTURE_ALLOWED_HOSTS);
   const width = target.viewport_width;
   const height = target.viewport_height;
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) ||

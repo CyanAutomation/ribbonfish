@@ -1,7 +1,7 @@
 import { isValidPositiveDuration } from "./duration.js";
 import { isPNG, MAX_ASSET_BYTES, storePngAsset } from "./asset-store.js";
-import { normalizeCaptureURL, validateCaptureSettings } from "./capture.js";
-import { enqueueCapture } from "./capture-workflow.js";
+import { validateCaptureSettings, validateCaptureTargetURL } from "./capture.js";
+import { CaptureTargetNotAllowedError, enqueueCapture } from "./capture-workflow.js";
 import { AssetDeletionInProgressError, markAssetLiveStatement } from "./asset-registry.js";
 
 const MAX_JSON_BYTES = 64 << 10;
@@ -21,8 +21,8 @@ class HTTPError extends Error {
   }
 }
 
-// Production management deployments require Cloudflare Access identity in addition
-// to the edge Access policy, so the admin API fails closed if that policy is missing.
+// Production management deployments require a Cloudflare Access identity and an
+// explicit email allowlist, so the admin API fails closed if either is missing.
 export async function handleAdminRequest(request, env, ctx) {
   if (env.ADMIN_ENABLED !== "true") return new Response("not found", { status: 404 });
 
@@ -33,7 +33,10 @@ export async function handleAdminRequest(request, env, ctx) {
       if (typeof identity?.email !== "string" || !identity.email.trim()) {
         return new Response("access required", { status: 401 });
       }
-      actorID = identity.email;
+      if (!isAllowedAdminEmail(identity.email, env.ADMIN_ALLOWED_EMAILS)) {
+        return new Response("admin access required", { status: 403 });
+      }
+      actorID = identity.email.trim();
     } catch {
       return new Response("access required", { status: 401 });
     }
@@ -87,7 +90,8 @@ export async function handleAdminRequest(request, env, ctx) {
       let result;
       try {
         result = await enqueueCapture(captureRunMatch[1], env);
-      } catch {
+      } catch (error) {
+        if (error instanceof CaptureTargetNotAllowedError) throw new HTTPError(409, error.message);
         throw new HTTPError(503, "Capture could not be queued. Check the capture queue configuration and try again.");
       }
       if (!result) throw new HTTPError(404, "That webpage capture is no longer available.");
@@ -139,6 +143,12 @@ export async function handleAdminRequest(request, env, ctx) {
     if (error instanceof HTTPError) return jsonResponse({ error: error.message }, error.status);
     return jsonResponse({ error: "internal error" }, 500);
   }
+}
+
+function isAllowedAdminEmail(email, configuredEmails) {
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail || typeof configuredEmails !== "string") return false;
+  return configuredEmails.split(",").some((candidate) => candidate.trim().toLowerCase() === normalizedEmail);
 }
 
 async function fetchAdminAsset(request, env, pathname) {
@@ -506,6 +516,11 @@ async function resolveCaptureTarget(input, env) {
       "FROM capture_targets WHERE capture_id = ? AND enabled = 1",
     ).bind(input.capture_id).first();
     if (!existing) throw new HTTPError(409, "One of the webpage captures is no longer available.");
+    try {
+      validateCaptureTargetURL(existing.url, env.CAPTURE_ALLOWED_HOSTS);
+    } catch {
+      throw new HTTPError(409, "One of the webpage capture hosts is not on the configured capture allowlist.");
+    }
     return {
       capture_id: existing.capture_id,
       url: existing.url,
@@ -522,7 +537,7 @@ async function resolveCaptureTarget(input, env) {
   let url;
   let settings;
   try {
-    url = normalizeCaptureURL(input.url);
+    url = validateCaptureTargetURL(input.url, env.CAPTURE_ALLOWED_HOSTS);
     settings = validateCaptureSettings(input);
   } catch (error) {
     throw new HTTPError(400, error.message);
