@@ -18,7 +18,7 @@
         </div>
         <h1>Fleet management</h1>
       </div>
-      <button id="reload" class="button button--secondary" type="button">Refresh overview</button>
+      <button id="reload" class="button button--secondary" type="button">Refresh data</button>
     </header>
 
     <main id="main-content">
@@ -32,7 +32,7 @@
       <nav class="section-nav" aria-label="Management sections">
         <a href="#overview-section">Overview</a>
         <a href="#playlist-section">Playlists</a>
-        <a href="#capture-targets">Web captures</a>
+        <a href="#capture-targets">Page screenshots</a>
         <a href="#device-section">Devices</a>
         <a href="#activity-section">Recent activity</a>
       </nav>
@@ -42,9 +42,75 @@
           <div><p class="eyebrow">Overview</p><h2 id="overview-title">Fleet snapshot</h2></div>
         </div>
         <div id="openui-preview" role="region" aria-label="Fleet snapshot" aria-live="polite"></div>
-        <details class="developer-tools">
-          <summary>Customize the overview (developer tool)</summary>
-          <p class="muted">For developers: use OpenUI Lang with an external model to create a read-only fleet summary.</p>
+      </section>
+
+      <section id="playlist-section" class="panel" aria-labelledby="playlist-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">Playlists</p><h2 id="playlist-title">Playlist versions</h2></div>
+        </div>
+        <div id="playlists" class="table-scroll desktop-data" role="region" aria-label="Playlist versions" tabindex="0"></div>
+        <div id="playlists-mobile" class="mobile-card-list" role="region" aria-label="Playlist versions"></div>
+        <section id="capture-targets" class="capture-targets" aria-labelledby="capture-targets-title">
+          <div class="section-heading"><div><p class="eyebrow">Screenshots</p><h3 id="capture-targets-title">Page screenshots</h3></div></div>
+          <p class="muted">Each page URL is a reusable playlist item. A placeholder image appears until its first screenshot is ready.</p>
+          <div id="capture-target-list" class="capture-target-list" role="region" aria-label="Scheduled page screenshots" aria-live="polite"></div>
+        </section>
+        <form id="playlist-form" class="form-grid">
+          <h3>Create a playlist version</h3>
+          <p id="playlist-form-help" class="field--wide muted">Add PNG images or page URLs. Images and screenshots can be reused across playlists. Saved versions stay available until you delete the playlist.</p>
+          <label>Playlist ID <input class="field-control" name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" placeholder="e.g. operations"></label>
+          <label>Show each item for <input class="field-control" name="rotation_interval" required value="15s" placeholder="15s"><span class="field-hint">Use a duration such as 15s or 2m.</span></label>
+          <fieldset id="playlist-current-assets" class="field--wide asset-selection" hidden>
+            <legend>Images in this version</legend>
+            <p class="muted">Clear an image to remove it from the new version.</p>
+            <div class="asset-selection__list"></div>
+          </fieldset>
+          <fieldset id="playlist-current-captures" class="field--wide asset-selection" hidden>
+            <legend>Page URLs in this version</legend>
+            <p class="muted">Clear a URL to remove it from the new version. Its screenshot schedule stays active while a saved version uses it.</p>
+            <div class="asset-selection__list"></div>
+          </fieldset>
+          <label class="field--wide">Add PNG images <input class="field-control file-control" name="assets" type="file" accept="image/png" multiple></label>
+          <label class="field--wide">Add page URLs <textarea class="field-control" name="capture_urls" rows="3" placeholder="https://status.example.com&#10;https://example.com/operations" aria-describedby="page-url-help"></textarea><span id="page-url-help" class="field-hint">Use one public HTTPS URL per line. A placeholder image appears until the first screenshot is ready.</span></label>
+          <fieldset id="screenshot-settings" class="field--wide screenshot-settings" disabled hidden>
+            <legend>Screenshot settings</legend>
+            <label>Screenshot interval (seconds) <input class="field-control" name="capture_interval_seconds" type="number" value="300" min="60" max="2592000" step="1" required><span class="field-hint">Choose at least 60 seconds.</span></label>
+            <label>Screenshot size <span class="viewport-inputs"><input class="field-control" name="viewport_width" type="number" value="1920" min="320" max="3840" step="1" aria-label="Screenshot width in pixels" required><span aria-hidden="true">×</span><input class="field-control" name="viewport_height" type="number" value="1080" min="240" max="2160" step="1" aria-label="Screenshot height in pixels" required></span><span class="field-hint">Width × height in pixels.</span></label>
+          </fieldset>
+          <div class="field--wide form-actions">
+            <button id="playlist-submit" class="button button--primary" type="submit">Save playlist version</button>
+            <button id="cancel-playlist-edit" class="button button--secondary" type="button" hidden>Cancel edit</button>
+          </div>
+          <p id="playlist-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <section id="device-section" class="panel" aria-labelledby="device-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">Devices</p><h2 id="device-title">Device fleet</h2></div>
+        </div>
+        <section class="pending-enrollments" aria-labelledby="pending-enrollments-title">
+          <h3 id="pending-enrollments-title">Devices awaiting approval</h3>
+          <p class="muted">Compare the full fingerprint with the code shown on the device before approving it.</p>
+          <div id="pending-enrollments" class="table-scroll desktop-data" role="region" aria-label="Devices awaiting approval" tabindex="0"></div>
+          <div id="pending-enrollments-mobile" class="mobile-card-list" role="region" aria-label="Devices awaiting approval"></div>
+        </section>
+        <div id="devices" class="table-scroll desktop-data" role="region" aria-label="Enrolled devices" tabindex="0"></div>
+        <div id="devices-mobile" class="mobile-card-list" role="region" aria-label="Enrolled devices"></div>
+      </section>
+
+      <section id="activity-section" class="panel" aria-labelledby="activity-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">Activity</p><h2 id="activity-title">Recent activity</h2></div>
+        </div>
+        <div id="audit" class="table-scroll desktop-data" role="region" aria-label="Recent management activity" tabindex="0"></div>
+        <div id="audit-mobile" class="mobile-card-list" role="region" aria-label="Recent management activity"></div>
+      </section>
+
+      <section id="developer-tools-section" class="panel developer-panel" aria-label="Developer tools">
+        <details id="developer-tools" class="developer-tools">
+          <summary>Developer tools</summary>
+          <p class="muted">Customize the read-only fleet summary with OpenUI Lang and an external model.</p>
           <label>OpenUI Lang program <textarea id="openui-source" class="field-control" rows="8" spellcheck="false"></textarea></label>
           <div class="action-row">
             <button id="openui-preview-button" class="button button--primary" type="button">Render view</button>
@@ -58,66 +124,6 @@
             <button id="openui-copy-prompt" class="button button--secondary" type="button">Copy prompt</button>
           </details>
         </details>
-      </section>
-
-      <section id="playlist-section" class="panel" aria-labelledby="playlist-title">
-        <div class="section-heading">
-          <div><p class="eyebrow">Playlists</p><h2 id="playlist-title">Playlists</h2></div>
-        </div>
-        <div id="playlists" class="table-scroll desktop-data" role="region" aria-label="Playlist revisions" tabindex="0"></div>
-        <div id="playlists-mobile" class="mobile-card-list" role="region" aria-label="Playlist revisions"></div>
-        <section id="capture-targets" class="capture-targets" aria-labelledby="capture-targets-title">
-          <div class="section-heading"><div><p class="eyebrow">Browser Run</p><h3 id="capture-targets-title">Webpage captures</h3></div></div>
-          <p class="muted">Each URL is a reusable playlist item. It displays the holding image until its scheduled screenshot is ready.</p>
-          <div id="capture-target-list" class="capture-target-list" role="region" aria-label="Scheduled webpage captures" aria-live="polite"></div>
-        </section>
-        <form id="playlist-form" class="form-grid">
-          <h3>Create a playlist revision</h3>
-          <p id="playlist-form-help" class="field--wide muted">Add PNG images, webpage URLs, or both. Uploads and captures use the same content-addressed image store. Saved revisions stay available until you delete their playlist.</p>
-          <label>Playlist ID <input class="field-control" name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" placeholder="e.g. operations"></label>
-          <label>Rotation interval <input class="field-control" name="rotation_interval" required value="15s" placeholder="15s"></label>
-          <fieldset id="playlist-current-assets" class="field--wide asset-selection" hidden>
-            <legend>Current images</legend>
-            <p class="muted">Clear an image to remove it from the new revision.</p>
-            <div class="asset-selection__list"></div>
-          </fieldset>
-          <fieldset id="playlist-current-captures" class="field--wide asset-selection" hidden>
-            <legend>Current webpages</legend>
-            <p class="muted">Clear a webpage to remove it from the new revision. Existing schedules continue while any playlist revision references them.</p>
-            <div class="asset-selection__list"></div>
-          </fieldset>
-          <label class="field--wide">Add PNG images <input class="field-control file-control" name="assets" type="file" accept="image/png" multiple></label>
-          <label class="field--wide">Add webpage URLs <textarea class="field-control" name="capture_urls" rows="3" placeholder="https://status.example.com&#10;https://example.com/operations"></textarea><span class="muted">Use one public HTTPS URL per line. The initial image is a holding graphic; the first capture runs on the next scheduler tick.</span></label>
-          <label>Capture interval (seconds) <input class="field-control" name="capture_interval_seconds" type="number" value="300" min="60" max="2592000" step="1" required></label>
-          <label>Browser viewport <span class="viewport-inputs"><input class="field-control" name="viewport_width" type="number" value="1920" min="320" max="3840" step="1" aria-label="Viewport width in pixels" required><span aria-hidden="true">×</span><input class="field-control" name="viewport_height" type="number" value="1080" min="240" max="2160" step="1" aria-label="Viewport height in pixels" required></span></label>
-          <div class="field--wide form-actions">
-            <button id="playlist-submit" class="button button--primary" type="submit">Save playlist revision</button>
-            <button id="cancel-playlist-edit" class="button button--secondary" type="button" hidden>Cancel edit</button>
-          </div>
-          <p id="playlist-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
-        </form>
-      </section>
-
-      <section id="device-section" class="panel" aria-labelledby="device-title">
-        <div class="section-heading">
-          <div><p class="eyebrow">Devices</p><h2 id="device-title">Devices</h2></div>
-        </div>
-        <section class="pending-enrollments" aria-labelledby="pending-enrollments-title">
-          <h3 id="pending-enrollments-title">Waiting for approval</h3>
-          <p class="muted">Compare the full fingerprint with the code shown on the device before approving it.</p>
-          <div id="pending-enrollments" class="table-scroll desktop-data" role="region" aria-label="Pending device enrollment requests" tabindex="0"></div>
-          <div id="pending-enrollments-mobile" class="mobile-card-list" role="region" aria-label="Pending device enrollment requests"></div>
-        </section>
-        <div id="devices" class="table-scroll desktop-data" role="region" aria-label="Enrolled devices" tabindex="0"></div>
-        <div id="devices-mobile" class="mobile-card-list" role="region" aria-label="Enrolled devices"></div>
-      </section>
-
-      <section id="activity-section" class="panel" aria-labelledby="activity-title">
-        <div class="section-heading">
-          <div><p class="eyebrow">Recent activity</p><h2 id="activity-title">Recent activity</h2></div>
-        </div>
-        <div id="audit" class="table-scroll desktop-data" role="region" aria-label="Recent management activity" tabindex="0"></div>
-        <div id="audit-mobile" class="mobile-card-list" role="region" aria-label="Recent management activity"></div>
       </section>
 
       <section id="secret-panel" class="panel secret-panel" hidden aria-labelledby="secret-title">
