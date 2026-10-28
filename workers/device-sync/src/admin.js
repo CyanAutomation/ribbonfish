@@ -1,7 +1,7 @@
 import { isValidPositiveDuration } from "./duration.js";
 import { isPNG, MAX_ASSET_BYTES, storePngAsset } from "./asset-store.js";
 import { validateCaptureSettings, validateCaptureTargetURL } from "./capture.js";
-import { enqueueCapture } from "./capture-workflow.js";
+import { CaptureTargetNotAllowedError, enqueueCapture } from "./capture-workflow.js";
 import { AssetDeletionInProgressError, markAssetLiveStatement } from "./asset-registry.js";
 
 const MAX_JSON_BYTES = 64 << 10;
@@ -90,7 +90,8 @@ export async function handleAdminRequest(request, env, ctx) {
       let result;
       try {
         result = await enqueueCapture(captureRunMatch[1], env);
-      } catch {
+      } catch (error) {
+        if (error instanceof CaptureTargetNotAllowedError) throw new HTTPError(409, error.message);
         throw new HTTPError(503, "Capture could not be queued. Check the capture queue configuration and try again.");
       }
       if (!result) throw new HTTPError(404, "That webpage capture is no longer available.");

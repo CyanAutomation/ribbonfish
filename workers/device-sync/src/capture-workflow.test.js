@@ -293,6 +293,51 @@ test("capture requests reject private targets and queueing coalesces each target
   }
 });
 
+test("manual capture runs reject a target removed from the allowlist before enqueueing", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const captureID = created.body.captures[0].capture_id;
+    env.CAPTURE_ALLOWED_HOSTS = "other.example";
+
+    const response = await handleAdminRequest(await request(`/admin/api/captures/${captureID}/run`, {
+      method: "POST", body: {},
+    }), env);
+
+    assert.equal(response.status, 409);
+    assert.match(await response.text(), /allowlist/i);
+    assert.equal(messages.length, 0);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_jobs").get().count, 0);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("scheduled capture dispatch skips targets removed from the allowlist", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const captureID = created.body.captures[0].capture_id;
+    const originalDue = sqlite.prepare("SELECT next_due_at FROM capture_targets WHERE capture_id = ?")
+      .get(captureID).next_due_at;
+    env.CAPTURE_ALLOWED_HOSTS = "other.example";
+
+    await assert.rejects(
+      enqueueCapture(captureID, env, { now: originalDue + 10_000, scheduled: true }),
+      /allowlist/i,
+    );
+
+    assert.equal(messages.length, 0);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_jobs").get().count, 0);
+    assert.equal(sqlite.prepare("SELECT next_due_at FROM capture_targets WHERE capture_id = ?")
+      .get(captureID).next_due_at, originalDue);
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("coalescing a scheduled request leaves the target due time unchanged", async () => {
   const sqlite = await freshDatabase();
   try {

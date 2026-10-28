@@ -13,14 +13,26 @@ const DEFAULT_REQUEST_GAP_MS = 10_000;
 const MAX_PENDING_CAPTURE_JOBS = 100;
 const CAPTURE_VALIDATOR_TIMEOUT_MS = 5_000;
 
+export class CaptureTargetNotAllowedError extends Error {
+  constructor() {
+    super("That webpage capture host is not on the configured capture allowlist.");
+    this.name = "CaptureTargetNotAllowedError";
+  }
+}
+
 export async function enqueueCapture(captureID, env, { now = Date.now(), scheduled = false } = {}) {
   if (!env.CAPTURE_QUEUE || typeof env.CAPTURE_QUEUE.send !== "function") {
     throw new Error("Capture queue is not configured.");
   }
   const target = await env.DB.prepare(
-    "SELECT capture_id, capture_interval_seconds, enabled FROM capture_targets WHERE capture_id = ?",
+    "SELECT capture_id, url, capture_interval_seconds, enabled FROM capture_targets WHERE capture_id = ?",
   ).bind(captureID).first();
   if (!target || target.enabled !== 1) return null;
+  try {
+    validateCaptureTargetURL(target.url, env.CAPTURE_ALLOWED_HOSTS);
+  } catch {
+    throw new CaptureTargetNotAllowedError();
+  }
 
   const jobID = crypto.randomUUID();
   const inserted = await env.DB.prepare(
