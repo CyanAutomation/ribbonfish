@@ -4,6 +4,7 @@ package syncer
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,6 +62,7 @@ type HTTPClient struct {
 	baseURL  url.URL
 	deviceID string
 	token    string
+	key      *DeviceKey
 	store    cache.Store
 	http     *http.Client
 	etag     string
@@ -85,6 +87,25 @@ func NewHTTPClient(baseURL, deviceID, token string, store cache.Store, client *h
 		return nil, errors.New("image cache is required")
 	}
 	return &HTTPClient{baseURL: parsed, deviceID: deviceID, token: token, store: store, http: configuredHTTPClient(client)}, nil
+}
+
+// NewKeyHTTPClient creates a client authenticated with the device's Ed25519
+// identity after the management console has approved its public key.
+func NewKeyHTTPClient(baseURL, deviceID string, key *DeviceKey, store cache.Store, client *http.Client) (*HTTPClient, error) {
+	parsed, err := parseBaseURL(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	if !validID(deviceID) {
+		return nil, errors.New("device id must be 1-64 ASCII letters, digits, dots, underscores, or hyphens")
+	}
+	if key == nil || len(key.PublicKey()) != ed25519.PublicKeySize {
+		return nil, errors.New("device identity is required")
+	}
+	if store == nil {
+		return nil, errors.New("image cache is required")
+	}
+	return &HTTPClient{baseURL: parsed, deviceID: deviceID, key: key, store: store, http: configuredHTTPClient(client)}, nil
 }
 
 // SetETag supplies the last persisted snapshot tag for conditional polling.
@@ -112,11 +133,12 @@ func (c *HTTPClient) Synchronize(ctx context.Context, hardware, active config.Co
 	if err != nil {
 		return Update{}, fmt.Errorf("create snapshot request: %w", err)
 	}
-	request.Header.Set("Authorization", "Bearer "+c.token)
-	request.Header.Set("X-Ribbonfish-Device-ID", c.deviceID)
 	request.Header.Set("Accept", "application/json")
 	if c.etag != "" {
 		request.Header.Set("If-None-Match", c.etag)
+	}
+	if err := c.authorize(request, nil); err != nil {
+		return Update{}, fmt.Errorf("sign snapshot request: %w", err)
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
@@ -189,9 +211,10 @@ func (c *HTTPClient) fetchAsset(ctx context.Context, digest string, expectedSize
 	if err != nil {
 		return cache.Asset{}, fmt.Errorf("create image request: %w", err)
 	}
-	request.Header.Set("Authorization", "Bearer "+c.token)
-	request.Header.Set("X-Ribbonfish-Device-ID", c.deviceID)
 	request.Header.Set("Accept", "image/png,image/jpeg,image/gif")
+	if err := c.authorize(request, nil); err != nil {
+		return cache.Asset{}, fmt.Errorf("sign image request: %w", err)
+	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		return cache.Asset{}, fmt.Errorf("fetch image %s: %w", digest, err)
@@ -252,6 +275,15 @@ func (c *HTTPClient) endpoint(endpointPath string) string {
 	base.Path = path.Join(base.Path, endpointPath)
 	base.RawPath = ""
 	return base.String()
+}
+
+func (c *HTTPClient) authorize(request *http.Request, body []byte) error {
+	request.Header.Set("X-Ribbonfish-Device-ID", c.deviceID)
+	if c.key != nil {
+		return c.key.SignRequest(request, body)
+	}
+	request.Header.Set("Authorization", "Bearer "+c.token)
+	return nil
 }
 
 func decodePlaylistSnapshot(reader io.Reader) (PlaylistSnapshot, error) {

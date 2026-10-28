@@ -59,8 +59,8 @@ class FakeDatabase {
             .map(({ revision }) => ({ revision })) };
         }
         if (sql.includes("FROM devices")) {
-          return { results: [...database.devices.values()].map(({ device_id, enabled, created_at, last_seen_at }) =>
-            ({ device_id, enabled, created_at, last_seen_at })) };
+          return { results: [...database.devices.values()].map(({ device_id, enabled, created_at, last_seen_at, public_key }) =>
+            ({ device_id, enabled, created_at, last_seen_at, auth_type: public_key ? "key" : "token" })) };
         }
         if (sql.includes("FROM playlists p")) {
           const counts = new Map();
@@ -235,6 +235,7 @@ test("overview omits device token hashes and reports missing active assets", asy
   const body = await response.json();
   assert.equal(JSON.stringify(body).includes("do-not-return-this"), false);
   assert.equal(body.devices[0].device_id, "pi-office");
+  assert.equal(body.devices[0].auth_type, "token");
   assert.equal(body.environment, "development");
   assert.deepEqual(body.asset_health.missing, [{ sha256: digest, expected_size: 4, actual_size: null }]);
 });
@@ -246,6 +247,17 @@ test("overview identifies an Access-protected management deployment", async () =
   });
   assert.equal(response.status, 200);
   assert.equal((await response.json()).environment, "production");
+});
+
+test("overview labels key-based devices without exposing their public keys", async () => {
+  const env = testEnvironment();
+  const publicKey = Buffer.alloc(32, 9).toString("base64url");
+  env.DB.devices.get("pi-office").public_key = publicKey;
+  env.DB.devices.get("pi-office").token_hash = null;
+  const response = await handleAdminRequest(request("/admin/api/overview"), env);
+  const overview = await response.json();
+  assert.equal(overview.devices[0].auth_type, "key");
+  assert.equal(JSON.stringify(overview).includes(publicKey), false);
 });
 
 test("overview keeps an older active playlist visible in the revision list", async () => {
@@ -527,4 +539,17 @@ test("device status changes are recorded and token rotation returns the token on
   assert.equal(JSON.stringify(env.DB.auditEvents).includes(device_token), false);
   assert.equal(env.DB.auditEvents.some((event) => event.event_type === "device.credential_rotated"), true);
   assert.equal(env.DB.auditEvents.at(-1).actor_id, "anonymous");
+});
+
+test("device key authentication cannot be converted back to a bearer token", async () => {
+  const env = testEnvironment();
+  const device = env.DB.devices.get("pi-office");
+  device.token_hash = null;
+  device.public_key = Buffer.alloc(32, 9).toString("base64url");
+  const response = await handleAdminRequest(request("/admin/api/devices/pi-office/rotate", {
+    method: "POST", body: {},
+  }), env);
+  assert.equal(response.status, 409);
+  assert.equal(device.token_hash, null);
+  assert.equal(env.DB.auditEvents.some((event) => event.event_type === "device.credential_rotated"), false);
 });

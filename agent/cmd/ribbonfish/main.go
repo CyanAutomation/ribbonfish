@@ -85,6 +85,13 @@ func deviceTokenPath() string {
 	return "/var/lib/ribbonfish/device-token"
 }
 
+func deviceKeyPath() string {
+	if value := strings.TrimSpace(os.Getenv("RIBBONFISH_DEVICE_KEY_FILE")); value != "" {
+		return value
+	}
+	return "/var/lib/ribbonfish/device-key"
+}
+
 func enrollDevice(syncURL, deviceID, tokenFile string, input io.Reader) error {
 	if strings.TrimSpace(syncURL) == "" {
 		return errors.New("RIBBONFISH_SYNC_URL is required for enrollment")
@@ -186,10 +193,40 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 	} else if !errors.Is(loadErr, os.ErrNotExist) {
 		logger.Warn("last-good remote content is unavailable; using bundled content", "error", loadErr)
 	}
+	syncURL := strings.TrimSpace(os.Getenv("RIBBONFISH_SYNC_URL"))
+	deviceID := strings.TrimSpace(os.Getenv("RIBBONFISH_DEVICE_ID"))
+	var legacySynchronizer syncer.Synchronizer
+	var deviceKey *syncer.DeviceKey
+	var pairingState *display.PairingState
+	if syncURL != "" {
+		token, tokenErr := syncer.ReadDeviceToken(deviceTokenPath())
+		if tokenErr == nil {
+			if synchronizer, createErr := syncer.NewHTTPClient(syncURL, deviceID, token, imageCache, nil); createErr != nil {
+				logger.Warn("remote sync configuration is invalid; continuing with local content", "error", createErr)
+			} else {
+				legacySynchronizer = synchronizer
+			}
+		} else if errors.Is(tokenErr, os.ErrNotExist) {
+			if deviceID == "" {
+				logger.Warn("remote sync is configured but RIBBONFISH_DEVICE_ID is missing; continuing with local content")
+			} else if key, keyErr := syncer.LoadOrCreateDeviceKey(deviceKeyPath()); keyErr != nil {
+				logger.Warn("automatic device enrollment is unavailable; continuing with local content", "error", keyErr)
+			} else {
+				deviceKey = key
+				pairingState = display.NewPairingState(deviceID, key.Fingerprint())
+				logger.Info("device identity is ready; waiting for management approval", "device_id", deviceID, "fingerprint", key.Fingerprint())
+			}
+		} else {
+			logger.Warn("remote sync is configured but device credential is invalid; continuing with local content", "error", tokenErr)
+		}
+	}
 	outputBackend, err := newDisplayOutput(hardwareConfig)
 	if err != nil {
 		_ = imageCache.Close()
 		return fmt.Errorf("start %s: %w", cfg.Output.EffectiveBackend(), err)
+	}
+	if pairingState != nil {
+		outputBackend = display.NewPairingOutput(outputBackend, pairingState)
 	}
 	playback, err := agent.New(ctx, cfg, imageCache, outputBackend, logger, agent.RealClock{})
 	if err != nil {
@@ -199,22 +236,19 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 	}
 	logger.Info("agent started", "display_backend", cfg.Output.EffectiveBackend())
 	var syncDone chan error
-	if syncURL := strings.TrimSpace(os.Getenv("RIBBONFISH_SYNC_URL")); syncURL != "" {
-		deviceID := strings.TrimSpace(os.Getenv("RIBBONFISH_DEVICE_ID"))
-		token, tokenErr := syncer.ReadDeviceToken(deviceTokenPath())
-		if tokenErr != nil {
-			logger.Warn("remote sync is configured but device credential is unavailable; continuing with local content", "error", tokenErr)
-		} else if synchronizer, createErr := syncer.NewHTTPClient(syncURL, deviceID, token, imageCache, nil); createErr != nil {
-			logger.Warn("remote sync configuration is invalid; continuing with local content", "error", createErr)
-		} else {
-			if activeSnapshot != nil {
-				synchronizer.SetETag(activeSnapshot.ETag)
-			}
-			syncDone = make(chan error, 1)
-			go func() {
-				syncDone <- runSyncLoop(ctx, synchronizer, hardwareConfig, playback, snapshotPath, activeSnapshot, logger)
-			}()
+	if legacySynchronizer != nil {
+		if synchronizer, ok := legacySynchronizer.(*syncer.HTTPClient); ok && activeSnapshot != nil {
+			synchronizer.SetETag(activeSnapshot.ETag)
 		}
+		syncDone = make(chan error, 1)
+		go func() {
+			syncDone <- runSyncLoop(ctx, legacySynchronizer, hardwareConfig, playback, snapshotPath, activeSnapshot, logger)
+		}()
+	} else if deviceKey != nil {
+		syncDone = make(chan error, 1)
+		go func() {
+			syncDone <- runDeviceEnrollmentLoop(ctx, syncURL, deviceID, deviceKey, imageCache, hardwareConfig, playback, snapshotPath, activeSnapshot, pairingState, logger)
+		}()
 	}
 	runErr := playback.Run(ctx)
 	if syncDone != nil {
@@ -226,6 +260,89 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 	return errors.Join(runErr, outputErr, cacheErr)
 }
 
+func runDeviceEnrollmentLoop(ctx context.Context, syncURL, deviceID string, key *syncer.DeviceKey, store cache.Store, hardware config.Config, playback syncPlayback, snapshotPath string, activeSnapshot *syncer.Update, pairing *display.PairingState, logger interface {
+	Info(string, ...any)
+	Warn(string, ...any)
+}) error {
+	interval := configuredSyncInterval(logger)
+	retryDelay := 5 * time.Second
+	lastStatus := ""
+	for ctx.Err() == nil {
+		status, err := syncer.RequestDeviceEnrollment(ctx, syncURL, deviceID, key, nil)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			logger.Warn("automatic enrollment request failed; retrying", "error", err)
+			if !waitForContext(ctx, retryDelay) {
+				return nil
+			}
+			if retryDelay < 5*time.Minute/2 {
+				retryDelay *= 2
+			} else {
+				retryDelay = 5 * time.Minute
+			}
+			continue
+		}
+		retryDelay = 5 * time.Second
+		if status.Status != lastStatus {
+			switch status.Status {
+			case "pending":
+				logger.Info("device is waiting for management approval", "device_id", deviceID)
+			case "rejected":
+				logger.Warn("device enrollment was rejected", "device_id", deviceID)
+			case "disabled":
+				logger.Warn("device is approved but disabled; enable it in management", "device_id", deviceID)
+			}
+			lastStatus = status.Status
+		}
+		switch status.Status {
+		case "pending":
+			pairing.SetStatus("pending")
+		case "rejected":
+			pairing.SetStatus("rejected")
+		case "disabled":
+			pairing.SetStatus("disabled")
+		case "approved":
+			pairing.Clear()
+			synchronizer, err := syncer.NewKeyHTTPClient(syncURL, deviceID, key, store, nil)
+			if err != nil {
+				return fmt.Errorf("configure key-based synchronization: %w", err)
+			}
+			if activeSnapshot != nil {
+				synchronizer.SetETag(activeSnapshot.ETag)
+			}
+			logger.Info("device enrollment approved; starting playlist sync", "device_id", deviceID)
+			return runSyncLoop(ctx, synchronizer, hardware, playback, snapshotPath, activeSnapshot, logger)
+		}
+		if !waitForContext(ctx, interval) {
+			return nil
+		}
+	}
+	return nil
+}
+
+func configuredSyncInterval(logger interface{ Warn(string, ...any) }) time.Duration {
+	if value := strings.TrimSpace(os.Getenv("RIBBONFISH_SYNC_INTERVAL")); value != "" {
+		if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
+			return parsed
+		}
+		logger.Warn("invalid RIBBONFISH_SYNC_INTERVAL; using one minute", "value", value)
+	}
+	return time.Minute
+}
+
+func waitForContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 type syncPlayback interface {
 	CurrentConfig() config.Config
 	ApplyConfig(context.Context, config.Config) error
@@ -235,14 +352,7 @@ func runSyncLoop(ctx context.Context, synchronizer syncer.Synchronizer, hardware
 	Info(string, ...any)
 	Warn(string, ...any)
 }) error {
-	interval := time.Minute
-	if value := strings.TrimSpace(os.Getenv("RIBBONFISH_SYNC_INTERVAL")); value != "" {
-		if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
-			interval = parsed
-		} else {
-			logger.Warn("invalid RIBBONFISH_SYNC_INTERVAL; using one minute", "value", value)
-		}
-	}
+	interval := configuredSyncInterval(logger)
 	retryDelay := 5 * time.Second
 	syncHealthy := false
 	for ctx.Err() == nil {

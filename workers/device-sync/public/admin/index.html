@@ -88,13 +88,14 @@
         <div class="section-heading">
           <div><p class="eyebrow">Devices</p><h2 id="device-title">Devices</h2></div>
         </div>
+        <section class="pending-enrollments" aria-labelledby="pending-enrollments-title">
+          <h3 id="pending-enrollments-title">Waiting for approval</h3>
+          <p class="muted">Compare the full fingerprint with the code shown on the device before approving it.</p>
+          <div id="pending-enrollments" class="table-scroll desktop-data" role="region" aria-label="Pending device enrollment requests" tabindex="0"></div>
+          <div id="pending-enrollments-mobile" class="mobile-card-list" role="region" aria-label="Pending device enrollment requests"></div>
+        </section>
         <div id="devices" class="table-scroll desktop-data" role="region" aria-label="Enrolled devices" tabindex="0"></div>
         <div id="devices-mobile" class="mobile-card-list" role="region" aria-label="Enrolled devices"></div>
-        <form id="enrollment-form" class="inline-form">
-          <label>Valid for (minutes) <input class="field-control" name="expires_in_minutes" type="number" min="1" max="1440" value="30" required></label>
-          <button class="button button--primary" type="submit">Create enrollment code</button>
-          <p id="enrollment-feedback" class="form-feedback" hidden role="status" aria-live="polite"></p>
-        </form>
       </section>
 
       <section id="activity-section" class="panel" aria-labelledby="activity-title">

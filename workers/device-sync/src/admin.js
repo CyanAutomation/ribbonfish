@@ -53,6 +53,21 @@ export async function handleAdminRequest(request, env, ctx) {
       return jsonResponse(await readOverview(env));
     }
 
+    if (url.pathname === "/admin/api/enrollment-requests") {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      return jsonResponse(await readEnrollmentRequests(env));
+    }
+
+    const enrollmentDecisionMatch = url.pathname.match(/^\/admin\/api\/enrollment-requests\/([a-f0-9]{64})\/(approve|reject)$/);
+    if (enrollmentDecisionMatch) {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      const data = await readJSON(request);
+      if (!hasExactKeys(data, [])) throw new HTTPError(400, "request body must be an empty JSON object");
+      return enrollmentDecisionMatch[2] === "approve"
+        ? await approveEnrollmentRequest(enrollmentDecisionMatch[1], env, actorID)
+        : await rejectEnrollmentRequest(enrollmentDecisionMatch[1], env, actorID);
+    }
+
     if (url.pathname === "/admin/api/enrollment-codes") {
       if (request.method !== "POST") return methodNotAllowed("POST");
       return await createEnrollmentCode(request, env, actorID);
@@ -129,7 +144,9 @@ async function fetchAdminAsset(env, pathname) {
 async function readOverview(env) {
   const [devices, playlists, active, audit] = await Promise.all([
     env.DB.prepare(
-      "SELECT device_id, enabled, created_at, last_seen_at FROM devices ORDER BY device_id",
+      "SELECT device_id, enabled, created_at, last_seen_at, " +
+      "CASE WHEN public_key IS NULL THEN 'token' ELSE 'key' END AS auth_type " +
+      "FROM devices ORDER BY device_id",
     ).all(),
     env.DB.prepare(
       "SELECT p.playlist_id, p.revision, p.rotation_interval, p.created_at, " +
@@ -178,6 +195,72 @@ async function readOverview(env) {
       metadata: parseMetadata(event.metadata_json),
     })),
   };
+}
+
+async function readEnrollmentRequests(env) {
+  const now = Date.now();
+  const result = await env.DB.prepare(
+    "SELECT r.request_id, r.device_id, r.fingerprint, r.created_at, r.last_seen_at, r.expires_at, " +
+    "CASE WHEN d.device_id IS NULL THEN 0 ELSE 1 END AS replaces_existing " +
+    "FROM enrollment_requests r LEFT JOIN devices d ON d.device_id = r.device_id " +
+    "WHERE r.status = 'pending' AND r.expires_at > ? ORDER BY r.created_at, r.device_id",
+  ).bind(now).all();
+  return (result.results ?? []).map((request) => ({
+    ...request,
+    replaces_existing: Boolean(request.replaces_existing),
+  }));
+}
+
+async function approveEnrollmentRequest(requestID, env, actorID) {
+  const now = Date.now();
+  const enrollment = await env.DB.prepare(
+    "SELECT request_id, device_id, public_key, fingerprint, expires_at FROM enrollment_requests " +
+    "WHERE request_id = ? AND status = 'pending'",
+  ).bind(requestID).first();
+  if (!enrollment || enrollment.expires_at <= now) throw new HTTPError(409, "enrollment request is no longer pending");
+
+  const keyOwner = await env.DB.prepare(
+    "SELECT device_id FROM devices WHERE public_key = ? AND device_id <> ?",
+  ).bind(enrollment.public_key, enrollment.device_id).first();
+  if (keyOwner) throw new HTTPError(409, "device key is already enrolled under another device ID");
+
+  const decisionID = randomToken();
+  const result = await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE enrollment_requests SET status = 'approved', decided_at = ?, actor_id = ?, decision_id = ? " +
+      "WHERE request_id = ? AND status = 'pending' AND expires_at > ?",
+    ).bind(now, actorID, decisionID, requestID, now),
+    env.DB.prepare(
+      "INSERT INTO devices (device_id, token_hash, public_key, enabled, created_at, last_seen_at) " +
+      "SELECT r.device_id, NULL, r.public_key, COALESCE(d.enabled, 1), COALESCE(d.created_at, ?), NULL " +
+      "FROM enrollment_requests r LEFT JOIN devices d ON d.device_id = r.device_id " +
+      "WHERE r.request_id = ? AND r.status = 'approved' AND r.decision_id = ? " +
+      "ON CONFLICT(device_id) DO UPDATE SET token_hash = NULL, public_key = excluded.public_key, last_seen_at = NULL",
+    ).bind(now, requestID, decisionID),
+    auditStatement(env, actorID, "device.enrollment_approved", "device", enrollment.device_id,
+      { fingerprint: enrollment.fingerprint ?? undefined }, { onlyWhenPreviousChanged: true }),
+  ]);
+  if (result[0]?.meta?.changes !== 1) throw new HTTPError(409, "enrollment request is no longer pending");
+  return jsonResponse({ device_id: enrollment.device_id, status: "approved" });
+}
+
+async function rejectEnrollmentRequest(requestID, env, actorID) {
+  const now = Date.now();
+  const enrollment = await env.DB.prepare(
+    "SELECT device_id, fingerprint FROM enrollment_requests WHERE request_id = ? AND status = 'pending' AND expires_at > ?",
+  ).bind(requestID, now).first();
+  if (!enrollment) throw new HTTPError(409, "enrollment request is no longer pending");
+
+  const result = await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE enrollment_requests SET status = 'rejected', decided_at = ?, actor_id = ? " +
+      "WHERE request_id = ? AND status = 'pending' AND expires_at > ?",
+    ).bind(now, actorID, requestID, now),
+    auditStatement(env, actorID, "device.enrollment_rejected", "device", enrollment.device_id,
+      { fingerprint: enrollment.fingerprint ?? undefined }, { onlyWhenPreviousChanged: true }),
+  ]);
+  if (result[0]?.meta?.changes !== 1) throw new HTTPError(409, "enrollment request is no longer pending");
+  return jsonResponse({ device_id: enrollment.device_id, status: "rejected" });
 }
 
 async function createEnrollmentCode(request, env, actorID) {
@@ -361,8 +444,9 @@ async function setDeviceEnabled(request, deviceID, env, actorID) {
 async function rotateDeviceCredential(request, deviceID, env, actorID) {
   const data = await readJSON(request);
   if (!hasExactKeys(data, [])) throw new HTTPError(400, "request body must be an empty JSON object");
-  const device = await env.DB.prepare("SELECT device_id FROM devices WHERE device_id = ?").bind(deviceID).first();
+  const device = await env.DB.prepare("SELECT device_id, public_key FROM devices WHERE device_id = ?").bind(deviceID).first();
   if (!device) throw new HTTPError(404, "device not found");
+  if (device.public_key) throw new HTTPError(409, "this device uses key-based authentication and has no token to rotate");
   const deviceToken = randomToken();
   await env.DB.batch([
     env.DB.prepare("UPDATE devices SET token_hash = ? WHERE device_id = ?")
