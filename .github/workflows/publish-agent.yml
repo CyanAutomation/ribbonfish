@@ -2,64 +2,28 @@ name: Publish Raspberry Pi agent image
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
+    paths:
+      - "agent/**"
+      - ".github/workflows/publish-agent.yml"
+      - ".github/workflows/verify-agent.yml"
 
 permissions:
   contents: read
 
-concurrency:
-  group: publish-ribbonfish-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
   verify:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Require release commit to be reachable from main
-        run: |
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
-            echo "Release tags must point to commits reachable from main." >&2
-            exit 1
-          }
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: agent/go.mod
-          cache-dependency-path: agent/go.mod
-      - name: Check formatting and static analysis
-        working-directory: agent
-        run: |
-          test -z "$(gofmt -l .)"
-          go vet ./...
-      - name: Check for known Go vulnerabilities
-        working-directory: agent
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
-      - name: Run tests with race detector
-        working-directory: agent
-        run: go test -race ./...
-      - name: Cross-compile ARMv7
-        working-directory: agent
-        env:
-          GOOS: linux
-          GOARCH: arm
-          GOARM: "7"
-        run: go build -o /tmp/ribbonfish-linux-armv7 ./cmd/ribbonfish
-      - name: Cross-compile ARM64
-        working-directory: agent
-        env:
-          GOOS: linux
-          GOARCH: arm64
-        run: go build -o /tmp/ribbonfish-linux-arm64 ./cmd/ribbonfish
+    uses: ./.github/workflows/verify-agent.yml
+
   publish:
     needs: verify
+    if: github.ref_protected
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    concurrency:
+      group: publish-ribbonfish-ghcr-main
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write
@@ -82,8 +46,7 @@ jobs:
           images: ghcr.io/cyanautomation/ribbonfish
           flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
-            type=sha
+            type=sha,format=long
       - name: Build and publish ARM images
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -96,3 +59,16 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: true
           sbom: true
+      - name: Promote current main image to main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_SHA: ${{ github.sha }}
+        run: |
+          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [ "$main_sha" != "$IMAGE_SHA" ]; then
+            echo "main has advanced; keeping main on the newer publish"
+            exit 0
+          fi
+          docker buildx imagetools create \
+            --tag ghcr.io/cyanautomation/ribbonfish:main \
+            "ghcr.io/cyanautomation/ribbonfish:sha-${IMAGE_SHA}"

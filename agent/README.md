@@ -77,12 +77,12 @@ isolated container and does not open DRM or disturb the active HDMI output.
 
 GitHub Actions runs both checks on changes to the agent, simulator, or Pi
 examples, validates the Pi configs and Compose files, tests the device sync
-Worker separately, and publishes an ARMv7/
-ARM64 release image to GHCR when a `v*` tag is pushed. A separate workflow
-publishes `cyanautomation/ribbonfish` to Docker Hub for AMD64, ARM64, and
-ARMv7 after PRs merge into `main`, tagged as both `latest` and the full
-merge SHA (`sha-<merge-commit-SHA>`). Use the immutable SHA tag to pin a
-deployment; `latest` moves after verification passes. The published-image
+Worker separately, and publishes images on protected `main` pushes that
+change `agent/**`. GHCR receives ARMv7 and ARM64 images tagged `main` and with
+the full commit SHA (`sha-<commit-SHA>`); Docker Hub receives AMD64, ARM64, and
+ARMv7 images tagged with the full commit SHA. Docker Hub's `latest` tag moves
+only when that commit is still the `main` tip. Use the immutable SHA tag to pin
+a deployment. The published-image
 simulator Compose example is in
 `examples/raspberry-pi/docker-compose.published.yaml`. The hardware Compose
 example starts from bundled local content with no network by default. Optional
