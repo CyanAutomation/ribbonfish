@@ -99,59 +99,179 @@ END;
 CREATE TRIGGER IF NOT EXISTS playlist_assets_register_insert
 AFTER INSERT ON playlist_assets
 BEGIN
-  INSERT OR REPLACE INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
-  VALUES (NEW.sha256, NEW.size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+  INSERT INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
+  VALUES (NEW.sha256, NEW.size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+  ON CONFLICT(sha256) DO UPDATE SET
+    size = excluded.size,
+    state = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN 'pending'
+      ELSE 'live'
+    END,
+    expires_at = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN managed_assets.expires_at
+      ELSE NULL
+    END,
+    write_lease_until = managed_assets.write_lease_until,
+    updated_at = excluded.updated_at
+  WHERE managed_assets.state != 'deleting';
 END;
 
 CREATE TRIGGER IF NOT EXISTS playlist_assets_register_update
 AFTER UPDATE OF sha256, size ON playlist_assets
 BEGIN
-  INSERT OR REPLACE INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
-  VALUES (NEW.sha256, NEW.size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+  INSERT INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
+  VALUES (NEW.sha256, NEW.size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+  ON CONFLICT(sha256) DO UPDATE SET
+    size = excluded.size,
+    state = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN 'pending'
+      ELSE 'live'
+    END,
+    expires_at = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN managed_assets.expires_at
+      ELSE NULL
+    END,
+    write_lease_until = managed_assets.write_lease_until,
+    updated_at = excluded.updated_at
+  WHERE managed_assets.state != 'deleting';
 END;
 
 CREATE TRIGGER IF NOT EXISTS capture_targets_register_insert
 AFTER INSERT ON capture_targets
 WHEN NEW.placeholder_sha256 IS NOT NULL
 BEGIN
-  INSERT OR REPLACE INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
-  VALUES (NEW.placeholder_sha256, NEW.placeholder_size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+  INSERT INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
+  VALUES (NEW.placeholder_sha256, NEW.placeholder_size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+  ON CONFLICT(sha256) DO UPDATE SET
+    size = excluded.size,
+    state = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN 'pending'
+      ELSE 'live'
+    END,
+    expires_at = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN managed_assets.expires_at
+      ELSE NULL
+    END,
+    write_lease_until = managed_assets.write_lease_until,
+    updated_at = excluded.updated_at
+  WHERE managed_assets.state != 'deleting';
 END;
 
 CREATE TRIGGER IF NOT EXISTS capture_targets_register_current_insert
 AFTER INSERT ON capture_targets
 WHEN NEW.current_sha256 IS NOT NULL
 BEGIN
-  INSERT OR REPLACE INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
-  VALUES (NEW.current_sha256, NEW.current_size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+  INSERT INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
+  VALUES (NEW.current_sha256, NEW.current_size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+  ON CONFLICT(sha256) DO UPDATE SET
+    size = excluded.size,
+    state = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN 'pending'
+      ELSE 'live'
+    END,
+    expires_at = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN managed_assets.expires_at
+      ELSE NULL
+    END,
+    write_lease_until = managed_assets.write_lease_until,
+    updated_at = excluded.updated_at
+  WHERE managed_assets.state != 'deleting';
 END;
 
 CREATE TRIGGER IF NOT EXISTS capture_targets_register_placeholder_update
 AFTER UPDATE OF placeholder_sha256, placeholder_size ON capture_targets
 WHEN NEW.placeholder_sha256 IS NOT NULL
 BEGIN
-  INSERT OR REPLACE INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
-  VALUES (NEW.placeholder_sha256, NEW.placeholder_size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+  INSERT INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
+  VALUES (NEW.placeholder_sha256, NEW.placeholder_size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+  ON CONFLICT(sha256) DO UPDATE SET
+    size = excluded.size,
+    state = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN 'pending'
+      ELSE 'live'
+    END,
+    expires_at = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN managed_assets.expires_at
+      ELSE NULL
+    END,
+    write_lease_until = managed_assets.write_lease_until,
+    updated_at = excluded.updated_at
+  WHERE managed_assets.state != 'deleting';
 END;
 
 CREATE TRIGGER IF NOT EXISTS capture_targets_register_current_update
 AFTER UPDATE OF current_sha256, current_size ON capture_targets
 WHEN NEW.current_sha256 IS NOT NULL
 BEGIN
-  INSERT OR REPLACE INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
-  VALUES (NEW.current_sha256, NEW.current_size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+  INSERT INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
+  VALUES (NEW.current_sha256, NEW.current_size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+  ON CONFLICT(sha256) DO UPDATE SET
+    size = excluded.size,
+    state = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN 'pending'
+      ELSE 'live'
+    END,
+    expires_at = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN managed_assets.expires_at
+      ELSE NULL
+    END,
+    write_lease_until = managed_assets.write_lease_until,
+    updated_at = excluded.updated_at
+  WHERE managed_assets.state != 'deleting';
 END;
 
 CREATE TRIGGER IF NOT EXISTS capture_history_register_insert
 AFTER INSERT ON capture_history
 BEGIN
-  INSERT OR REPLACE INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
-  VALUES (NEW.sha256, NEW.size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+  INSERT INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
+  VALUES (NEW.sha256, NEW.size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+  ON CONFLICT(sha256) DO UPDATE SET
+    size = excluded.size,
+    state = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN 'pending'
+      ELSE 'live'
+    END,
+    expires_at = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN managed_assets.expires_at
+      ELSE NULL
+    END,
+    write_lease_until = managed_assets.write_lease_until,
+    updated_at = excluded.updated_at
+  WHERE managed_assets.state != 'deleting';
 END;
 
 CREATE TRIGGER IF NOT EXISTS capture_history_register_update
 AFTER UPDATE OF sha256, size ON capture_history
 BEGIN
-  INSERT OR REPLACE INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
-  VALUES (NEW.sha256, NEW.size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000);
+  INSERT INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
+  VALUES (NEW.sha256, NEW.size, 'live', NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) * 1000)
+  ON CONFLICT(sha256) DO UPDATE SET
+    size = excluded.size,
+    state = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN 'pending'
+      ELSE 'live'
+    END,
+    expires_at = CASE
+      WHEN managed_assets.state = 'pending'
+        AND managed_assets.write_lease_until > excluded.updated_at THEN managed_assets.expires_at
+      ELSE NULL
+    END,
+    write_lease_until = managed_assets.write_lease_until,
+    updated_at = excluded.updated_at
+  WHERE managed_assets.state != 'deleting';
 END;
