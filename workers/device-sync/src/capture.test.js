@@ -47,6 +47,7 @@ test("capture settings enforce the one-minute floor and bounded viewport", () =>
 test("browser capture validates its response and stores bytes through the shared asset path", async () => {
   const writes = [];
   const env = {
+    CAPTURE_ALLOWED_HOSTS: "example.com",
     BROWSER: {
       async quickAction(action, options) {
         assert.equal(action, "screenshot");
@@ -80,6 +81,7 @@ test("browser capture validates its response and stores bytes through the shared
 test("browser capture rejects error and non-PNG responses without storing an asset", async () => {
   let writes = 0;
   const env = {
+    CAPTURE_ALLOWED_HOSTS: "example.com",
     BROWSER: { async quickAction() { return new Response("upstream failed", { status: 503 }); } },
     ASSETS: { async head() { return null; }, async put() { writes += 1; } },
   };
@@ -90,4 +92,19 @@ test("browser capture rejects error and non-PNG responses without storing an ass
   env.BROWSER.quickAction = async () => new Response("not a png", { headers: { "Content-Type": "text/html" } });
   await assert.rejects(captureScreenshot({ url: "https://example.com/", viewport_width: 1280, viewport_height: 720 }, env), /PNG/i);
   assert.equal(writes, 0);
+});
+
+test("browser capture does not navigate to hosts outside the configured capture allowlist", async () => {
+  let browserCalls = 0;
+  const env = {
+    CAPTURE_ALLOWED_HOSTS: "example.com",
+    BROWSER: { async quickAction() { browserCalls += 1; throw new Error("must not start browser"); } },
+    ASSETS: { async head() { return null; }, async put() { throw new Error("must not store asset"); } },
+  };
+
+  await assert.rejects(
+    captureScreenshot({ url: "https://attacker.example/", viewport_width: 1280, viewport_height: 720 }, env),
+    /allowlist/i,
+  );
+  assert.equal(browserCalls, 0);
 });
