@@ -1,4 +1,5 @@
 import { MAX_ASSET_BYTES, isPNG, storePngAsset } from "./asset-store.js";
+import { ASSET_WRITE_LEASE_MS } from "./asset-registry.js";
 
 export const MIN_CAPTURE_INTERVAL_SECONDS = 60;
 export const MAX_CAPTURE_INTERVAL_SECONDS = 30 * 24 * 60 * 60;
@@ -96,7 +97,10 @@ export async function captureScreenshot(target, env) {
   const bytes = await readBoundedBody(response, MAX_ASSET_BYTES, completedRequest);
   if (!isPNG(bytes)) throw new CaptureError("Browser Run returned an invalid PNG screenshot.", completedRequest);
   try {
-    const asset = await storePngAsset(bytes, env.ASSETS);
+    const asset = await storePngAsset(bytes, env.ASSETS, {
+      db: env.DB,
+      stagingMs: ASSET_WRITE_LEASE_MS,
+    });
     return { sha256: asset.sha256, size: asset.size, ...completedRequest };
   } catch (error) {
     throw new CaptureError("Screenshot could not be stored as an asset.", {

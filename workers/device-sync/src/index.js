@@ -1,6 +1,7 @@
 import { isValidPositiveDuration } from "./duration.js";
 import { handleAdminRequest } from "./admin.js";
 import { cleanupExpiredCaptures, dispatchDueCaptures, handleCaptureQueue } from "./capture-workflow.js";
+import { reconcileAssets } from "./asset-maintenance.js";
 
 const MAX_ENROLLMENT_BYTES = 4 << 10;
 const MAX_ASSET_BYTES = 32 << 20;
@@ -39,7 +40,8 @@ export async function scheduledHandler(controller, env) {
     dispatchDueCaptures(env, now),
     cleanupExpiredCaptures(env, now),
   ]);
-  return { ...dispatch, cleaned_targets: cleanup };
+  const assets = await reconcileAssets(env, now);
+  return { ...dispatch, cleaned_targets: cleanup, asset_reconciliation: assets };
 }
 
 export async function fetchHandler(request, env, ctx) {
