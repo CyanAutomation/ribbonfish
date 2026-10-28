@@ -86,15 +86,21 @@ in Wrangler's local mode.
 | `PATCH /admin/api/devices/{device_id}` | Enable or disable a device; body: `{"enabled":false}` |
 | `POST /admin/api/devices/{device_id}/rotate` | Replace a device token and return the new token once; body: `{}` |
 | `POST /admin/api/assets` | Upload one PNG body with `Content-Type: image/png`; returns its SHA-256 and byte size |
+| `GET /admin/api/assets/{sha256}` | Preview a PNG that is referenced by a playlist revision |
 | `POST /admin/api/playlists` | Stage an immutable playlist revision; body includes `id`, `rotation_interval`, and ordered `{sha256,size}` asset references |
+| `GET /admin/api/playlists/{playlist_id}/{revision}` | Read a revision and its ordered image references for editing |
+| `DELETE /admin/api/playlists/{playlist_id}` | Delete all revisions of an inactive playlist and its D1 image references; the active playlist is protected |
 | `PUT /admin/api/active-playlist` | Activate or roll back to an existing revision; body: `{"playlist_id":"operations","revision":"r-…"}` |
 | `GET /healthz` | Minimal readiness check; returns 503 if the active playlist or any referenced R2 object is missing |
 
 Playlist staging verifies every referenced object exists in R2 with the declared
 size. Activation updates the single global pointer only after a revision exists.
-The UI uses text-only DOM rendering and applies a restrictive content security
-policy. Enrollment codes and rotated device tokens are never written to audit
-metadata.
+Editing a revision creates a new immutable revision. You can keep or remove its
+existing images and add uploaded PNGs; the source revision stays unchanged.
+Deleting a playlist removes its revisions and image references from D1, while
+content-addressed PNG objects remain in R2 for reuse. The UI uses text-only DOM
+rendering and applies a restrictive content security policy. Enrollment codes
+and rotated device tokens are never written to audit metadata.
 
 Device sync remains:
 
