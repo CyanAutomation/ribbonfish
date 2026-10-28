@@ -249,4 +249,6 @@ test("playlist editor adds scheduled webpage captures and reuses the content-add
   assert.match(app, /api\("\/admin\/api\/assets"/);
   assert.match(app, /capture_interval_seconds/);
   assert.match(app, /\/admin\/api\/captures\/.*\/run/);
+  assert.match(app, /Initial webpage captures are queued after saving as capacity allows/);
+  assert.doesNotMatch(app, /will start after activation/);
 });

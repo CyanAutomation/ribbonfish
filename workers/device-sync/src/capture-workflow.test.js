@@ -105,7 +105,7 @@ async function freshDatabase() {
   return sqlite;
 }
 
-async function createCapturePlaylist(env, url = "https://example.com/status") {
+async function createCapturePlaylist(env, url = "https://example.com/status", ctx) {
   const response = await handleAdminRequest(await request("/admin/api/playlists", {
     method: "POST",
     body: {
@@ -118,7 +118,7 @@ async function createCapturePlaylist(env, url = "https://example.com/status") {
         viewport: { width: 1280, height: 720 },
       }],
     },
-  }), env);
+  }), env, ctx);
   return { response, body: await response.json() };
 }
 
@@ -130,14 +130,39 @@ function addDevice(sqlite) {
   return token;
 }
 
-test("a webpage is a playlist item with a holding PNG before its first scheduled capture", async () => {
+test("saving a staged webpage queues its first capture and activation serves the captured image", async () => {
   const sqlite = await freshDatabase();
   try {
-    const { env } = environment(sqlite);
+    const { env, messages } = environment(sqlite, {
+      async quickAction() {
+        return new Response(screenshot, {
+          headers: { "Content-Type": "image/png", "X-Browser-Ms-Used": "1234" },
+        });
+      },
+    });
     const created = await createCapturePlaylist(env);
     assert.equal(created.response.status, 201, JSON.stringify(created.body));
     assert.equal(created.body.capture_count, 1);
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM playlist_capture_items").get().count, 1);
+    assert.equal(messages.length, 1, "saving a playlist should queue the initial capture before activation");
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM active_playlist").get().count, 0);
+
+    const message = {
+      body: messages[0],
+      acked: false,
+      ack() { this.acked = true; },
+      retry() { throw new Error("unexpected retry"); },
+    };
+    await queueHandler({ messages: [message] }, env);
+    assert.equal(message.acked, true);
+    assert.equal(sqlite.prepare("SELECT status FROM capture_jobs").get().status, "succeeded");
+
+    const target = sqlite.prepare("SELECT current_sha256, next_due_at FROM capture_targets").get();
+    const expected = createHash("sha256").update(screenshot).digest("hex");
+    assert.equal(target.current_sha256, expected);
+
+    await scheduledHandler({ scheduledTime: target.next_due_at + 1 }, env);
+    assert.equal(messages.length, 1, "a staged target should not keep recurring after its first successful prewarm");
 
     const activation = await handleAdminRequest(await request("/admin/api/active-playlist", {
       method: "PUT",
@@ -152,7 +177,125 @@ test("a webpage is a playlist item with a holding PNG before its first scheduled
     assert.equal(response.status, 200);
     const playlist = await response.json();
     assert.equal(playlist.assets.length, 1);
-    assert.equal(playlist.assets[0].sha256, created.body.captures[0].placeholder_sha256);
+    assert.equal(playlist.assets[0].sha256, expected);
+
+    await scheduledHandler({ scheduledTime: target.next_due_at + 1 }, env);
+    assert.equal(messages.length, 2, "an activated target should resume its normal recurring captures");
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("playlist saves schedule capture dispatch after the response through waitUntil", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    let releaseQueue;
+    const queueCanSend = new Promise((resolve) => { releaseQueue = resolve; });
+    env.CAPTURE_QUEUE = { async send(body) { await queueCanSend; messages.push(body); } };
+    const background = [];
+    const ctx = { waitUntil(promise) { background.push(promise); } };
+
+    const created = await createCapturePlaylist(env, "https://example.com/status", ctx);
+
+    assert.equal(created.response.status, 201);
+    assert.equal(messages.length, 0, "the request should not wait for queue dispatch");
+    assert.equal(background.length, 1);
+    releaseQueue();
+    await Promise.all(background);
+    assert.equal(messages.length, 1);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("staged first captures retry on the scheduled dispatcher after a queue publish failure", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    env.CAPTURE_QUEUE = { async send() { throw new Error("queue unavailable"); } };
+
+    const created = await createCapturePlaylist(env);
+
+    assert.equal(created.response.status, 201, "a committed playlist remains saved if queue publishing fails");
+    assert.equal(sqlite.prepare("SELECT status FROM capture_jobs").get().status, "failed");
+    assert.equal(messages.length, 0);
+
+    env.CAPTURE_QUEUE = { async send(body) { messages.push(body); } };
+    const dispatch = await scheduledHandler({ scheduledTime: Date.now() + 1 }, env);
+
+    assert.equal(dispatch.enqueued, 1);
+    assert.equal(messages.length, 1);
+    assert.equal(sqlite.prepare("SELECT status FROM capture_jobs ORDER BY created_at DESC LIMIT 1").get().status, "queued");
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("initial capture dispatch respects the pending limit and drains staged work later", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite, {
+      async quickAction() {
+        return new Response(screenshot, { headers: { "Content-Type": "image/png" } });
+      },
+    });
+    env.CAPTURE_MAX_PENDING = "1";
+    const response = await handleAdminRequest(await request("/admin/api/playlists", {
+      method: "POST",
+      body: {
+        id: "operations",
+        rotation_interval: "15s",
+        assets: [],
+        captures: [
+          { url: "https://example.com/one", capture_interval_seconds: 60, viewport: { width: 1280, height: 720 } },
+          { url: "https://example.com/two", capture_interval_seconds: 60, viewport: { width: 1280, height: 720 } },
+        ],
+      },
+    }), env);
+    const created = await response.json();
+    assert.equal(response.status, 201);
+    assert.equal(messages.length, 1);
+
+    const firstMessage = { body: messages[0], ack() {}, retry() { throw new Error("unexpected retry"); } };
+    await queueHandler({ messages: [firstMessage] }, env);
+    const dispatch = await scheduledHandler({ scheduledTime: Date.now() }, env);
+
+    assert.equal(dispatch.enqueued, 1);
+    assert.equal(messages.length, 2);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_jobs WHERE status IN ('queued', 'running')").get().count, 1);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM playlist_capture_items WHERE playlist_id = ? AND revision = ?")
+      .get("operations", created.revision).count, 2);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("saving another revision reuses a recent screenshot without queueing a duplicate capture", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite, {
+      async quickAction() {
+        return new Response(screenshot, { headers: { "Content-Type": "image/png" } });
+      },
+    });
+    const first = await createCapturePlaylist(env);
+    const message = { body: messages[0], ack() {}, retry() { throw new Error("unexpected retry"); } };
+    await queueHandler({ messages: [message] }, env);
+
+    const secondResponse = await handleAdminRequest(await request("/admin/api/playlists", {
+      method: "POST",
+      body: {
+        id: "operations-copy",
+        rotation_interval: "15s",
+        assets: [],
+        captures: [{ capture_id: first.body.captures[0].capture_id }],
+      },
+    }), env);
+
+    assert.equal(secondResponse.status, 201, await secondResponse.clone().text());
+    assert.equal(messages.length, 1);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_jobs").get().count, 1);
   } finally {
     sqlite.close();
   }
@@ -299,6 +442,8 @@ test("manual capture runs reject a target removed from the allowlist before enqu
     const { env, messages } = environment(sqlite);
     const created = await createCapturePlaylist(env);
     const captureID = created.body.captures[0].capture_id;
+    sqlite.prepare("DELETE FROM capture_jobs WHERE capture_id = ?").run(captureID);
+    messages.length = 0;
     env.CAPTURE_ALLOWED_HOSTS = "other.example";
 
     const response = await handleAdminRequest(await request(`/admin/api/captures/${captureID}/run`, {
@@ -320,6 +465,8 @@ test("scheduled capture dispatch skips targets removed from the allowlist", asyn
     const { env, messages } = environment(sqlite);
     const created = await createCapturePlaylist(env);
     const captureID = created.body.captures[0].capture_id;
+    sqlite.prepare("DELETE FROM capture_jobs WHERE capture_id = ?").run(captureID);
+    messages.length = 0;
     const originalDue = sqlite.prepare("SELECT next_due_at FROM capture_targets WHERE capture_id = ?")
       .get(captureID).next_due_at;
     env.CAPTURE_ALLOWED_HOSTS = "other.example";

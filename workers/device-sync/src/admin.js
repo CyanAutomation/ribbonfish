@@ -1,7 +1,7 @@
 import { isValidPositiveDuration } from "./duration.js";
 import { isPNG, MAX_ASSET_BYTES, storePngAsset } from "./asset-store.js";
 import { validateCaptureSettings, validateCaptureTargetURL } from "./capture.js";
-import { CaptureTargetNotAllowedError, enqueueCapture } from "./capture-workflow.js";
+import { CaptureTargetNotAllowedError, dispatchDueCaptures, enqueueCapture } from "./capture-workflow.js";
 import { AssetDeletionInProgressError, markAssetLiveStatement } from "./asset-registry.js";
 
 const MAX_JSON_BYTES = 64 << 10;
@@ -106,7 +106,7 @@ export async function handleAdminRequest(request, env, ctx) {
 
     if (url.pathname === "/admin/api/playlists") {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      return await createPlaylist(request, env, actorID);
+      return await createPlaylist(request, env, actorID, ctx);
     }
 
     const revisionMatch = url.pathname.match(/^\/admin\/api\/playlists\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/);
@@ -413,7 +413,7 @@ async function readPlaylistAsset(sha256, env) {
   return new Response(object.body, { status: 200, headers });
 }
 
-async function createPlaylist(request, env, actorID) {
+async function createPlaylist(request, env, actorID, ctx) {
   const data = await readJSON(request);
   const assets = data?.assets ?? [];
   const captures = data?.captures ?? [];
@@ -466,6 +466,16 @@ async function createPlaylist(request, env, actorID) {
       throw new HTTPError(409, "One of these images is being cleaned up. Please upload it again shortly.");
     }
     throw error;
+  }
+  if (captureTargets.length) {
+    const dispatch = dispatchDueCaptures(env, Date.now()).catch((error) => {
+      console.error(JSON.stringify({
+        message: "initial capture dispatch failed after playlist save",
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    });
+    if (typeof ctx?.waitUntil === "function") ctx.waitUntil(dispatch);
+    else await dispatch;
   }
   return jsonResponse({
     id: data.id,
