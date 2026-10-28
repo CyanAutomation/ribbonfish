@@ -2,6 +2,7 @@ import { isValidPositiveDuration } from "./duration.js";
 import { isPNG, MAX_ASSET_BYTES, storePngAsset } from "./asset-store.js";
 import { normalizeCaptureURL, validateCaptureSettings } from "./capture.js";
 import { enqueueCapture } from "./capture-workflow.js";
+import { AssetDeletionInProgressError, markAssetLiveStatement } from "./asset-registry.js";
 
 const MAX_JSON_BYTES = 64 << 10;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -157,7 +158,7 @@ async function fetchAdminAsset(env, pathname) {
 }
 
 async function readOverview(env) {
-  const [devices, playlists, active, audit, captureTargets] = await Promise.all([
+  const [devices, playlists, active, audit, captureTargets, integrityIssues] = await Promise.all([
     env.DB.prepare(
       "SELECT device_id, enabled, created_at, last_seen_at, " +
       "CASE WHEN public_key IS NULL THEN 'token' ELSE 'key' END AS auth_type " +
@@ -191,6 +192,10 @@ async function readOverview(env) {
       "WHERE EXISTS (SELECT 1 FROM playlist_capture_items p WHERE p.capture_id = t.capture_id) " +
       "ORDER BY t.next_due_at, t.created_at LIMIT 100",
     ).bind(Date.now() - 30 * 24 * 60 * 60 * 1000, Date.now() - 30 * 24 * 60 * 60 * 1000).all(),
+    env.DB.prepare(
+      "SELECT sha256, issue_type, first_seen_at, last_seen_at FROM asset_integrity_issues " +
+      "WHERE resolved_at IS NULL ORDER BY last_seen_at DESC LIMIT 100",
+    ).all(),
   ]);
 
   let missing = [];
@@ -235,7 +240,10 @@ async function readOverview(env) {
         next_due_at: target.next_due_at,
       };
     }),
-    asset_health: { missing },
+    asset_health: {
+      missing,
+      integrity_issues: integrityIssues.results ?? [],
+    },
     audit: (audit.results ?? []).map((event) => ({
       event_id: event.event_id,
       actor_id: event.actor_id,
@@ -337,7 +345,15 @@ async function uploadAsset(request, env, actorID) {
   const bytes = await readBytes(request, MAX_ASSET_BYTES);
   if (!isPNG(bytes)) throw new HTTPError(400, "That file does not look like a valid PNG image.");
 
-  const asset = await storePngAsset(bytes, env.ASSETS);
+  let asset;
+  try {
+    asset = await storePngAsset(bytes, env.ASSETS, { db: env.DB });
+  } catch (error) {
+    if (error instanceof AssetDeletionInProgressError) {
+      throw new HTTPError(409, "This image is being cleaned up. Please upload it again shortly.");
+    }
+    throw error;
+  }
   if (asset.created) {
     await env.DB.batch([
       auditStatement(env, actorID, "asset.uploaded", "asset", asset.sha256, { size: asset.size }),
@@ -399,6 +415,7 @@ async function createPlaylist(request, env, actorID) {
     "INSERT INTO playlists (playlist_id, revision, rotation_interval, created_at) VALUES (?, ?, ?, ?)",
   ).bind(data.id, revision, data.rotation_interval, Date.now())];
   for (const [position, asset] of assets.entries()) {
+    statements.push(markAssetLiveStatement(env.DB, asset.sha256, asset.size, Date.now()));
     statements.push(env.DB.prepare(
       "INSERT INTO playlist_assets (playlist_id, revision, position, sha256, size) VALUES (?, ?, ?, ?, ?)",
     ).bind(data.id, revision, position, asset.sha256, asset.size));
@@ -413,7 +430,14 @@ async function createPlaylist(request, env, actorID) {
     asset_count: assets.length,
     capture_count: captureTargets.length,
   }));
-  await env.DB.batch(statements);
+  try {
+    await env.DB.batch(statements);
+  } catch (error) {
+    if (String(error?.message).includes("asset deletion in progress")) {
+      throw new HTTPError(409, "One of these images is being cleaned up. Please upload it again shortly.");
+    }
+    throw error;
+  }
   return jsonResponse({
     id: data.id,
     revision,
@@ -513,14 +537,25 @@ async function resolveCaptureTarget(input, env) {
   const placeholder = await env.ASSETS.get("admin/capture-pending.png");
   if (!placeholder) throw new HTTPError(503, "The built-in capture placeholder is unavailable. Publish the management assets and try again.");
   const placeholderBytes = new Uint8Array(await placeholder.arrayBuffer());
-  const placeholderAsset = await storePngAsset(placeholderBytes, env.ASSETS);
+  let placeholderAsset;
+  try {
+    placeholderAsset = await storePngAsset(placeholderBytes, env.ASSETS, { db: env.DB });
+  } catch (error) {
+    if (error instanceof AssetDeletionInProgressError) {
+      throw new HTTPError(409, "The holding image is being cleaned up. Please retry shortly.");
+    }
+    throw error;
+  }
   const captureID = crypto.randomUUID();
   const now = Date.now();
-  await env.DB.prepare(
-    "INSERT OR IGNORE INTO capture_targets (capture_id, variant_key, url, capture_interval_seconds, viewport_width, viewport_height, " +
-    "placeholder_sha256, placeholder_size, created_at, next_due_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-  ).bind(captureID, variantKey, url, settings.capture_interval_seconds, settings.viewport_width, settings.viewport_height,
-    placeholderAsset.sha256, placeholderAsset.size, now, now).run();
+  await env.DB.batch([
+    markAssetLiveStatement(env.DB, placeholderAsset.sha256, placeholderAsset.size, now),
+    env.DB.prepare(
+      "INSERT OR IGNORE INTO capture_targets (capture_id, variant_key, url, capture_interval_seconds, viewport_width, viewport_height, " +
+      "placeholder_sha256, placeholder_size, created_at, next_due_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).bind(captureID, variantKey, url, settings.capture_interval_seconds, settings.viewport_width, settings.viewport_height,
+      placeholderAsset.sha256, placeholderAsset.size, now, now),
+  ]);
   const target = await env.DB.prepare(
     "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size " +
     "FROM capture_targets WHERE variant_key = ?",
@@ -587,6 +622,13 @@ async function deletePlaylist(playlistID, env, actorID) {
     auditStatement(env, actorID, "playlist.deleted", "playlist", playlistID, {
       revision_count: revisions.results.length,
     }, { onlyWhenPreviousChanged: true }),
+    env.DB.prepare(
+      `UPDATE asset_integrity_issues SET resolved_at = ? WHERE resolved_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM playlist_assets WHERE sha256 = asset_integrity_issues.sha256)
+       AND NOT EXISTS (SELECT 1 FROM capture_targets
+         WHERE placeholder_sha256 = asset_integrity_issues.sha256 OR current_sha256 = asset_integrity_issues.sha256)
+       AND NOT EXISTS (SELECT 1 FROM capture_history WHERE sha256 = asset_integrity_issues.sha256)`,
+    ).bind(Date.now()),
   ]);
   const deletedRevisions = results?.[2]?.meta?.changes ?? 0;
   if (!deletedRevisions) {

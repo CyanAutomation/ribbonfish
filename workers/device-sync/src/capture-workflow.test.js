@@ -71,7 +71,18 @@ function environment(sqlite, { quickAction } = {}) {
           return bytes ? { size: bytes.byteLength } : null;
         },
         async put(key, value) { objects.set(key, new Uint8Array(value)); },
-        async delete(key) { objects.delete(key); },
+        async delete(keys) { for (const key of Array.isArray(keys) ? keys : [keys]) objects.delete(key); },
+        async list({ prefix = "", cursor, limit = 1000 } = {}) {
+          const keys = [...objects.keys()].filter((key) => key.startsWith(prefix)).sort();
+          const remaining = cursor ? keys.filter((key) => key > cursor) : keys;
+          const page = remaining.slice(0, limit);
+          const truncated = remaining.length > page.length;
+          return {
+            objects: page.map((key) => ({ key, size: objects.get(key).byteLength, uploaded: new Date() })),
+            truncated,
+            ...(truncated ? { cursor: page.at(-1) } : {}),
+          };
+        },
       },
     },
   };
@@ -410,7 +421,7 @@ test("retention removes captures older than 30 days and restores their holding a
     const digests = [];
     for (let index = 0; index < 11; index += 1) {
       const jobID = crypto.randomUUID();
-      const digest = String(index + 1).repeat(64);
+      const digest = (index + 1).toString(16).padStart(64, "0");
       digests.push(digest);
       sqlite.prepare("INSERT INTO capture_jobs (job_id, capture_id, status, created_at, finished_at) VALUES (?, ?, 'succeeded', ?, ?)")
         .run(jobID, captureID, old + index, old + index);

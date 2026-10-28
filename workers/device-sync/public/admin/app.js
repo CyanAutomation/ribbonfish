@@ -335,20 +335,35 @@ function renderPlaylistCard(playlist, canDelete, revisionCount) {
 function renderHealth(health) {
   const panel = document.querySelector("#asset-health");
   panel.replaceChildren();
-  if (!health.missing.length) {
+  const issues = health.integrity_issues ?? [];
+  if (!health.missing.length && !issues.length) {
     panel.hidden = true;
     return;
   }
   panel.hidden = false;
-  panel.append(node("h2", "Missing assets in the active playlist", "error-title"));
-  panel.append(node("p", "Devices without cached copies will keep showing their last good playlist."));
-  const list = node("ul");
-  health.missing.forEach((asset) => {
-    const item = node("li");
-    item.append(identifier(asset.sha256, "asset SHA-256"), document.createTextNode(` (expected ${asset.expected_size} bytes)`));
-    list.append(item);
-  });
-  panel.append(list);
+  if (health.missing.length) {
+    panel.append(node("h2", "Missing assets in the active playlist", "error-title"));
+    panel.append(node("p", "Devices without cached copies will keep showing their last good playlist."));
+    const list = node("ul");
+    health.missing.forEach((asset) => {
+      const item = node("li");
+      item.append(identifier(asset.sha256, "asset SHA-256"), document.createTextNode(` (expected ${asset.expected_size} bytes)`));
+      list.append(item);
+    });
+    panel.append(list);
+  }
+  if (issues.length) {
+    panel.append(node("h2", "Asset reference issues", "error-title"));
+    panel.append(node("p", "These D1 references point to missing R2 objects. Missing holding images are restored when the published holding PNG matches. Missing playlist images are reported without changing immutable revisions; upload a replacement and create a new revision to repair one."));
+    const list = node("ul");
+    issues.forEach((issue) => {
+      const item = node("li");
+      const label = issue.issue_type === "missing_playlist_asset" ? "Missing playlist image" : "Missing holding image";
+      item.append(document.createTextNode(`${label}: `), identifier(issue.sha256, "asset SHA-256"));
+      list.append(item);
+    });
+    panel.append(list);
+  }
 }
 
 function renderPlaylists(playlists) {

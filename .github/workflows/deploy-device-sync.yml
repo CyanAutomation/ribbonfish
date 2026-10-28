@@ -8,6 +8,8 @@ on:
       - "workers/device-sync/src/index.js"
       - "workers/device-sync/src/admin.js"
       - "workers/device-sync/src/asset-store.js"
+      - "workers/device-sync/src/asset-registry.js"
+      - "workers/device-sync/src/asset-maintenance.js"
       - "workers/device-sync/src/capture.js"
       - "workers/device-sync/src/capture-workflow.js"
       - "workers/device-sync/src/duration.js"

@@ -19,6 +19,8 @@ test("production deployment follows validated Worker changes on the protected de
     "workers/device-sync/src/index.js",
     "workers/device-sync/src/admin.js",
     "workers/device-sync/src/asset-store.js",
+    "workers/device-sync/src/asset-registry.js",
+    "workers/device-sync/src/asset-maintenance.js",
     "workers/device-sync/src/capture.js",
     "workers/device-sync/src/capture-workflow.js",
     "workers/device-sync/src/duration.js",
