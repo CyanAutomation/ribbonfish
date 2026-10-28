@@ -108,9 +108,9 @@ Variants are **keyed by rendering inputs + access permissions**; reuse across di
 
 ### Deployment Model
 - **Default:** Docker Compose on Raspberry Pi OS Lite (no desktop, Chromium, X11, Wayland)
-- **Images:** Merged PRs to `main` publish `cyanautomation/ribbonfish` to Docker Hub for AMD64, ARM64, and ARMv7, tagged as both `latest` and `sha-<SHA>`; `v*` tags also publish ARMv7 and ARM64 release images to `ghcr.io/cyanautomation/ribbonfish`
-- **Releases:** GitHub Releases and version tags remain managed manually through the GitHub UI; pushing a `v*` tag also publishes a GHCR image
-- **Updates:** The Docker Hub `latest` tag moves after verified main merges; pin an immutable SHA tag or digest for repeatable deployments and rollback
+- **Images:** Protected `main` pushes that change `agent/**` publish `cyanautomation/ribbonfish` to Docker Hub for AMD64, ARM64, and ARMv7 with an immutable `sha-<SHA>` tag; GHCR receives ARMv7 and ARM64 images with `main` and `sha-<SHA>` tags
+- **Releases:** GitHub Releases and version tags remain manually managed through the GitHub UI; image publishing follows relevant changes to protected `main`
+- **Updates:** Docker Hub's `latest` tag moves only when the published commit is still the `main` tip; pin an immutable SHA tag or digest for repeatable deployments and rollback
 
 ### Agent Responsibilities
 1. Identify available DRM/KMS connectors, supported modes, output identities
