@@ -11,10 +11,12 @@ on:
       - "workers/device-sync/public/admin/**"
       - "workers/device-sync/scripts/build-admin.mjs"
       - "workers/device-sync/scripts/publish-admin-assets.mjs"
+      - "workers/device-sync/.nvmrc"
       - "workers/device-sync/wrangler.toml"
       - "workers/device-sync/wrangler.management.toml"
       - "workers/device-sync/package.json"
       - "workers/device-sync/package-lock.json"
+      - ".github/workflows/deploy-device-sync.yml"
 
 permissions:
   contents: read

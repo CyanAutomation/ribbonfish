@@ -92,8 +92,9 @@ the cache, last-good playlist, frames, and per-device token. It runs non-root
 with a read-only root filesystem and no added capabilities. The network stays
 disabled unless `RIBBONFISH_NETWORK_MODE=bridge` is selected for enrollment or
 sync. `.env.example` matches the Ribbonfish Pi 3 A Plus: profile `pi3a-plus`,
-`/dev/dri/card0`, and video GID 44. Verify those values on each host. The
-publishing workflow creates ARMv7/ARM64 images from `v*` tags.
+`/dev/dri/card0`, and video GID 44. Verify those values on each host. Protected
+`main` pushes that change `agent/**` publish ARMv7/ARM64 images to GHCR and
+multi-architecture images to Docker Hub.
 
 DRM output has passed a single-display KMS mode-setting and frame-update check
 over SSH on the Ribbonfish Pi 3 Model A Plus, and the user confirmed that the
