@@ -237,3 +237,16 @@ test("consequential actions only run after explicit confirmation", async () => {
   assert.equal(accepted, true);
   assert.equal(actions, 1);
 });
+
+test("playlist editor adds scheduled webpage captures and reuses the content-addressed PNG asset flow", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
+
+  assert.match(html, /name="capture_urls"/);
+  assert.match(html, /name="capture_interval_seconds"[^>]*min="60"/);
+  assert.match(html, /id="playlist-current-captures"/);
+  assert.match(html, /id="capture-targets"/);
+  assert.match(app, /api\("\/admin\/api\/assets"/);
+  assert.match(app, /capture_interval_seconds/);
+  assert.match(app, /\/admin\/api\/captures\/.*\/run/);
+});

@@ -213,6 +213,17 @@ test("management page is served from the private R2 bucket", async () => {
   assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'none'/);
 });
 
+test("capture holding image is served from the private R2 bucket", async () => {
+  const env = testEnvironment();
+  const placeholder = new Uint8Array(await readFile(new URL("../public/admin/capture-pending.png", import.meta.url)));
+  env.objects.set("admin/capture-pending.png", placeholder);
+  const response = await handleAdminRequest(request("/admin/capture-pending.png"), env);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "image/png");
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), placeholder);
+});
+
 test("static management assets only accept GET requests", async () => {
   const env = testEnvironment();
   const response = await handleAdminRequest(request("/admin/app.js", { method: "DELETE" }), env);

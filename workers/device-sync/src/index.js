@@ -1,5 +1,6 @@
 import { isValidPositiveDuration } from "./duration.js";
 import { handleAdminRequest } from "./admin.js";
+import { cleanupExpiredCaptures, dispatchDueCaptures, handleCaptureQueue } from "./capture-workflow.js";
 
 const MAX_ENROLLMENT_BYTES = 4 << 10;
 const MAX_ASSET_BYTES = 32 << 20;
@@ -20,7 +21,26 @@ export default {
   fetch(request, env, ctx) {
     return fetchHandler(request, env, ctx);
   },
+  queue(batch, env) {
+    return queueHandler(batch, env);
+  },
+  scheduled(controller, env) {
+    return scheduledHandler(controller, env);
+  },
 };
+
+export async function queueHandler(batch, env) {
+  return handleCaptureQueue(batch, env);
+}
+
+export async function scheduledHandler(controller, env) {
+  const now = Number.isSafeInteger(controller?.scheduledTime) ? controller.scheduledTime : Date.now();
+  const [dispatch, cleanup] = await Promise.all([
+    dispatchDueCaptures(env, now),
+    cleanupExpiredCaptures(env, now),
+  ]);
+  return { ...dispatch, cleaned_targets: cleanup };
+}
 
 export async function fetchHandler(request, env, ctx) {
   const url = new URL(request.url);
@@ -67,10 +87,20 @@ export async function fetchHandler(request, env, ctx) {
          JOIN active_playlist ap ON ap.playlist_id = pa.playlist_id AND ap.revision = pa.revision
          WHERE pa.sha256 = ? AND ap.singleton = 1 LIMIT 1`,
       ).bind(digest).first();
-      if (!assigned) throw new HTTPError(403, "asset is not assigned to the active playlist");
+      const captureAssigned = assigned ? null : await env.DB.prepare(
+        "SELECT CASE WHEN t.current_sha256 = ? AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size " +
+        "FROM playlist_capture_items p " +
+        "JOIN active_playlist ap ON ap.playlist_id = p.playlist_id AND ap.revision = p.revision " +
+        "JOIN capture_targets t ON t.capture_id = p.capture_id " +
+        "WHERE ap.singleton = 1 AND (" +
+        "(t.current_sha256 = ? AND t.last_success_at >= ?) OR " +
+        "(t.placeholder_sha256 = ? AND (t.current_sha256 IS NULL OR t.last_success_at < ?))) LIMIT 1",
+      ).bind(digest, Date.now() - 30 * 24 * 60 * 60 * 1000, digest,
+        Date.now() - 30 * 24 * 60 * 60 * 1000, digest, Date.now() - 30 * 24 * 60 * 60 * 1000).first();
+      if (!assigned && !captureAssigned) throw new HTTPError(403, "asset is not assigned to the active playlist");
       const object = await env.ASSETS.get(`assets/${digest}`);
       if (!object) throw new HTTPError(404, "asset not found");
-      if (object.size !== assigned.size || object.size > MAX_ASSET_BYTES) {
+      if (object.size !== (assigned?.size ?? captureAssigned.size) || object.size > MAX_ASSET_BYTES) {
         throw new HTTPError(502, "stored asset metadata does not match the playlist");
       }
       const headers = privateHeaders({
@@ -278,15 +308,33 @@ async function readActivePlaylist(env) {
     "SELECT playlist_id, revision, rotation_interval FROM playlists WHERE playlist_id = ? AND revision = ?",
   ).bind(active.playlist_id, active.revision).first();
   if (!playlistRow) throw new HTTPError(502, "active playlist is missing");
-  const assetResult = await env.DB.prepare(
-    "SELECT sha256, size FROM playlist_assets WHERE playlist_id = ? AND revision = ? ORDER BY position",
-  ).bind(active.playlist_id, active.revision).all();
+  const [assetResult, captureResult] = await Promise.all([
+    env.DB.prepare(
+      "SELECT position, sha256, size FROM playlist_assets WHERE playlist_id = ? AND revision = ? ORDER BY position",
+    ).bind(active.playlist_id, active.revision).all(),
+    env.DB.prepare(
+      "SELECT p.position, " +
+      "CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
+      "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size " +
+      "FROM playlist_capture_items p JOIN capture_targets t ON t.capture_id = p.capture_id " +
+      "WHERE p.playlist_id = ? AND p.revision = ? ORDER BY p.position",
+    ).bind(Date.now() - 30 * 24 * 60 * 60 * 1000, Date.now() - 30 * 24 * 60 * 60 * 1000,
+      active.playlist_id, active.revision).all(),
+  ]);
+  const orderedAssets = [
+    ...(assetResult.results ?? []).map((asset, index) => ({ position: Number.isSafeInteger(asset.position) ? asset.position : index, sha256: asset.sha256, size: asset.size })),
+    ...(captureResult.results ?? []).map((asset) => ({ position: asset.position, sha256: asset.sha256, size: asset.size })),
+  ].sort((left, right) => left.position - right.position);
+  const hasCaptures = (captureResult.results ?? []).length > 0;
+  const resolvedRevision = hasCaptures
+    ? (await sha256Hex(`${playlistRow.revision}\n${orderedAssets.map(({ sha256, size }) => `${sha256}:${size}`).join("\n")}`)).slice(0, 64)
+    : playlistRow.revision;
   const playlist = {
     version: 2,
-    revision: active.revision,
+    revision: resolvedRevision,
     id: playlistRow.playlist_id,
     rotation_interval: playlistRow.rotation_interval,
-    assets: assetResult.results,
+    assets: orderedAssets.map(({ sha256, size }) => ({ sha256, size })),
   };
   try {
     validatePlaylist(playlist);
