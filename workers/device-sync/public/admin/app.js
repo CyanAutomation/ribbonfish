@@ -166,13 +166,15 @@ function resetPlaylistEditor() {
   playlistEditSource = null;
   form.querySelector("h3").textContent = "Create a playlist revision";
   form.querySelector("#playlist-form-help").textContent =
-    "Upload the images you want in this version. Saved revisions stay available until you delete their playlist.";
-  form.querySelector("[name=assets]").required = true;
-  form.querySelector("#playlist-submit").textContent = "Upload and save revision";
+    "Add PNG images, webpage URLs, or both. Uploads and captures use the same content-addressed image store. Saved revisions stay available until you delete their playlist.";
+  form.querySelector("[name=assets]").required = false;
+  form.querySelector("#playlist-submit").textContent = "Save playlist revision";
   form.querySelector("#cancel-playlist-edit").hidden = true;
-  const selection = document.querySelector("#playlist-current-assets");
-  selection.querySelector(".asset-selection__list").replaceChildren();
-  selection.hidden = true;
+  for (const selector of ["#playlist-current-assets", "#playlist-current-captures"]) {
+    const selection = document.querySelector(selector);
+    selection.querySelector(".asset-selection__list").replaceChildren();
+    selection.hidden = true;
+  }
 }
 
 async function startPlaylistEdit(playlist) {
@@ -188,7 +190,7 @@ async function startPlaylistEdit(playlist) {
     form.elements.namedItem("rotation_interval").value = detail.rotation_interval;
     form.querySelector("h3").textContent = "Edit playlist as a new revision";
     form.querySelector("#playlist-form-help").textContent =
-      `Editing ${detail.playlist_id} from ${compactIdentifier(detail.revision)}. Keep the images you want, add PNGs if you like, then save a new revision. This revision stays unchanged.`;
+      `Editing ${detail.playlist_id} from ${compactIdentifier(detail.revision)}. Keep the images and webpages you want, add PNGs or URLs, then save a new revision. This revision stays unchanged.`;
     form.querySelector("[name=assets]").required = false;
     form.querySelector("#playlist-submit").textContent = "Save new revision";
     form.querySelector("#cancel-playlist-edit").hidden = false;
@@ -213,6 +215,26 @@ async function startPlaylistEdit(playlist) {
       assetList.append(label);
     });
     selection.hidden = false;
+    const captureSelection = document.querySelector("#playlist-current-captures");
+    const captureList = captureSelection.querySelector(".asset-selection__list");
+    captureList.replaceChildren();
+    (detail.captures ?? []).forEach((capture, index) => {
+      const label = node("label", undefined, "asset-option");
+      const checkbox = node("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = true;
+      checkbox.dataset.captureId = capture.capture_id;
+      const preview = node("img", undefined, "asset-option__preview");
+      preview.src = `/admin/api/assets/${capture.sha256}`;
+      preview.alt = "";
+      preview.loading = "lazy";
+      preview.decoding = "async";
+      preview.addEventListener("error", () => { preview.hidden = true; }, { once: true });
+      const caption = node("span", `Keep webpage ${index + 1} · ${capture.url}`);
+      label.append(checkbox, preview, caption);
+      captureList.append(label);
+    });
+    captureSelection.hidden = !(detail.captures ?? []).length;
     document.querySelector("#playlist-feedback").hidden = true;
     form.scrollIntoView({ behavior: "smooth", block: "start" });
     form.elements.namedItem("id").focus({ preventScroll: true });
@@ -270,7 +292,7 @@ function playlistActionButtons(playlist, canDelete, revisionCount) {
           () => api(`/admin/api/playlists/${encodeURIComponent(playlist.playlist_id)}`, { method: "DELETE" }),
         );
         if (!confirmed) return;
-        showMessage(`Playlist “${playlist.playlist_id}” was deleted. Uploaded images remain available for reuse.`);
+        showMessage(`Playlist “${playlist.playlist_id}” was deleted. Content-addressed images remain available for reuse.`);
         await refresh();
       } catch (error) { showMessage(error.message, true); }
     });
@@ -291,7 +313,7 @@ function renderPlaylistCard(playlist, canDelete, revisionCount) {
   [
     ["Revision", identifier(playlist.revision, "revision ID")],
     ["Rotation", String(playlist.rotation_interval)],
-    ["Images", String(playlist.asset_count)],
+    ["Items", String(playlist.asset_count)],
     ["Created", formatTimestamp(playlist.created_at)],
   ].forEach(([label, value]) => {
     const field = node("div");
@@ -342,7 +364,7 @@ function renderPlaylists(playlists) {
     row.append(cell("Playlist", playlist.playlist_id));
     row.append(cell("Revision", identifier(playlist.revision, "revision ID")));
     row.append(cell("Rotation", playlist.rotation_interval));
-    row.append(cell("Assets", playlist.asset_count));
+    row.append(cell("Items", playlist.asset_count));
     row.append(cell("Created", formatTimestamp(playlist.created_at)));
     row.append(cell("State", statusBadge(playlist.active ? "Active" : "Staged", playlist.active ? "success" : "neutral")));
     const canDelete = !activeIDs.has(playlist.playlist_id) && !deleteIDs.has(playlist.playlist_id);
@@ -356,10 +378,10 @@ function renderPlaylists(playlists) {
   });
   document.querySelector("#playlists").replaceChildren(table(
     "Playlist revisions",
-    ["Playlist", "Revision", "Rotation", "Assets", "Created", "State", "Actions"],
+    ["Playlist", "Revision", "Rotation", "Items", "Created", "State", "Actions"],
     rows,
     {
-      message: "No playlists yet. Add a few PNG images to create your first playlist revision.",
+      message: "No playlists yet. Add PNG images or webpage URLs to create your first playlist revision.",
       actionLabel: "Create a playlist",
       href: "#playlist-form",
     },
@@ -367,7 +389,7 @@ function renderPlaylists(playlists) {
   const cards = document.querySelector("#playlists-mobile");
   cards.replaceChildren();
   if (!playlists.length) {
-    cards.append(emptyCard("No playlists yet. Add a few PNG images to create your first playlist revision.", "Create a playlist", "#playlist-form"));
+    cards.append(emptyCard("No playlists yet. Add PNG images or webpage URLs to create your first playlist revision.", "Create a playlist", "#playlist-form"));
     return;
   }
   const cardDeleteIDs = new Set();
@@ -379,6 +401,62 @@ function renderPlaylists(playlists) {
       canDelete,
       playlist.revision_count ?? revisionCounts.get(playlist.playlist_id),
     ));
+  });
+}
+
+function renderCaptureTargets(targets) {
+  const container = document.querySelector("#capture-target-list");
+  container.replaceChildren();
+  if (!targets.length) {
+    container.append(node("p", "No webpage URLs are in a playlist yet. Add one below to schedule the first screenshot.", "muted"));
+    return;
+  }
+  targets.forEach((target) => {
+    const card = node("article", undefined, "capture-target");
+    const preview = node("img", undefined, "capture-target__preview");
+    preview.src = `/admin/api/assets/${target.sha256}`;
+    preview.alt = `Current screenshot or holding image for ${target.display_url}`;
+    preview.loading = "lazy";
+    preview.decoding = "async";
+    preview.addEventListener("error", () => { preview.hidden = true; }, { once: true });
+
+    const content = node("div", undefined, "capture-target__content");
+    const heading = node("div", undefined, "capture-target__heading");
+    heading.append(node("h4", target.display_url));
+    const status = target.job_status === "running"
+      ? statusBadge("Capturing", "warning")
+      : target.job_status === "queued"
+        ? statusBadge("Queued", "warning")
+        : target.last_error
+          ? statusBadge("Needs attention", "warning")
+          : target.last_success_at
+            ? statusBadge("Captured")
+            : statusBadge("Waiting for first capture", "neutral");
+    heading.append(status);
+    content.append(heading);
+    content.append(node("p", `${Math.floor(target.capture_interval_seconds / 60)} minute interval · ${target.viewport.width}×${target.viewport.height} viewport`, "muted"));
+    content.append(node("p", target.last_success_at ? `Last capture ${formatTimestamp(target.last_success_at)}` : "No successful capture yet.", "muted"));
+    if (target.last_error) content.append(node("p", target.last_error, "error-title"));
+
+    const actions = node("div", undefined, "action-row");
+    const capture = button("Capture now", "secondary");
+    capture.addEventListener("click", async () => {
+      capture.disabled = true;
+      try {
+        const result = await api(`/admin/api/captures/${encodeURIComponent(target.capture_id)}/run`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        });
+        showMessage(`Capture job ${compactIdentifier(result.job_id)} is ${result.status}.`);
+        await refresh();
+      } catch (error) { showMessage(error.message, true); }
+      finally { capture.disabled = false; }
+    });
+    actions.append(capture);
+    content.append(actions);
+    card.append(preview, content);
+    container.append(card);
   });
 }
 
@@ -690,6 +768,7 @@ async function refresh() {
   renderEnvironment(overview.environment);
   renderHealth(overview.asset_health);
   renderPlaylists(overview.playlists);
+  renderCaptureTargets(overview.capture_targets ?? []);
   renderDevices(overview.devices);
   renderPendingEnrollments(enrollmentRequests);
   renderAudit(overview.audit);
@@ -836,8 +915,17 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
       size: Number(input.dataset.size),
     }))
     : [];
-  if (!files.length && !assets.length) {
-    return showInlineMessage(feedback, "Choose at least one PNG image or keep an existing image.", true);
+  const captures = [...document.querySelectorAll("#playlist-current-captures input:checked")].map((input) => ({
+    capture_id: input.dataset.captureId,
+  }));
+  const newURLs = String(form.get("capture_urls") ?? "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+  const captureInterval = Number(form.get("capture_interval_seconds"));
+  const viewport = {
+    width: Number(form.get("viewport_width")),
+    height: Number(form.get("viewport_height")),
+  };
+  if (!files.length && !assets.length && !captures.length && !newURLs.length) {
+    return showInlineMessage(feedback, "Add at least one PNG image or webpage URL.", true);
   }
   submitButton.disabled = true;
   try {
@@ -855,9 +943,17 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
         id: form.get("id"),
         rotation_interval: form.get("rotation_interval"),
         assets,
+        captures: captures.concat(newURLs.map((url) => ({
+          url,
+          capture_interval_seconds: captureInterval,
+          viewport,
+        }))),
       }),
     });
-    showInlineMessage(feedback, `New revision ${compactIdentifier(result.revision)} is ready. Activate it whenever you’re ready.`);
+    const captureNote = result.capture_count
+      ? ` ${result.capture_count} webpage capture${result.capture_count === 1 ? "" : "s"} will start after activation.`
+      : "";
+    showInlineMessage(feedback, `New revision ${compactIdentifier(result.revision)} is ready.${captureNote} Activate it whenever you’re ready.`);
     formElement.reset();
     resetPlaylistEditor();
     await refresh();

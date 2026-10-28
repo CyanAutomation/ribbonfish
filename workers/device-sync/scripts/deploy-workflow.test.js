@@ -18,8 +18,13 @@ test("production deployment follows validated Worker changes on the protected de
   for (const path of [
     "workers/device-sync/src/index.js",
     "workers/device-sync/src/admin.js",
+    "workers/device-sync/src/asset-store.js",
+    "workers/device-sync/src/capture.js",
+    "workers/device-sync/src/capture-workflow.js",
     "workers/device-sync/src/duration.js",
+    "workers/device-sync/migrations/**",
     "workers/device-sync/public/admin/**",
+    "workers/device-sync/schema.sql",
     "workers/device-sync/scripts/build-admin.mjs",
     "workers/device-sync/scripts/publish-admin-assets.mjs",
     "workers/device-sync/.nvmrc",

@@ -32,6 +32,7 @@
       <nav class="section-nav" aria-label="Management sections">
         <a href="#overview-section">Overview</a>
         <a href="#playlist-section">Playlists</a>
+        <a href="#capture-targets">Web captures</a>
         <a href="#device-section">Devices</a>
         <a href="#activity-section">Recent activity</a>
       </nav>
@@ -65,9 +66,14 @@
         </div>
         <div id="playlists" class="table-scroll desktop-data" role="region" aria-label="Playlist revisions" tabindex="0"></div>
         <div id="playlists-mobile" class="mobile-card-list" role="region" aria-label="Playlist revisions"></div>
+        <section id="capture-targets" class="capture-targets" aria-labelledby="capture-targets-title">
+          <div class="section-heading"><div><p class="eyebrow">Browser Run</p><h3 id="capture-targets-title">Webpage captures</h3></div></div>
+          <p class="muted">Each URL is a reusable playlist item. It displays the holding image until its scheduled screenshot is ready.</p>
+          <div id="capture-target-list" class="capture-target-list" role="region" aria-label="Scheduled webpage captures" aria-live="polite"></div>
+        </section>
         <form id="playlist-form" class="form-grid">
           <h3>Create a playlist revision</h3>
-          <p id="playlist-form-help" class="field--wide muted">Upload the images you want in this version. Saved revisions stay available until you delete their playlist.</p>
+          <p id="playlist-form-help" class="field--wide muted">Add PNG images, webpage URLs, or both. Uploads and captures use the same content-addressed image store. Saved revisions stay available until you delete their playlist.</p>
           <label>Playlist ID <input class="field-control" name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" placeholder="e.g. operations"></label>
           <label>Rotation interval <input class="field-control" name="rotation_interval" required value="15s" placeholder="15s"></label>
           <fieldset id="playlist-current-assets" class="field--wide asset-selection" hidden>
@@ -75,9 +81,17 @@
             <p class="muted">Clear an image to remove it from the new revision.</p>
             <div class="asset-selection__list"></div>
           </fieldset>
-          <label class="field--wide">Add PNG images <input class="field-control file-control" name="assets" type="file" accept="image/png" multiple required></label>
+          <fieldset id="playlist-current-captures" class="field--wide asset-selection" hidden>
+            <legend>Current webpages</legend>
+            <p class="muted">Clear a webpage to remove it from the new revision. Existing schedules continue while any playlist revision references them.</p>
+            <div class="asset-selection__list"></div>
+          </fieldset>
+          <label class="field--wide">Add PNG images <input class="field-control file-control" name="assets" type="file" accept="image/png" multiple></label>
+          <label class="field--wide">Add webpage URLs <textarea class="field-control" name="capture_urls" rows="3" placeholder="https://status.example.com&#10;https://example.com/operations"></textarea><span class="muted">Use one public HTTPS URL per line. The initial image is a holding graphic; the first capture runs on the next scheduler tick.</span></label>
+          <label>Capture interval (seconds) <input class="field-control" name="capture_interval_seconds" type="number" value="300" min="60" max="2592000" step="1" required></label>
+          <label>Browser viewport <span class="viewport-inputs"><input class="field-control" name="viewport_width" type="number" value="1920" min="320" max="3840" step="1" aria-label="Viewport width in pixels" required><span aria-hidden="true">×</span><input class="field-control" name="viewport_height" type="number" value="1080" min="240" max="2160" step="1" aria-label="Viewport height in pixels" required></span></label>
           <div class="field--wide form-actions">
-            <button id="playlist-submit" class="button button--primary" type="submit">Upload and save revision</button>
+            <button id="playlist-submit" class="button button--primary" type="submit">Save playlist revision</button>
             <button id="cancel-playlist-edit" class="button button--secondary" type="button" hidden>Cancel edit</button>
           </div>
           <p id="playlist-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
