@@ -1,4 +1,4 @@
-# Ribbonfish device sync and management Worker
+# Ribbonfish device sync and management Workers
 
 The Worker serves one globally active playlist to enrolled devices. D1 stores
 versioned playlists, the active-playlist pointer, device credential hashes,
@@ -6,36 +6,24 @@ one-time enrollment codes, last-poll timestamps, and management audit events.
 R2 stores private content-addressed PNG assets. Devices receive only
 their application credential; they never receive a Cloudflare account token.
 
-## Status and environments
+## Workers and environments
 
-`wrangler.toml` points to the existing fleet Worker and its D1/R2 resources. It
-sets `ADMIN_ENABLED = "false"`, so `/admin/` and `/admin/api/*` return 404.
-Device sync and `/healthz` remain available.
+`wrangler.toml` defines the production device-sync Worker at
+`ribbonfish.scheimann.workers.dev`. It sets `ADMIN_ENABLED = "false"`, so
+`/admin/` and `/admin/api/*` return 404. Device sync and `/healthz` remain
+available.
 
-`wrangler.dev.toml` points to separate development D1 and R2 resources and sets
-`ADMIN_ENABLED = "true"`. The panel has no administrator authentication yet and
-is available through a public Workers URL when deployed. Its existing public
-Worker and preview URLs are currently disabled; deploying this config again
-will re-enable them. Use only development data there. Audit rows use
-`actor_id = "anonymous"`; they record actions but do not identify who performed
-them. Keep this Worker on its development resources.
-The panel files live in the private development R2 bucket and are returned only
-by the Worker's fixed `/admin/` routes.
-
-`wrangler.management.toml` defines a separate production management Worker named
+`wrangler.management.toml` defines the production management Worker named
 `ribbonfish-mgmt`. It uses the live `ribbonfish-devices` D1 database and
-`ribbonfish-assets` R2 bucket, with `ADMIN_ACCESS_REQUIRED = "true"`. Cloudflare
-Access protects the Worker for members of the Cloudflare account. The admin
-routes also fail closed unless the Worker receives an Access identity.
-Management audit events record the authenticated email as the actor. The
-existing `wrangler.toml` device-sync Worker remains at
-`ribbonfish.scheimann.workers.dev` with admin routes disabled.
+`ribbonfish-assets` R2 bucket, with `ADMIN_ENABLED = "true"` and
+`ADMIN_ACCESS_REQUIRED = "true"`. Cloudflare Access protects the Worker, and
+the admin routes fail closed unless the Worker receives an Access identity.
+Management audit events record the authenticated email as the actor.
 
-The automated development deployment reads `CLOUDFLARE_API_TOKEN` from the
-`device-sync-dev` GitHub Actions environment. Configure that environment to
-allow only the `main` branch, and remove repository- or organization-level
-copies of the token. The account ID and development resource IDs are in the
-Wrangler configurations; no Cloudflare credential is stored in the repository.
+There is no deployed development Worker. Local console development uses
+Wrangler's `--local` mode with the management config, which keeps D1 and R2 data
+in the local Wrangler state directory. The local command overrides Access checks
+for localhost only.
 
 ## Local development
 
@@ -48,17 +36,17 @@ npm test
 npm run check:config
 ```
 
-Initialize local D1, then start the local development Worker:
+Initialize local D1, then start the local Worker:
 
 ```sh
-npm run init:dev-local
+npm run init:local
 npm run dev
 ```
 
-`npm run dev` places the panel files in the local R2 emulator before starting
-the Worker. It bundles the browser app before publishing those files. Open
+`npm run dev` places the panel files in local R2 storage before starting the
+Worker. It bundles the browser app before publishing those files. Open
 `http://localhost:8787/admin/`. Upload PNG files through the panel, stage a
-playlist, then activate the revision.
+playlist, then activate the revision. These commands use local D1 and R2 only.
 
 The panel's OpenUI Lang view uses only the framework-independent
 `@openuidev/lang-core` package. Its custom-view editor can parse and preview
@@ -67,29 +55,14 @@ view exposes only the read-only fleet overview query; it does not execute
 OpenUI mutations or actions. The native DOM adapter is bundled with esbuild;
 no OpenUI framework renderer is installed.
 
-For a fresh remote development database, initialize its schema and migration
-ledger once, then upload the bundled default playlist:
+`init:local` is only for a fresh local database. It applies `schema.sql` and
+records the migrations already represented by that schema. Production schema
+changes use `npm run migrate:management`.
 
-```sh
-npm run init:dev-remote
-npm run seed:dev-remote
-```
-
-`init:dev-local` and `init:dev-remote` are bootstrap commands for a fresh
- database. They apply `schema.sql` and record the migrations already represented
-by that schema. For an existing database, use `npm run migrate:dev-remote` or
-apply the migration files in order with Wrangler.
-
-Deploy the isolated development Worker from a local authenticated Wrangler
-session with `npm run deploy:dev`; this uploads the panel files to development
-R2 before deploying the Worker. After a pull request that changes
-`workers/device-sync/**` is merged to `main`, the **Cloudflare device sync
-Worker** GitHub workflow builds the console, runs tests and configuration
-validation, then deploys only `wrangler.dev.toml`. The workflow can also be run
-manually from `main`. Before the first automated deployment, create the
-`device-sync-dev` GitHub Actions environment, allow only the `main` branch, and
-add `CLOUDFLARE_API_TOKEN` as an environment secret. Do not leave the token in
-repository- or organization-level secrets.
+The **Cloudflare Worker validation** GitHub workflow builds the console, runs
+tests, and dry-runs both production Worker configurations. It does not deploy.
+Deploy the Workers explicitly with `npm run deploy:production` and
+`npm run deploy:management`.
 
 `npm run deploy:management` publishes the management panel to the production R2
 bucket and deploys `wrangler.management.toml`. Run `npm run migrate:management`
@@ -102,8 +75,8 @@ blocks `/admin/` and `/admin/api/*` if an Access identity is missing.
 All management routes require `ADMIN_ENABLED = "true"`. The production
 management Worker additionally requires a Cloudflare Access identity for every
 `/admin/` and `/admin/api/*` request. Its Access policy is limited to members of
-the Cloudflare account. The isolated development Worker remains unauthenticated
-and must only use its separate development D1 and R2 resources.
+the Cloudflare account. The local Worker disables that check only while running
+in Wrangler's local mode.
 
 | Method and path | Behavior |
 | --- | --- |
@@ -139,9 +112,9 @@ is also available for scripted releases:
 
 ```sh
 node scripts/publish-playlist.mjs defaults/default-playlist.json --activate \
-  --config wrangler.dev.toml \
-  --database ribbonfish-management-dev \
-  --bucket ribbonfish-management-dev
+  --config wrangler.management.toml \
+  --database ribbonfish-devices \
+  --bucket ribbonfish-assets
 ```
 
 The script calculates SHA-256 hashes and sizes, uploads immutable objects under
@@ -155,12 +128,13 @@ For the existing fleet environment, apply the current migration after the
 previous migrations have been recorded:
 
 ```sh
-npx wrangler --config wrangler.toml d1 migrations apply ribbonfish-devices --remote
+npx wrangler --config wrangler.management.toml d1 migrations apply ribbonfish-devices --remote
 ```
 
 The new migration adds last-poll telemetry and the management audit table. The
-production management API remains disabled by the checked-in configuration.
+sync Worker keeps management routes disabled; the production management Worker
+enables them behind Cloudflare Access.
 
-To issue or revoke a device manually, use the development panel. For existing
-fleet operations, keep the D1 database private and do not paste enrollment
-codes or device tokens into logs, issues, or chat.
+To issue or revoke a device manually, use the production management panel. Keep
+the D1 database private and do not paste enrollment codes or device tokens into
+logs, issues, or chat.

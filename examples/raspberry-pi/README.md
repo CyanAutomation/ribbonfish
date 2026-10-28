@@ -172,9 +172,9 @@ After enrollment, the agent downloads the currently active playlist and its
 verified assets from the Worker automatically, then keeps a last-good local
 copy for offline playback. The Worker supplies playlist content only; the Pi's
 DRM card, connectors, and display profile still come from the local image and
-must match the attached hardware. Production management routes are disabled,
-and the separate development management panel is unauthenticated, so do not
-use it to provision production devices.
+must match the attached hardware. The device-sync Worker keeps management
+routes disabled; use the separate production management console behind
+Cloudflare Access to provision production devices.
 
 Exchange a one-time code through stdin. This writes the device token to the
 same named volume used by the service and does not print the token:

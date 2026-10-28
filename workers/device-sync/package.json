@@ -8,18 +8,13 @@
   "scripts": {
     "test": "node --test",
     "build:admin": "node scripts/build-admin.mjs",
-    "check:config": "wrangler deploy --dry-run --config wrangler.toml && wrangler deploy --dry-run --config wrangler.dev.toml && wrangler deploy --dry-run --config wrangler.management.toml",
-    "dev": "npm run publish:admin:local && wrangler dev --config wrangler.dev.toml",
-    "deploy:dev": "npm run publish:admin:dev && wrangler deploy --config wrangler.dev.toml",
+    "check:config": "wrangler deploy --dry-run --config wrangler.toml && wrangler deploy --dry-run --config wrangler.management.toml",
+    "dev": "npm run publish:admin:local && wrangler dev --config wrangler.management.toml --local --var \"ADMIN_ENABLED:true\" \"ADMIN_ACCESS_REQUIRED:false\"",
     "deploy:production": "wrangler deploy --config wrangler.toml",
     "deploy:management": "npm run publish:admin:production && wrangler deploy --config wrangler.management.toml",
-    "init:dev-local": "node scripts/bootstrap-database.mjs --local --config wrangler.dev.toml",
-    "init:dev-remote": "node scripts/bootstrap-database.mjs --remote --config wrangler.dev.toml",
-    "publish:admin:dev": "node scripts/publish-admin-assets.mjs --config wrangler.dev.toml",
-    "publish:admin:production": "node scripts/publish-admin-assets.mjs --config wrangler.management.toml --bucket ribbonfish-assets",
-    "publish:admin:local": "node scripts/publish-admin-assets.mjs --config wrangler.dev.toml --local",
-    "seed:dev-remote": "node scripts/publish-playlist.mjs defaults/default-playlist.json --activate --database ribbonfish-management-dev --bucket ribbonfish-management-dev --config wrangler.dev.toml",
-    "migrate:dev-remote": "wrangler d1 migrations apply ribbonfish-management-dev --remote --config wrangler.dev.toml",
+    "init:local": "node scripts/bootstrap-database.mjs --local --config wrangler.management.toml --database ribbonfish-devices",
+    "publish:admin:production": "node scripts/publish-admin-assets.mjs --config wrangler.management.toml --bucket ribbonfish-assets --remote",
+    "publish:admin:local": "node scripts/publish-admin-assets.mjs --config wrangler.management.toml --bucket ribbonfish-assets --local",
     "migrate:management": "wrangler d1 migrations apply ribbonfish-devices --remote --config wrangler.management.toml"
   },
   "devDependencies": {

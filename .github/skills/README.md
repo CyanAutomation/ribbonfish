@@ -1,6 +1,6 @@
 # Ribbonfish Agent Skills
 
-This directory contains focused guidance for working in the Ribbonfish repository. The Go agent, authenticated device sync, and unauthenticated development management UI/API are implemented. Screenshot capture remains proposed, and physical DRM/KMS output is only partially validated.
+This directory contains focused guidance for working in the Ribbonfish repository. The Go agent, authenticated device sync, and Cloudflare Access-protected production management UI/API are implemented. Local management development uses Wrangler's D1/R2 emulators. Screenshot capture remains proposed, and physical DRM/KMS output is only partially validated.
 
 ## Skills by domain
 
