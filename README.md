@@ -21,7 +21,7 @@ The initial use case is a fleet of Raspberry Pis showing company websites and Up
 3. The Go agent verifies image hashes, caches a local copy, and rotates that shared playlist on each output through the simulator or DRM/KMS.
 4. It keeps the active snapshot and continues displaying it when sync is disabled or the network is unavailable.
 
-**Implementation status:** The agent ships Pi 3 A+, Pi 3B, Pi 4, and simulator profiles with sample images. The Worker under [`workers/device-sync`](workers/device-sync/README.md) enrolls devices, serves one global active playlist, and reads private R2 assets. The production management UI/API can stage and activate playlist revisions, upload PNG assets, issue enrollment codes, list and disable devices, rotate credentials, show asset health and management events, and render a read-only OpenUI Lang fleet snapshot. Cloudflare Access protects the production management Worker, while the default device-sync Worker keeps management routes disabled. Candidate snapshots are validated and applied atomically; failed sync leaves the previous snapshot active. Browser rendering and screenshot scheduling remain proposed.
+**Implementation status:** The agent ships Pi 3 A+, Pi 3B, Pi 4, and simulator profiles with sample images. The Worker under [`workers/device-sync`](workers/device-sync/README.md) serves one global active playlist and private R2 assets. New devices automatically submit a key-based enrollment request, display a fingerprint, and wait for explicit approval in the production management UI. The console can stage and activate playlist revisions, upload PNG assets, approve or reject devices, list and disable devices, rotate legacy tokens, show asset health and management events, and render a read-only OpenUI Lang fleet snapshot. Cloudflare Access protects the production management Worker, while the default device-sync Worker keeps management routes disabled. Candidate snapshots are validated and applied atomically; failed sync leaves the previous snapshot active. Browser rendering and screenshot scheduling remain proposed.
 
 The DRM backend configures named connectors, selects advertised modes, and uses XRGB8888 dumb buffers with page flips. It is experimental: one single-display Pi 3 A+ has passed physical KMS and visible-frame acceptance, while Pi 3B and Pi 4 dual-output behavior remain open.
 
@@ -103,7 +103,7 @@ Ribbonfish deliberately supports **no screenshot capture interval shorter than 6
 | Component | Responsibility and implementation status |
 |------------|-------------------------|
 | Workers | Authenticated device sync plus a Cloudflare Access-protected production management API/UI; the renderer API and capture pipeline remain proposed |
-| D1 | Versioned playlists, the global active pointer, credential hashes, enrollment codes, last-poll telemetry, and management audit events; capture state remains proposed |
+| D1 | Versioned playlists, the global active pointer, legacy credential hashes, approved device public keys, pending enrollment requests, last-poll telemetry, and management audit events; capture state remains proposed |
 | Browser Run | Proposed headless page rendering and screenshot capture, with explicit viewport and load/wait policies |
 | R2 | Private content-addressed playlist assets with PNG upload through the production management API; screenshot publication and retention remain proposed |
 | Queues | Single-consumer, single-message capture execution, bounded retries, and backlog control |
@@ -113,10 +113,11 @@ Ribbonfish deliberately supports **no screenshot capture interval shorter than 6
 
 The production management Worker serves a browser panel at `/admin/` and JSON
 routes under `/admin/api/`. It lists devices and playlist revisions, reports
-missing active-playlist assets, creates enrollment codes, enables or disables
-devices, rotates credentials, uploads content-addressed PNGs, stages playlist
-revisions, activates or rolls back to an existing revision, and shows recent
-audit events. `GET /healthz` returns a minimal status for external uptime checks.
+missing active-playlist assets, lists pending device requests with their
+fingerprints, approves or rejects devices, enables or disables devices, rotates
+legacy credentials, uploads content-addressed PNGs, stages playlist revisions,
+activates or rolls back to an existing revision, and shows recent audit events.
+`GET /healthz` returns a minimal status for external uptime checks.
 
 Cloudflare Access restricts the production Worker to members of the Cloudflare
 account. Its admin routes also require the authenticated Access identity in
@@ -136,7 +137,7 @@ Cloudflare Browser Run supports screenshot Quick Actions and browser sessions. T
 
 ### Deployment model
 
-The experimental deployment is **Docker Compose on Raspberry Pi OS Lite**, with no graphical desktop, Chromium, X11, or Wayland session. The container includes its default profile and starter images, so the offline Compose setup needs no host-mounted config or asset files. It maps one DRM card, persists cache, last-good playlist snapshot, and the per-device credential in a state volume, and runs non-root with a read-only root filesystem and no added capabilities. Networking defaults to `none`; set it to `bridge` only for enrollment or optional sync. On protected `main` pushes that change `agent/**`, GitHub Actions publishes an ARMv7/ARM64 GHCR image tagged `main` and with the immutable commit SHA (`sha-<SHA>`), plus a multi-architecture Docker Hub image (`amd64`, `arm64`, and `arm/v7`) tagged with the commit SHA. Docker Hub's `latest` tag moves only when the published commit is still the `main` tip. Compose defaults to `latest`, with `RIBBONFISH_IMAGE` available to pin an immutable SHA tag or manifest digest for repeatable deployments. The image must already be present on the Pi for a fully offline first start.
+The experimental deployment is **Docker Compose on Raspberry Pi OS Lite**, with no graphical desktop, Chromium, X11, or Wayland session. The container includes its default profile and starter images, so the offline Compose setup needs no host-mounted config or asset files. It maps one DRM card, persists cache, last-good playlist snapshot, and device identity in a state volume, and runs non-root with a read-only root filesystem and no added capabilities. Networking defaults to `none`; set it to `bridge` for initial approval and optional sync. On protected `main` pushes that change `agent/**`, GitHub Actions publishes an ARMv7/ARM64 GHCR image tagged `main` and with the immutable commit SHA (`sha-<SHA>`), plus a multi-architecture Docker Hub image (`amd64`, `arm64`, and `arm/v7`) tagged with the commit SHA. Docker Hub's `latest` tag moves only when the published commit is still the `main` tip. Compose defaults to `latest`, with `RIBBONFISH_IMAGE` available to pin an immutable SHA tag or manifest digest for repeatable deployments. The image must already be present on the Pi for a fully offline first start.
 
 The Compose deployment maps only the selected DRM card and its numeric device group. The agent requests DRM master, configures the selected connector(s), and takes over scanout; the host display manager or compositor must release that card. Device access does not guarantee DRM master ownership or multi-output support. Select the bundled profile and verify the device path, group, and connector on each Pi. Avoid `privileged: true`.
 
@@ -144,7 +145,7 @@ The Compose deployment maps only the selected DRM card and its numeric device gr
 A small Go agent, packaged as a multi-architecture OCI image and deployed primarily with Docker Compose on Raspberry Pi OS Lite or another compatible Linux distribution:
 
 1. Identify available DRM/KMS connectors, supported modes, and output identities.
-2. Start from a bundled profile and optionally authenticate to the sync Worker with a per-device token.
+2. Start from a bundled profile and optionally authenticate to the sync Worker with an approved per-device public key (legacy tokens remain supported).
 3. Poll for the globally active versioned playlist and download changed images with SHA-256 checks.
 4. Decode and present images through a DRM/KMS display backend, without X11, Wayland, or Chromium.
 5. Rotate the same playlist independently on each physical output using its shared rotation interval.
@@ -297,9 +298,9 @@ The optimiser sits **after deterministic eligibility checks and before the singl
 
 ### 1. Provision a Device
 
-An administrator enrolls a device. Every enrolled device receives the globally active playlist; playlist assignment is not stored per device or output. Playlist releases are published by a trusted Wrangler process.
+The device automatically submits a signed enrollment request when it reaches the Worker. An administrator compares the fingerprint shown on the physical display with the pending request in the console and explicitly approves it. Every approved device receives the globally active playlist; playlist assignment is not stored per device or output. Playlist releases are published by a trusted Wrangler process.
 
-A one-time enrollment credential is exchanged for scoped device credentials. The agent downloads its initial configuration and cached images, then starts presenting content.
+After approval, the agent begins polling for the active playlist and cached images. Its private key remains in the persistent device state volume.
 
 Credentials can be rotated or revoked without reimaging the device.
 
@@ -504,9 +505,10 @@ Add:
 ### Phase 3 — Fleet Management
 
 The device-side fleet slice and production management UI/API are implemented:
-one-time enrollment, per-device credentials, authenticated global playlist and
-asset delivery, verified local playlist copies, playlist staging/activation,
-device controls, credential rotation, asset health, and management events.
+pending key-based enrollment with explicit approval, legacy one-time enrollment,
+authenticated global playlist and asset delivery, verified local playlist
+copies, playlist staging/activation, device controls, legacy credential
+rotation, asset health, and management events.
 The production management Worker is protected by Cloudflare Access and records
 the authenticated operator in its audit events. Remaining fleet-management work
 includes:

@@ -12,6 +12,8 @@ import (
 	"image/png"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -24,6 +26,7 @@ import (
 	"github.com/CyanAutomation/ribbonfish/agent/internal/agent"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/cache"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/config"
+	"github.com/CyanAutomation/ribbonfish/agent/internal/display"
 	displaySimulator "github.com/CyanAutomation/ribbonfish/agent/internal/display/simulator"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/syncer"
 )
@@ -361,6 +364,91 @@ func TestRunSyncLoopLogsSuccessfulUnchangedPollsAndRecovery(t *testing.T) {
 		})
 	}
 }
+
+func TestDeviceEnrollmentWaitsForApprovalThenStartsSignedSync(t *testing.T) {
+	t.Setenv("RIBBONFISH_SYNC_INTERVAL", "1ms")
+	key, err := syncer.LoadOrCreateDeviceKey(filepath.Join(t.TempDir(), "device-key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := cache.NewFileStore(filepath.Join(t.TempDir(), "cache"), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	gotEnrollment := make(chan struct{}, 1)
+	gotSignedSync := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/enrollment-requests":
+			gotEnrollment <- struct{}{}
+			var body struct {
+				DeviceID  string `json:"device_id"`
+				PublicKey string `json:"public_key"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode automatic enrollment request: %v", err)
+			}
+			if body.DeviceID != "pi-office" || body.PublicKey != key.PublicKeyText() || r.Header.Get("X-Ribbonfish-Signature") == "" {
+				t.Errorf("automatic enrollment request identity or proof is missing: %#v", body)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"approved","fingerprint":"` + key.Fingerprint() + `","request_id":"` + key.RequestID() + `","expires_at":null,"replaces_existing":false}`))
+		case "/v2/playlist":
+			if r.Header.Get("X-Ribbonfish-Device-ID") != "pi-office" ||
+				r.Header.Get("X-Ribbonfish-Signature") == "" || r.Header.Get("Authorization") != "" {
+				t.Error("approved sync request did not use the key-based identity")
+			}
+			gotSignedSync <- struct{}{}
+			cancel()
+			w.WriteHeader(http.StatusNotModified)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	pairing := display.NewPairingState("pi-office", key.Fingerprint())
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	err = runDeviceEnrollmentLoop(ctx, server.URL, "pi-office", key, store, config.Config{},
+		syncLoopTestPlayback{}, "", nil, pairing, logger)
+	if err != nil {
+		t.Fatalf("runDeviceEnrollmentLoop() error = %v", err)
+	}
+	select {
+	case <-gotEnrollment:
+	default:
+		t.Fatal("device did not automatically request enrollment")
+	}
+	select {
+	case <-gotSignedSync:
+	default:
+		t.Fatal("approved device did not start signed playlist synchronization")
+	}
+
+	backend := &enrollmentStateOutput{}
+	output := display.NewPairingOutput(backend, pairing)
+	frame := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	frame.SetRGBA(0, 0, color.RGBA{R: 255, A: 255})
+	if err := output.Present(context.Background(), "main", frame); err != nil {
+		t.Fatal(err)
+	}
+	want := color.RGBA{R: 255, A: 255}
+	if got := backend.frame.At(0, 0); got != want {
+		t.Fatalf("pairing output remains visible after approval: %#v", got)
+	}
+}
+
+type enrollmentStateOutput struct{ frame image.Image }
+
+func (output *enrollmentStateOutput) Present(_ context.Context, _ string, frame image.Image) error {
+	output.frame = frame
+	return nil
+}
+
+func (*enrollmentStateOutput) Close() error { return nil }
 
 type syncLoopTestPlayback struct{}
 
