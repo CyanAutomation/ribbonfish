@@ -7,6 +7,10 @@ workers_dev = true
 [vars]
 ADMIN_ENABLED = "true"
 ADMIN_ACCESS_REQUIRED = "true"
+DAILY_BROWSER_BUDGET_MS = "540000"
+CAPTURE_BUDGET_RESERVE_MS = "45000"
+CAPTURE_MIN_REQUEST_GAP_MS = "10000"
+CAPTURE_MAX_PENDING = "100"
 
 [observability]
 enabled = true
@@ -25,3 +29,23 @@ migrations_dir = "migrations"
 name = "ENROLLMENT_RATE_LIMITER"
 namespace_id = "84310627"
 simple = { limit = 30, period = 60 }
+
+[browser]
+binding = "BROWSER"
+remote = true
+
+[[queues.producers]]
+binding = "CAPTURE_QUEUE"
+queue = "ribbonfish-captures"
+
+[[queues.consumers]]
+queue = "ribbonfish-captures"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 3
+dead_letter_queue = "ribbonfish-capture-dead-letter"
+max_concurrency = 1
+retry_delay = 60
+
+[triggers]
+crons = ["* * * * *"]

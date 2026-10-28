@@ -2,7 +2,7 @@
 
 [![Go agent](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml/badge.svg)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/agent.yml) [![Worker tests](https://github.com/CyanAutomation/ribbonfish/actions/workflows/device-sync.yml/badge.svg?branch=main)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/device-sync.yml) [![ARM container smoke test](https://github.com/CyanAutomation/ribbonfish/actions/workflows/arm-container-smoke.yml/badge.svg?branch=main)](https://github.com/CyanAutomation/ribbonfish/actions/workflows/arm-container-smoke.yml)
 
-> **Project status:** The Go agent supports bundled offline profiles, a verified persistent image cache, authenticated Worker/R2 content sync, a software simulator, and an experimental Linux DRM/KMS output backend. The production management Worker serves the playlist/device UI behind Cloudflare Access, while the device-sync Worker keeps management routes disabled. The console runs locally with Wrangler's local D1/R2 emulation; no public development Worker is deployed. Screenshot rendering and capture scheduling remain proposed.
+> **Project status:** The Go agent supports bundled offline profiles, a verified persistent image cache, authenticated Worker/R2 content sync, a software simulator, and an experimental Linux DRM/KMS output backend. The production management Worker serves the playlist/device UI behind Cloudflare Access, while the device-sync Worker keeps management routes disabled. The management Worker code now stages webpage captures as playlist items, schedules Browser Run screenshot Quick Actions through a serial Queue consumer, and publishes the resulting content-addressed PNGs through the same storage path as uploads. This change has not been deployed; production queues and the D1 migration must be applied first. The console still runs locally with Wrangler's local D1/R2 emulation; no public development Worker is deployed.
 
 ## Render Once. Display Anywhere.
 
@@ -21,7 +21,7 @@ The initial use case is a fleet of Raspberry Pis showing company websites and Up
 3. The Go agent verifies image hashes, caches a local copy, and rotates that shared playlist on each output through the simulator or DRM/KMS.
 4. It keeps the active snapshot and continues displaying it when sync is disabled or the network is unavailable.
 
-**Implementation status:** The agent ships Pi 3 A+, Pi 3B, Pi 4, and simulator profiles with sample images. The Worker under [`workers/device-sync`](workers/device-sync/README.md) serves one global active playlist and private R2 assets. New devices automatically submit a key-based enrollment request, display a fingerprint, and wait for explicit approval in the production management UI. The console can stage and activate playlist revisions, upload PNG assets, approve or reject devices, list and disable devices, rotate legacy tokens, show asset health and management events, and render a read-only OpenUI Lang fleet snapshot. Cloudflare Access protects the production management Worker, while the default device-sync Worker keeps management routes disabled. Candidate snapshots are validated and applied atomically; failed sync leaves the previous snapshot active. Browser rendering and screenshot scheduling remain proposed.
+**Implementation status:** The agent ships Pi 3 A+, Pi 3B, Pi 4, and simulator profiles with sample images. The Worker under [`workers/device-sync`](workers/device-sync/README.md) serves one global active playlist and private R2 assets. New devices automatically submit a key-based enrollment request, display a fingerprint, and wait for explicit approval in the production management UI. The console can stage and activate revisions containing uploaded PNGs and scheduled webpage captures, approve or reject devices, list and disable devices, rotate legacy tokens, show asset health and management events, and render a read-only OpenUI Lang fleet snapshot. Captures run through a Cloudflare Browser Run Quick Action and serial Queue consumer; uploads and screenshots share the same content-addressed PNG store. Cloudflare Access protects the production management Worker, while the default device-sync Worker keeps management routes disabled. Candidate snapshots are validated and applied atomically; failed sync leaves the previous snapshot active.
 
 The DRM backend configures named connectors, selects advertised modes, and uses XRGB8888 dumb buffers with page flips. It is experimental: one single-display Pi 3 A+ has passed physical KMS and visible-frame acceptance, while Pi 3B and Pi 4 dual-output behavior remain open.
 
@@ -65,17 +65,18 @@ container compatibility only and does not replace physical Pi testing.
 ```mermaid
 flowchart TD
 
-    Admin[Management UI] --> API[Cloudflare Worker API]
+    Admin[Management UI] --> API[Cloudflare Management Worker]
 
     API <--> D1[(D1: Configuration and State)]
 
-    Scheduler[Scheduled Worker / Due-Job Dispatcher] --> D1
+    Scheduler[Scheduled Event / Due-Job Dispatcher] --> D1
     Scheduler --> Q[Cloudflare Queue: Capture Jobs]
 
-    Q --> Renderer[Render Worker / Browser Run]
+    Q --> Consumer[Queue Consumer / Same Management Worker]
+    Consumer --> Browser[Cloudflare Browser Run]
 
-    Renderer --> R2[(R2: Versioned Screenshots)]
-    Renderer --> D1
+    Consumer --> R2[(R2: Versioned Screenshots)]
+    Consumer --> D1
 
     Pi1[Go Display Agent: Pi 3B] -->|HTTPS: Config and active playlist| API
     Pi2[Go Display Agent: Pi 4] -->|HTTPS: Config and active playlist| API
@@ -102,10 +103,10 @@ Ribbonfish deliberately supports **no screenshot capture interval shorter than 6
 
 | Component | Responsibility and implementation status |
 |------------|-------------------------|
-| Workers | Authenticated device sync plus a Cloudflare Access-protected production management API/UI; the renderer API and capture pipeline remain proposed |
-| D1 | Versioned playlists, the global active pointer, legacy credential hashes, approved device public keys, pending enrollment requests, last-poll telemetry, and management audit events; capture state remains proposed |
-| Browser Run | Proposed headless page rendering and screenshot capture, with explicit viewport and load/wait policies |
-| R2 | Private content-addressed playlist assets with PNG upload through the production management API; screenshot publication and retention remain proposed |
+| Workers | Authenticated device sync plus a Cloudflare Access-protected management API/UI, one-minute due-job dispatcher, and Queue consumer |
+| D1 | Versioned playlists, capture targets and ordered capture slots, deduplicated jobs, per-target history and usage, the active pointer, device credentials, enrollment state, telemetry, and audit events |
+| Browser Run | Screenshot Quick Actions render public HTTPS pages at a configured viewport and wait for `domcontentloaded` |
+| R2 | Private content-addressed PNG assets shared by manual uploads, holding images, and Browser Run screenshots; capture history is retained for up to 10 images or 30 days per target |
 | Queues | Single-consumer, single-message capture execution, bounded retries, and backlog control |
 | Scheduled Worker (Cron Trigger) | Run every minute, check D1 for due variants, and enqueue deduplicated capture jobs |
 
@@ -129,7 +130,7 @@ Wrangler's local D1/R2 emulation.
 See [`workers/device-sync/README.md`](workers/device-sync/README.md) for
 deployment and API details.
 
-Cloudflare Browser Run supports screenshot Quick Actions and browser sessions. The renderer implementation should be replaceable, and all quotas, costs, scheduling limits, and authenticated-page capabilities must be validated before production use. **Serial capture execution limits concurrency, but does not by itself ensure compliance with account-wide browser session creation rates, Quick Action request rates, or daily browser-time quotas.**
+The current management Worker uses screenshot Quick Actions, not persistent browser sessions. Capture targets accept public HTTPS URLs without credentials, capture intervals from 60 seconds to 30 days, and bounded viewport sizes. Its production config caps Browser Run time at 9 minutes per UTC day, reserves 45 seconds before each request when usage is unavailable, and spaces requests by at least 10 seconds. These are application limits; confirm the account's plan and Browser Run quotas before enabling production capture. Authenticated pages, cookies, and arbitrary browser interaction are not supported.
 
 ---
 
@@ -230,32 +231,26 @@ Physical connector names and stable display identification will be validated aga
 
 **Initial architectural constraint: at most one Ribbonfish screenshot capture executes at any moment across the entire deployment.** Every scheduled, manual, and retry capture must pass through the same Cloudflare Queue; no API endpoint or Cron handler may invoke Browser Run directly.
 
-The proposed Queue consumer configuration is illustrative Wrangler JSON (confirm the deployed runtime and supported settings):
+The management Worker configures this Queue consumer in `wrangler.management.toml`:
 
-```json
-{
-  "queues": {
-    "consumers": [
-      {
-        "queue": "ribbonfish-captures",
-        "max_batch_size": 1,
-        "max_concurrency": 1
-      }
-    ]
-  }
-}
+```toml
+[[queues.consumers]]
+queue = "ribbonfish-captures"
+max_batch_size = 1
+max_concurrency = 1
+max_retries = 3
+dead_letter_queue = "ribbonfish-capture-dead-letter"
 ```
 
-The consumer processes **one message and awaits the entire browser capture and publication flow** before acknowledging it. It must not start unawaited or parallel browser operations. A configured Queue consumer concurrency of one is the primary serialisation control; use D1-backed job leases, ownership checks, and idempotency to handle duplicate deliveries and lease expiry safely. If the platform could execute an overlapping retry or a second consumer, the application must prevent concurrent browser work rather than relying on configuration alone. Serialisation is scoped to Ribbonfish, not other workloads sharing the same Cloudflare account.
+The consumer processes one message and awaits the full browser capture and image publication before acknowledging it. D1 coalesces one open job per target and tracks running leases. Queue concurrency one is the serialization control for Ribbonfish; it does not limit other Browser Run workloads in the Cloudflare account.
 
 ### Budget and quota controls
 
-- Define a **configurable daily browser-time budget** and per-request timeouts; store usage estimates, observed usage where available, and budget state in D1. Configure a conservative safety margin below the applicable Cloudflare plan limits.
-- Before starting a capture, check the remaining budget and applicable **Browser Sessions** creation or **Quick Actions** request rate limit. These are different Cloudflare APIs with different limits; model the chosen renderer's actual quotas. Do not assume that concurrency one bypasses either rate limit.
-- When the daily budget or a provider quota is exhausted, **defer or skip** new work until the relevant budget or rate window allows it. Surface the reason and stale-image age; do not retry quota failures in a tight loop. A queue consumer should not hold messages indefinitely while waiting for the next day.
-- Set a maximum pending-job age and backlog threshold. **Coalesce** due captures by render variant: allow at most one outstanding queued/running capture per variant, and do not enqueue redundant historical captures when the Cron scheduler ticks again.
-- Give retries bounded attempts, exponential backoff and jitter. Distinguish transient browser failures from quota exhaustion and terminal rendering failures. Failed jobs must not block all subsequent variants indefinitely.
-- Track queue depth, capture duration, time since last successful screenshot, skipped/deferred captures, remaining budget, and rate-limit responses. Keep the last valid image available subject to the separate screenshot retention policy.
+- The worker stores observed Browser Run time in D1 and checks the configurable daily budget before starting work. The configured 9-minute daily budget leaves margin below the Browser Run free-plan daily allowance cited during design; verify current account limits before use.
+- A minimum 10-second request gap protects the Quick Action rate limit. Budget/rate deferrals move jobs to a deferred state until a later Cron tick; queue messages are acknowledged rather than held until the next time window.
+- Pending work is capped at 100 jobs and coalesced to one open job per target. The once-per-minute dispatcher only schedules targets referenced by the active playlist.
+- Transient Browser Run errors retry at most twice after the first attempt, with 60-second and 180-second delays. Terminal errors leave the previous screenshot in place. Failed jobs do not block other targets.
+- The console reports each target's last success, active queue status, and most recent error. Queue-depth and aggregate budget dashboards remain future work. The last valid image stays available subject to the screenshot retention policy.
 
 **Trade-off:** with a single capture slot, requested 60-second intervals are a minimum *configuration* interval, not guaranteed freshness. If aggregate render time exceeds capacity or the daily browser budget, some captures will be late or skipped. Design for predictable degradation rather than unbounded work accumulation.
 
@@ -481,26 +476,20 @@ Measure:
 
 ### Phase 1 — Vertical Slice
 
-- Render one public website using Browser Run.
-- Store the screenshot in R2.
-- Display it through a manually configured agent.
+Implemented: render a public website with Browser Run, store the screenshot in
+R2, and deliver it through the existing device playlist and asset endpoints.
 
 ### Phase 2 — Scheduling
 
-Add:
+Implemented in the management Worker:
 
-- D1 site configuration
-- Independent per-site capture intervals
-- One-minute Cron Trigger and D1-backed due-job scheduling
-- Validation rejecting capture intervals below 60 seconds
-- Queues configured for one-message batches and a single concurrent capture consumer
-- Global serialisation of scheduled, manual and retried captures
-- Daily browser-time budget and renderer-specific rate limiting
-- Optional JEV-based capture optimisation with deterministic guardrails and opt-in adaptive freshness
-- Per-variant backlog coalescing and quota-aware defer/skip behaviour
-- Retry policies
-- Last-known-good manifests
-- Per-variant screenshot retention (10 captures or 30 days, whichever is sooner), plus cleanup and reconciliation
+- D1 capture target configuration, interval validation, and ordered playlist capture slots
+- One-minute Cron Trigger and D1-backed due-job scheduling through a serial Queue consumer
+- Shared content-addressed PNG storage for manual uploads, holding images, and screenshots
+- Daily browser-time budget, request spacing, bounded retry, and per-target coalescing
+- Last-known-good screenshot fallback and retention of up to 10 screenshots or 30 days per target
+
+Optional JEV-based optimization, adaptive freshness, queue prioritization, and richer queue/usage dashboards remain future work.
 
 ### Phase 3 — Fleet Management
 

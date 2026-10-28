@@ -1,14 +1,16 @@
 import { isValidPositiveDuration } from "./duration.js";
+import { isPNG, MAX_ASSET_BYTES, storePngAsset } from "./asset-store.js";
+import { normalizeCaptureURL, validateCaptureSettings } from "./capture.js";
+import { enqueueCapture } from "./capture-workflow.js";
 
 const MAX_JSON_BYTES = 64 << 10;
-const MAX_ASSET_BYTES = 32 << 20;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
-const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 const ADMIN_FILES = new Map([
   ["/admin/index.html", { key: "admin/index.html", contentType: "text/html; charset=utf-8" }],
   ["/admin/app.js", { key: "admin/app.js", contentType: "text/javascript; charset=utf-8" }],
   ["/admin/styles.css", { key: "admin/styles.css", contentType: "text/css; charset=utf-8" }],
+  ["/admin/capture-pending.png", { key: "admin/capture-pending.png", contentType: "image/png" }],
 ]);
 
 class HTTPError extends Error {
@@ -78,6 +80,19 @@ export async function handleAdminRequest(request, env, ctx) {
       return await uploadAsset(request, env, actorID);
     }
 
+    const captureRunMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/run$/i);
+    if (captureRunMatch) {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      let result;
+      try {
+        result = await enqueueCapture(captureRunMatch[1], env);
+      } catch {
+        throw new HTTPError(503, "Capture could not be queued. Check the capture queue configuration and try again.");
+      }
+      if (!result) throw new HTTPError(404, "That webpage capture is no longer available.");
+      return jsonResponse({ job_id: result.job_id, status: result.status }, 202);
+    }
+
     const assetMatch = url.pathname.match(/^\/admin\/api\/assets\/([a-f0-9]{64})$/);
     if (assetMatch) {
       if (request.method !== "GET") return methodNotAllowed("GET");
@@ -142,7 +157,7 @@ async function fetchAdminAsset(env, pathname) {
 }
 
 async function readOverview(env) {
-  const [devices, playlists, active, audit] = await Promise.all([
+  const [devices, playlists, active, audit, captureTargets] = await Promise.all([
     env.DB.prepare(
       "SELECT device_id, enabled, created_at, last_seen_at, " +
       "CASE WHEN public_key IS NULL THEN 'token' ELSE 'key' END AS auth_type " +
@@ -150,7 +165,8 @@ async function readOverview(env) {
     ).all(),
     env.DB.prepare(
       "SELECT p.playlist_id, p.revision, p.rotation_interval, p.created_at, " +
-      "COUNT(pa.position) AS asset_count, " +
+      "((SELECT COUNT(*) FROM playlist_assets pa WHERE pa.playlist_id = p.playlist_id AND pa.revision = p.revision) + " +
+      "(SELECT COUNT(*) FROM playlist_capture_items pc WHERE pc.playlist_id = p.playlist_id AND pc.revision = p.revision)) AS asset_count, " +
       "COUNT(*) OVER (PARTITION BY p.playlist_id) AS revision_count, " +
       "CASE WHEN ap.playlist_id = p.playlist_id AND ap.revision = p.revision THEN 1 ELSE 0 END AS active " +
       "FROM playlists p LEFT JOIN playlist_assets pa ON pa.playlist_id = p.playlist_id AND pa.revision = p.revision " +
@@ -164,14 +180,34 @@ async function readOverview(env) {
       "SELECT event_id, actor_id, event_type, subject_type, subject_id, occurred_at, metadata_json " +
       "FROM audit_events ORDER BY occurred_at DESC LIMIT ?",
     ).bind(20).all(),
+    env.DB.prepare(
+      "SELECT t.capture_id, t.url, t.capture_interval_seconds, t.viewport_width, t.viewport_height, " +
+      "CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
+      "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size, " +
+      "t.last_success_at, " +
+      "t.last_error, t.next_due_at, " +
+      "(SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued', 'running') " +
+      "ORDER BY j.created_at DESC LIMIT 1) AS job_status FROM capture_targets t " +
+      "WHERE EXISTS (SELECT 1 FROM playlist_capture_items p WHERE p.capture_id = t.capture_id) " +
+      "ORDER BY t.next_due_at, t.created_at LIMIT 100",
+    ).bind(Date.now() - 30 * 24 * 60 * 60 * 1000, Date.now() - 30 * 24 * 60 * 60 * 1000).all(),
   ]);
 
   let missing = [];
   if (active) {
-    const assets = await env.DB.prepare(
-      "SELECT sha256, size FROM playlist_assets WHERE playlist_id = ? AND revision = ? ORDER BY position",
-    ).bind(active.playlist_id, active.revision).all();
-    missing = await Promise.all((assets.results ?? []).map(async (asset) => {
+    const [assets, captures] = await Promise.all([
+      env.DB.prepare(
+        "SELECT sha256, size FROM playlist_assets WHERE playlist_id = ? AND revision = ? ORDER BY position",
+      ).bind(active.playlist_id, active.revision).all(),
+      env.DB.prepare(
+        "SELECT CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
+        "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size " +
+        "FROM playlist_capture_items p JOIN capture_targets t ON t.capture_id = p.capture_id " +
+        "WHERE p.playlist_id = ? AND p.revision = ? ORDER BY p.position",
+      ).bind(Date.now() - 30 * 24 * 60 * 60 * 1000, Date.now() - 30 * 24 * 60 * 60 * 1000,
+        active.playlist_id, active.revision).all(),
+    ]);
+    missing = await Promise.all([...(assets.results ?? []), ...(captures.results ?? [])].map(async (asset) => {
       const object = await env.ASSETS.head("assets/" + asset.sha256);
       if (object && object.size === asset.size) return null;
       return { sha256: asset.sha256, expected_size: asset.size, actual_size: object?.size ?? null };
@@ -184,6 +220,21 @@ async function readOverview(env) {
     devices: devices.results ?? [],
     playlists: playlists.results ?? [],
     active_playlist: active,
+    capture_targets: (captureTargets.results ?? []).map((target) => {
+      const source = new URL(target.url);
+      return {
+        capture_id: target.capture_id,
+        display_url: source.origin + source.pathname,
+        capture_interval_seconds: target.capture_interval_seconds,
+        viewport: { width: target.viewport_width, height: target.viewport_height },
+        sha256: target.sha256,
+        size: target.size,
+        last_success_at: target.last_success_at,
+        last_error: target.last_error,
+        job_status: target.job_status,
+        next_due_at: target.next_due_at,
+      };
+    }),
     asset_health: { missing },
     audit: (audit.results ?? []).map((event) => ({
       event_id: event.event_id,
@@ -286,24 +337,25 @@ async function uploadAsset(request, env, actorID) {
   const bytes = await readBytes(request, MAX_ASSET_BYTES);
   if (!isPNG(bytes)) throw new HTTPError(400, "That file does not look like a valid PNG image.");
 
-  const sha256 = await sha256BytesHex(bytes);
-  const key = "assets/" + sha256;
-  const existing = await env.ASSETS.head(key);
-  if (!existing || existing.size !== bytes.byteLength) {
-    await env.ASSETS.put(key, bytes, { httpMetadata: { contentType: "image/png" } });
+  const asset = await storePngAsset(bytes, env.ASSETS);
+  if (asset.created) {
     await env.DB.batch([
-      auditStatement(env, actorID, "asset.uploaded", "asset", sha256, { size: bytes.byteLength }),
+      auditStatement(env, actorID, "asset.uploaded", "asset", asset.sha256, { size: asset.size }),
     ]);
-    return jsonResponse({ sha256, size: bytes.byteLength }, 201);
+    return jsonResponse({ sha256: asset.sha256, size: asset.size }, 201);
   }
-  return jsonResponse({ sha256, size: bytes.byteLength }, 200);
+  return jsonResponse({ sha256: asset.sha256, size: asset.size }, 200);
 }
 
 async function readPlaylistAsset(sha256, env) {
   const reference = await env.DB.prepare(
     "SELECT 1 AS present FROM playlist_assets WHERE sha256 = ? LIMIT 1",
   ).bind(sha256).first();
-  if (!reference) throw new HTTPError(404, "playlist image not found");
+  const captureReference = reference ? null : await env.DB.prepare(
+    "SELECT 1 AS present FROM capture_targets WHERE placeholder_sha256 = ? OR current_sha256 = ? " +
+    "UNION ALL SELECT 1 AS present FROM capture_history WHERE sha256 = ? LIMIT 1",
+  ).bind(sha256, sha256, sha256).first();
+  if (!reference && !captureReference) throw new HTTPError(404, "playlist image not found");
   const object = await env.ASSETS.get("assets/" + sha256);
   if (!object) throw new HTTPError(404, "playlist image not found");
   const headers = new Headers({
@@ -318,13 +370,17 @@ async function readPlaylistAsset(sha256, env) {
 
 async function createPlaylist(request, env, actorID) {
   const data = await readJSON(request);
-  if (!hasExactKeys(data, ["id", "rotation_interval", "assets"]) || !ID_PATTERN.test(data.id ?? "") ||
-      !isValidPositiveDuration(data.rotation_interval) || !Array.isArray(data.assets) ||
-      data.assets.length < 1 || data.assets.length > 256) {
-    throw new HTTPError(400, "Add a playlist ID, a valid rotation interval and at least one image (up to 256).");
+  const assets = data?.assets ?? [];
+  const captures = data?.captures ?? [];
+  if (!hasOnlyKeys(data, ["id", "rotation_interval", "assets", "captures"]) ||
+      !Object.hasOwn(data, "id") || !Object.hasOwn(data, "rotation_interval") ||
+      !ID_PATTERN.test(data.id ?? "") || !isValidPositiveDuration(data.rotation_interval) ||
+      !Array.isArray(assets) || !Array.isArray(captures) || assets.length + captures.length < 1 ||
+      assets.length + captures.length > 256) {
+    throw new HTTPError(400, "Add a playlist ID, a valid rotation interval and at least one image or webpage (up to 256 items).");
   }
 
-  for (const asset of data.assets) {
+  for (const asset of assets) {
     if (!hasExactKeys(asset, ["sha256", "size"]) || !DIGEST_PATTERN.test(asset.sha256 ?? "") ||
         !Number.isSafeInteger(asset.size) || asset.size < 1 || asset.size > MAX_ASSET_BYTES) {
       throw new HTTPError(400, "One of the images in this playlist is not valid. Please review the selection.");
@@ -335,21 +391,37 @@ async function createPlaylist(request, env, actorID) {
     }
   }
 
+  const captureTargets = [];
+  for (const capture of captures) captureTargets.push(await resolveCaptureTarget(capture, env));
+
   const revision = "r-" + crypto.randomUUID().replaceAll("-", "");
   const statements = [env.DB.prepare(
     "INSERT INTO playlists (playlist_id, revision, rotation_interval, created_at) VALUES (?, ?, ?, ?)",
   ).bind(data.id, revision, data.rotation_interval, Date.now())];
-  for (const [position, asset] of data.assets.entries()) {
+  for (const [position, asset] of assets.entries()) {
     statements.push(env.DB.prepare(
       "INSERT INTO playlist_assets (playlist_id, revision, position, sha256, size) VALUES (?, ?, ?, ?, ?)",
     ).bind(data.id, revision, position, asset.sha256, asset.size));
   }
+  for (const [index, target] of captureTargets.entries()) {
+    statements.push(env.DB.prepare(
+      "INSERT INTO playlist_capture_items (playlist_id, revision, position, capture_id) VALUES (?, ?, ?, ?)",
+    ).bind(data.id, revision, assets.length + index, target.capture_id));
+  }
   statements.push(auditStatement(env, actorID, "playlist.revision_created", "playlist", data.id, {
     revision,
-    asset_count: data.assets.length,
+    asset_count: assets.length,
+    capture_count: captureTargets.length,
   }));
   await env.DB.batch(statements);
-  return jsonResponse({ id: data.id, revision, rotation_interval: data.rotation_interval, asset_count: data.assets.length }, 201);
+  return jsonResponse({
+    id: data.id,
+    revision,
+    rotation_interval: data.rotation_interval,
+    asset_count: assets.length,
+    capture_count: captureTargets.length,
+    ...(captureTargets.length ? { captures: captureTargets } : {}),
+  }, 201);
 }
 
 async function readPlaylistRevision(playlistID, revision, env) {
@@ -360,7 +432,108 @@ async function readPlaylistRevision(playlistID, revision, env) {
   const assets = await env.DB.prepare(
     "SELECT sha256, size FROM playlist_assets WHERE playlist_id = ? AND revision = ? ORDER BY position",
   ).bind(playlistID, revision).all();
-  return jsonResponse({ ...playlist, assets: assets.results ?? [] });
+  const captures = await env.DB.prepare(
+    "SELECT p.position, t.capture_id, t.url, t.capture_interval_seconds, t.viewport_width, t.viewport_height, " +
+    "CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
+    "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size, " +
+    "t.last_success_at, t.last_error FROM playlist_capture_items p " +
+    "JOIN capture_targets t ON t.capture_id = p.capture_id " +
+    "WHERE p.playlist_id = ? AND p.revision = ? ORDER BY p.position",
+  ).bind(Date.now() - 30 * 24 * 60 * 60 * 1000, Date.now() - 30 * 24 * 60 * 60 * 1000, playlistID, revision).all();
+  const result = { ...playlist, assets: assets.results ?? [] };
+  if (captures.results?.length) {
+    result.captures = captures.results.map((capture) => ({
+      capture_id: capture.capture_id,
+      url: capture.url,
+      capture_interval_seconds: capture.capture_interval_seconds,
+      viewport: { width: capture.viewport_width, height: capture.viewport_height },
+      sha256: capture.sha256,
+      size: capture.size,
+      last_success_at: capture.last_success_at,
+      last_error: capture.last_error,
+    }));
+  }
+  return jsonResponse(result);
+}
+
+async function resolveCaptureTarget(input, env) {
+  if (hasExactKeys(input, ["capture_id"])) {
+    const existing = await env.DB.prepare(
+      "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size " +
+      "FROM capture_targets WHERE capture_id = ? AND enabled = 1",
+    ).bind(input.capture_id).first();
+    if (!existing) throw new HTTPError(409, "One of the webpage captures is no longer available.");
+    return {
+      capture_id: existing.capture_id,
+      url: existing.url,
+      capture_interval_seconds: existing.capture_interval_seconds,
+      viewport: { width: existing.viewport_width, height: existing.viewport_height },
+      placeholder_sha256: existing.placeholder_sha256,
+      placeholder_size: existing.placeholder_size,
+    };
+  }
+  if (!hasExactKeys(input, ["url", "capture_interval_seconds", "viewport"])) {
+    throw new HTTPError(400, "A webpage capture needs a URL, capture interval and viewport.");
+  }
+
+  let url;
+  let settings;
+  try {
+    url = normalizeCaptureURL(input.url);
+    settings = validateCaptureSettings(input);
+  } catch (error) {
+    throw new HTTPError(400, error.message);
+  }
+  const variantKey = await sha256Hex(JSON.stringify({
+    url,
+    viewport_width: settings.viewport_width,
+    viewport_height: settings.viewport_height,
+    wait_until: "domcontentloaded",
+  }));
+  const existing = await env.DB.prepare(
+    "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size " +
+    "FROM capture_targets WHERE variant_key = ?",
+  ).bind(variantKey).first();
+  if (existing) {
+    const interval = Math.min(existing.capture_interval_seconds, settings.capture_interval_seconds);
+    if (interval !== existing.capture_interval_seconds) {
+      await env.DB.prepare("UPDATE capture_targets SET capture_interval_seconds = ? WHERE capture_id = ?")
+        .bind(interval, existing.capture_id).run();
+    }
+    return {
+      capture_id: existing.capture_id,
+      url: existing.url,
+      capture_interval_seconds: interval,
+      viewport: { width: existing.viewport_width, height: existing.viewport_height },
+      placeholder_sha256: existing.placeholder_sha256,
+      placeholder_size: existing.placeholder_size,
+    };
+  }
+
+  const placeholder = await env.ASSETS.get("admin/capture-pending.png");
+  if (!placeholder) throw new HTTPError(503, "The built-in capture placeholder is unavailable. Publish the management assets and try again.");
+  const placeholderBytes = new Uint8Array(await placeholder.arrayBuffer());
+  const placeholderAsset = await storePngAsset(placeholderBytes, env.ASSETS);
+  const captureID = crypto.randomUUID();
+  const now = Date.now();
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO capture_targets (capture_id, variant_key, url, capture_interval_seconds, viewport_width, viewport_height, " +
+    "placeholder_sha256, placeholder_size, created_at, next_due_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).bind(captureID, variantKey, url, settings.capture_interval_seconds, settings.viewport_width, settings.viewport_height,
+    placeholderAsset.sha256, placeholderAsset.size, now, now).run();
+  const target = await env.DB.prepare(
+    "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size " +
+    "FROM capture_targets WHERE variant_key = ?",
+  ).bind(variantKey).first();
+  if (!target) throw new HTTPError(503, "The webpage capture could not be saved.");
+  return {
+    capture_id: target.capture_id,
+    url: target.url,
+    capture_interval_seconds: target.capture_interval_seconds,
+    viewport: { width: target.viewport_width, height: target.viewport_height },
+    placeholder_sha256: target.placeholder_sha256,
+    placeholder_size: target.placeholder_size,
+  };
 }
 
 async function activatePlaylist(request, env, actorID) {
@@ -407,13 +580,15 @@ async function deletePlaylist(playlistID, env, actorID) {
   const results = await env.DB.batch([
     env.DB.prepare(`DELETE FROM playlist_assets WHERE playlist_id = ? AND ${activeGuard}`)
       .bind(playlistID, playlistID),
+    env.DB.prepare(`DELETE FROM playlist_capture_items WHERE playlist_id = ? AND ${activeGuard}`)
+      .bind(playlistID, playlistID),
     env.DB.prepare(`DELETE FROM playlists WHERE playlist_id = ? AND ${activeGuard}`)
       .bind(playlistID, playlistID),
     auditStatement(env, actorID, "playlist.deleted", "playlist", playlistID, {
       revision_count: revisions.results.length,
     }, { onlyWhenPreviousChanged: true }),
   ]);
-  const deletedRevisions = results?.[1]?.meta?.changes ?? 0;
+  const deletedRevisions = results?.[2]?.meta?.changes ?? 0;
   if (!deletedRevisions) {
     const current = await env.DB.prepare(
       "SELECT playlist_id, revision FROM active_playlist WHERE singleton = 1",
@@ -506,14 +681,6 @@ async function readBytes(request, maximum) {
   return bytes;
 }
 
-function isPNG(bytes) {
-  if (bytes.byteLength < 45 || !PNG_SIGNATURE.every((value, index) => bytes[index] === value) ||
-      String.fromCharCode(...bytes.slice(12, 16)) !== "IHDR") return false;
-  const width = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(16);
-  const height = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(20);
-  return width > 0 && height > 0 && String.fromCharCode(...bytes.slice(-8, -4)) === "IEND";
-}
-
 function randomToken() {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
@@ -531,6 +698,11 @@ async function sha256BytesHex(bytes) {
 function hasExactKeys(value, keys) {
   return value !== null && typeof value === "object" && !Array.isArray(value) &&
     Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
+function hasOnlyKeys(value, keys) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).every((key) => keys.includes(key));
 }
 
 function parseMetadata(value) {

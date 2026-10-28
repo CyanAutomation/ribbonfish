@@ -3,7 +3,8 @@
 The Worker serves one globally active playlist to enrolled devices. D1 stores
 versioned playlists, the active-playlist pointer, legacy credential hashes,
 approved device public keys, pending enrollment requests, last-poll timestamps,
-and management audit events. R2 stores private content-addressed PNG assets.
+management audit events, and scheduled webpage capture state. R2 stores private
+content-addressed PNG assets shared by uploads and Browser Run screenshots.
 Devices keep their own private key; the Worker stores only its public key.
 
 ## Workers and environments
@@ -59,6 +60,11 @@ no OpenUI framework renderer is installed.
 records the migrations already represented by that schema. Production schema
 changes use `npm run migrate:management`.
 
+The management config uses a remote Browser binding so screenshot Quick Actions
+can run during local development. Queue messages and D1/R2 state remain local,
+but Browser Run requests consume the configured Cloudflare account's usage.
+The capture placeholder image is included when management assets are published.
+
 The **Cloudflare Worker validation** GitHub workflow builds the console, runs
 tests, and dry-runs both production Worker configurations. When Worker code,
 management assets, Wrangler settings, or deployment build inputs are merged
@@ -77,6 +83,18 @@ apply `npm run migrate:management` before merging code that depends on a new
 migration. The Access policy is configured on the Worker in Cloudflare and must
 stay enabled; `ADMIN_ACCESS_REQUIRED` also blocks `/admin/` and
 `/admin/api/*` if an Access identity is missing.
+
+Before the first capture deployment, create both production queues in the
+Cloudflare account:
+
+```sh
+npx wrangler queues create ribbonfish-captures --config wrangler.management.toml
+npx wrangler queues create ribbonfish-capture-dead-letter --config wrangler.management.toml
+```
+
+Then apply migration `0005_webpage_capture.sql` with `npm run migrate:management`
+before merging. This implementation has not been deployed to production; enable
+capture only after the Browser Run binding and account quotas are available.
 
 ## Management API
 
@@ -98,16 +116,39 @@ in Wrangler's local mode.
 | `POST /admin/api/devices/{device_id}/rotate` | Replace a legacy device token and return it once; key-based devices use a new approval to change identity |
 | `POST /admin/api/assets` | Upload one PNG body with `Content-Type: image/png`; returns its SHA-256 and byte size |
 | `GET /admin/api/assets/{sha256}` | Preview a PNG that is referenced by a playlist revision |
-| `POST /admin/api/playlists` | Stage an immutable playlist revision; body includes `id`, `rotation_interval`, and ordered `{sha256,size}` asset references |
-| `GET /admin/api/playlists/{playlist_id}/{revision}` | Read a revision and its ordered image references for editing |
+| `POST /admin/api/playlists` | Stage an immutable playlist revision with PNG assets and/or webpage captures |
+| `POST /admin/api/captures/{capture_id}/run` | Queue a capture now; normal queue, rate, and budget controls still apply |
+| `GET /admin/api/playlists/{playlist_id}/{revision}` | Read a revision and its ordered image and capture references for editing |
 | `DELETE /admin/api/playlists/{playlist_id}` | Delete all revisions of an inactive playlist and its D1 image references; the active playlist is protected |
 | `PUT /admin/api/active-playlist` | Activate or roll back to an existing revision; body: `{"playlist_id":"operations","revision":"r-…"}` |
 | `GET /healthz` | Minimal readiness check; returns 503 if the active playlist or any referenced R2 object is missing |
 
 Playlist staging verifies every referenced object exists in R2 with the declared
-size. Activation updates the single global pointer only after a revision exists.
+size. A webpage slot references a reusable URL/viewport capture target and
+starts with a bundled holding PNG. The first scheduled capture runs after the
+playlist is activated. The Worker only schedules targets referenced by the
+active playlist. Capture settings accept public HTTPS URLs without embedded
+credentials, intervals from 60 seconds to 30 days, and viewports up to
+3840×2160. Authenticated pages and browser interaction are not supported.
+
+Activation updates the single global pointer only after a revision exists.
 Editing a revision creates a new immutable revision. You can keep or remove its
-existing images and add uploaded PNGs; the source revision stays unchanged.
+existing images and webpage items, then add uploads or URLs; the source
+revision stays unchanged. Uploads, holding images, and screenshots share the
+same PNG validation, SHA-256 naming, size limit, and R2 storage helper. When a
+capture succeeds, the playlist slot points at the new digest, so devices receive
+a changed playlist ETag and download the screenshot through their existing
+asset route. Failed captures keep displaying the last successful image. Each
+target retains at most 10 images for up to 30 days, then returns to its holding
+image.
+
+Cron runs each minute and queues due captures from D1. The consumer uses one
+message and one concurrent capture, coalesces each target to one open job,
+caps pending jobs at 100, spaces Browser Run requests by 10 seconds, and applies
+a daily browser-time budget (9 minutes by default, reserving 45 seconds for a
+capture when Browser Run usage is unavailable). Transient errors retry at
+60 and 180 seconds; budget/rate deferrals wait for a later Cron tick. Check
+current account Browser Run quotas before enabling production capture.
 Deleting a playlist removes its revisions and image references from D1, while
 content-addressed PNG objects remain in R2 for reuse. The UI uses text-only DOM
 rendering and applies a restrictive content security policy. The approval UI
