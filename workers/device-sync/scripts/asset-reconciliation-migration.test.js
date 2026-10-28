@@ -32,6 +32,31 @@ test("asset reconciliation migration is repeatable, backfills current references
       { sha256: "c".repeat(64), size: 13, state: "live" },
     ]);
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM asset_reconciliation_state").get().count, 1);
+    const leaseUntil = Date.now() + 60_000;
+    database.prepare(
+      "INSERT INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at) " +
+      "VALUES (?, 17, 'pending', ?, ?, ?)",
+    ).run("7".repeat(64), leaseUntil, leaseUntil, Date.now());
+    database.prepare("INSERT INTO playlist_assets VALUES ('p', 'r2', 1, ?, 17)").run("7".repeat(64));
+    const pendingAsset = database.prepare(
+      "SELECT state, expires_at, write_lease_until FROM managed_assets WHERE sha256 = ?",
+    ).get("7".repeat(64));
+    assert.deepEqual({ ...pendingAsset }, {
+      state: "pending",
+      expires_at: leaseUntil,
+      write_lease_until: leaseUntil,
+    }, "adding a reference must preserve an in-flight upload lease");
+
+    database.prepare(
+      "INSERT INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at) " +
+      "VALUES (?, 18, 'staged', ?, NULL, ?)",
+    ).run("8".repeat(64), leaseUntil, Date.now());
+    database.prepare("INSERT INTO playlist_assets VALUES ('p', 'r2', 2, ?, 18)").run("8".repeat(64));
+    assert.deepEqual(
+      { ...database.prepare("SELECT state, expires_at, write_lease_until FROM managed_assets WHERE sha256 = ?").get("8".repeat(64)) },
+      { state: "live", expires_at: null, write_lease_until: null },
+      "attaching a staged asset promotes it to live",
+    );
     database.prepare("INSERT INTO playlist_assets VALUES ('p', 'r2', 0, ?, 14)").run("d".repeat(64));
     assert.deepEqual(
       { ...database.prepare("SELECT size, state FROM managed_assets WHERE sha256 = ?").get("d".repeat(64)) },
