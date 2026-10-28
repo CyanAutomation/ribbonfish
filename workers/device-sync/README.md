@@ -59,9 +59,10 @@ no OpenUI framework renderer is installed.
 `init:local` is only for a fresh local database. It applies `schema.sql` and
 records the migrations already represented by that schema. Production schema
 changes use `npm run migrate:management`.
-Migration `0006_asset_reconciliation.sql` adds the asset registry, sweep cursors,
-integrity issue records, and reference-write guards. Apply it with
-`npm run migrate:management` before deploying code that uses asset reconciliation.
+Migrations `0006_asset_reconciliation.sql` and `0007_capture_validators.sql` add
+the asset registry and sweep cursors, then nullable source-validator metadata.
+Apply migrations with `npm run migrate:management` before deploying code that
+uses those features.
 
 The management config uses a remote Browser binding so screenshot Quick Actions
 can run during local development. Queue messages and D1/R2 state remain local,
@@ -95,9 +96,9 @@ npx wrangler queues create ribbonfish-captures --config wrangler.management.toml
 npx wrangler queues create ribbonfish-capture-dead-letter --config wrangler.management.toml
 ```
 
-Then apply migration `0005_webpage_capture.sql` with `npm run migrate:management`
-before merging capture code. Apply `0006_asset_reconciliation.sql` before
-deploying asset reconciliation. This implementation has not been deployed to
+Then apply migrations `0005_webpage_capture.sql`, `0006_asset_reconciliation.sql`,
+and `0007_capture_validators.sql` with `npm run migrate:management` before
+deploying the corresponding code. This implementation has not been deployed to
 production; enable capture only after the Browser Run binding and account quotas
 are available.
 
@@ -147,10 +148,14 @@ asset route. Failed captures keep displaying the last successful image. Each
 target retains at most 10 images for up to 30 days, then returns to its holding
 image.
 
-Cron runs each minute and queues due captures from D1. Each scheduled pass also
-prunes capture history and advances a leased, cursor-based asset reconciliation:
-it checks up to 40 R2 objects and 40 distinct D1 references, then resumes from
-the saved cursors on the next pass until both inventories are scanned. It checks
+Cron runs each minute and queues due captures from D1. Leased, cursor-based asset
+reconciliation checks up to 40 R2 objects and 40 distinct D1 references per
+pass, then resumes from the saved cursors on the next minute until both
+inventories are scanned. After a complete scan it waits 15 minutes before
+starting another by default (`ASSET_RECONCILIATION_INTERVAL_SECONDS`); history
+cleanup runs when a scan completes. Set the variable to `0` to scan continuously.
+This reduces repeated full-inventory work when the bucket is small while keeping
+large scans moving one bounded page per minute. It checks
 all playlist revisions plus holding/current images and capture history. Untracked
 legacy objects get a 24-hour grace period; unattached uploads are staged for up
 to seven days. Missing current screenshots are cleared, a missing holding PNG is
@@ -184,6 +189,26 @@ Device sync remains:
   source IP as an abuse-control measure.
 - `GET /v2/playlist` returns the active playlist with conditional ETags.
 - `GET /v2/assets/{sha256}` returns an asset only when it is in the active playlist.
+
+Playlist polling updates device `last_seen_at` at most once every five minutes.
+For static playlists, a matching ETag is checked from the active playlist row
+and capture-slot existence before loading the asset lists; dynamic capture
+playlists still resolve their current screenshot state before returning `304`.
+
+Capture targets can avoid Browser Run when a source has a validator that is known
+to represent the rendered screenshot. Add exact hostnames to the comma-separated
+`CAPTURE_VALIDATOR_HOSTS` Worker variable to opt those sources in. The Worker
+sends a bounded `HEAD` request with saved ETag/Last-Modified validators and skips
+Browser Run only on an unchanged response while the current R2 image is present.
+Unapproved hosts, redirects, errors, missing validators, and changed validators
+fall back to a screenshot. Only opt in sources whose owners guarantee those
+headers track screenshot changes; this is disabled by default.
+
+The management UI uses private browser caching: HTML is fresh for 60 seconds,
+JavaScript and CSS for five minutes, and the holding image for one hour. Each
+asset has an R2 ETag; stale browser entries can revalidate with a metadata-only
+R2 `HEAD` and receive `304` without reading the object body. API responses remain
+`no-store`, and private assets are not shared through a public edge cache.
 
 New devices enroll automatically when `RIBBONFISH_SYNC_URL` and
 `RIBBONFISH_DEVICE_ID` are configured and no legacy device token exists. The

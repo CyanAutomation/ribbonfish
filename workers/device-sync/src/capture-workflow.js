@@ -1,4 +1,4 @@
-import { captureScreenshot } from "./capture.js";
+import { captureScreenshot, normalizeCaptureURL } from "./capture.js";
 import { ASSET_RECONCILIATION_PAGE_SIZE, deleteUnreferencedAssets } from "./asset-maintenance.js";
 import { markAssetLiveStatement } from "./asset-registry.js";
 
@@ -11,6 +11,7 @@ const DEFAULT_DAILY_BUDGET_MS = 540_000;
 const DEFAULT_BUDGET_RESERVE_MS = 45_000;
 const DEFAULT_REQUEST_GAP_MS = 10_000;
 const MAX_PENDING_CAPTURE_JOBS = 100;
+const CAPTURE_VALIDATOR_TIMEOUT_MS = 5_000;
 
 export async function enqueueCapture(captureID, env, { now = Date.now(), scheduled = false } = {}) {
   if (!env.CAPTURE_QUEUE || typeof env.CAPTURE_QUEUE.send !== "function") {
@@ -91,7 +92,8 @@ async function processCaptureMessage(message, env, now) {
   }
   const job = await env.DB.prepare(
     "SELECT j.job_id, j.capture_id, j.status, j.attempts, j.lease_until, " +
-    "t.url, t.capture_interval_seconds, t.viewport_width, t.viewport_height, t.enabled " +
+    "t.url, t.capture_interval_seconds, t.viewport_width, t.viewport_height, t.enabled, " +
+    "t.current_sha256, t.current_size, t.validator_etag, t.validator_last_modified " +
     "FROM capture_jobs j JOIN capture_targets t ON t.capture_id = j.capture_id WHERE j.job_id = ?",
   ).bind(jobID).first();
   if (!job || ["succeeded", "failed", "deferred"].includes(job.status)) {
@@ -108,19 +110,25 @@ async function processCaptureMessage(message, env, now) {
     return;
   }
 
-  const deferral = await captureDeferral(env, now);
-  if (deferral) {
-    await deferCapture(env, jobID, job.capture_id, deferral.at, deferral.reason, now);
-    message.ack();
-    return;
-  }
-
   const claimed = await env.DB.prepare(
     "UPDATE capture_jobs SET status = 'running', attempts = attempts + 1, started_at = ?, lease_until = ?, error = NULL " +
     "WHERE job_id = ? AND (status = 'queued' OR (status = 'running' AND lease_until <= ?))",
   ).bind(now, now + RUNNING_LEASE_MS, jobID, now).run();
   if (claimed.meta?.changes !== 1) {
     message.retry({ delaySeconds: 60 });
+    return;
+  }
+
+  const validator = await probeCaptureValidator(job, env);
+  if (validator?.unchanged) {
+    await completeUnchangedCapture(env, job, validator, now);
+    message.ack();
+    return;
+  }
+  const deferral = await captureDeferral(env, now);
+  if (deferral) {
+    await deferCapture(env, jobID, job.capture_id, deferral.at, deferral.reason, now);
+    message.ack();
     return;
   }
   await markBrowserStart(env, now);
@@ -148,14 +156,70 @@ async function processCaptureMessage(message, env, now) {
     ).bind(job.capture_id, jobID, result.sha256, result.size, now, usedMs),
     env.DB.prepare(
       "UPDATE capture_targets SET current_sha256 = ?, current_size = ?, last_attempt_at = ?, last_success_at = ?, " +
-      "last_error = NULL, failure_count = 0, next_due_at = ? WHERE capture_id = ?",
-    ).bind(result.sha256, result.size, now, now, now + job.capture_interval_seconds * 1000, job.capture_id),
+      "last_error = NULL, failure_count = 0, next_due_at = ?, validator_etag = ?, validator_last_modified = ? WHERE capture_id = ?",
+    ).bind(result.sha256, result.size, now, now, now + job.capture_interval_seconds * 1000,
+      validator ? validator.etag : job.validator_etag, validator ? validator.lastModified : job.validator_last_modified, job.capture_id),
     env.DB.prepare(
       "UPDATE capture_jobs SET status = 'succeeded', finished_at = ?, lease_until = NULL, error = NULL WHERE job_id = ?",
     ).bind(now, jobID),
   ]);
   await pruneCaptureHistory(env, job.capture_id, now);
   message.ack();
+}
+
+export async function probeCaptureValidator(target, env, fetcher = globalThis.fetch) {
+  const approvedHosts = new Set(String(env.CAPTURE_VALIDATOR_HOSTS ?? "")
+    .split(",").map((host) => host.trim().toLowerCase()).filter(Boolean));
+  let url;
+  try { url = new URL(normalizeCaptureURL(target.url)); } catch { return null; }
+  if (!approvedHosts.has(url.hostname)) return null;
+
+  const headers = new Headers();
+  if (target.validator_etag) headers.set("If-None-Match", target.validator_etag);
+  if (target.validator_last_modified) headers.set("If-Modified-Since", target.validator_last_modified);
+  try {
+    const response = await fetcher(url, {
+      method: "HEAD",
+      headers,
+      redirect: "manual",
+      signal: AbortSignal.timeout(CAPTURE_VALIDATOR_TIMEOUT_MS),
+    });
+    const etag = response.headers.get("ETag");
+    const lastModified = response.headers.get("Last-Modified");
+    const hasStoredValidator = Boolean(target.validator_etag || target.validator_last_modified);
+    let unchanged = response.status === 304 && hasStoredValidator;
+    if (response.status >= 200 && response.status < 300 && hasStoredValidator) {
+      const hasComparable = Boolean((target.validator_etag && etag) || (target.validator_last_modified && lastModified));
+      unchanged = hasComparable &&
+        (!target.validator_etag || target.validator_etag === etag) &&
+        (!target.validator_last_modified || target.validator_last_modified === lastModified);
+    }
+    if (unchanged && target.current_sha256 && target.current_size > 0) {
+      const object = await env.ASSETS.head(`assets/${target.current_sha256}`);
+      unchanged = object?.size === target.current_size;
+    } else {
+      unchanged = false;
+    }
+    return {
+      unchanged,
+      etag: response.status === 304 ? etag ?? target.validator_etag : etag,
+      lastModified: response.status === 304 ? lastModified ?? target.validator_last_modified : lastModified,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function completeUnchangedCapture(env, job, validator, now) {
+  await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE capture_targets SET last_attempt_at = ?, last_success_at = ?, last_error = NULL, failure_count = 0, " +
+      "next_due_at = ?, validator_etag = ?, validator_last_modified = ? WHERE capture_id = ?",
+    ).bind(now, now, now + job.capture_interval_seconds * 1000, validator.etag, validator.lastModified, job.capture_id),
+    env.DB.prepare(
+      "UPDATE capture_jobs SET status = 'succeeded', finished_at = ?, lease_until = NULL, error = NULL WHERE job_id = ?",
+    ).bind(now, job.job_id),
+  ]);
 }
 
 async function captureDeferral(env, now) {

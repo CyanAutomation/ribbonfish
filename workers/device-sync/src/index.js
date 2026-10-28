@@ -6,6 +6,7 @@ import { reconcileAssets } from "./asset-maintenance.js";
 const MAX_ENROLLMENT_BYTES = 4 << 10;
 const MAX_ASSET_BYTES = 32 << 20;
 const ENROLLMENT_REQUEST_TTL_MS = 24 * 60 * 60 * 1000;
+const LAST_SEEN_WRITE_INTERVAL_MS = 5 * 60 * 1000;
 const SIGNATURE_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
@@ -36,11 +37,11 @@ export async function queueHandler(batch, env) {
 
 export async function scheduledHandler(controller, env) {
   const now = Number.isSafeInteger(controller?.scheduledTime) ? controller.scheduledTime : Date.now();
-  const [dispatch, cleanup] = await Promise.all([
+  const [dispatch, assets] = await Promise.all([
     dispatchDueCaptures(env, now),
-    cleanupExpiredCaptures(env, now),
+    reconcileAssets(env, now),
   ]);
-  const assets = await reconcileAssets(env, now);
+  const cleanup = assets.cycle_completed ? await cleanupExpiredCaptures(env, now) : 0;
   return { ...dispatch, cleaned_targets: cleanup, asset_reconciliation: assets };
 }
 
@@ -71,7 +72,8 @@ export async function fetchHandler(request, env, ctx) {
       const deviceID = request.headers.get("X-Ribbonfish-Device-ID") ?? "";
       await authenticate(request, env, deviceID);
       await updateLastSeen(env, deviceID, ctx);
-      const { playlist, etag } = await readActivePlaylist(env);
+      const { playlist, etag, notModified } = await readActivePlaylist(env, request.headers.get("If-None-Match"));
+      if (notModified) return new Response(null, { status: 304, headers: privateHeaders({ ETag: etag }) });
       if (matchesETag(request.headers.get("If-None-Match"), etag)) {
         return new Response(null, { status: 304, headers: privateHeaders({ ETag: etag }) });
       }
@@ -124,9 +126,11 @@ export async function fetchHandler(request, env, ctx) {
 }
 
 function updateLastSeen(env, deviceID, ctx) {
+  const now = Date.now();
   const update = Promise.resolve()
-    .then(() => env.DB.prepare("UPDATE devices SET last_seen_at = ? WHERE device_id = ? AND enabled = 1")
-      .bind(Date.now(), deviceID).run())
+    .then(() => env.DB.prepare(
+      "UPDATE devices SET last_seen_at = ? WHERE device_id = ? AND enabled = 1 AND (last_seen_at IS NULL OR last_seen_at <= ?)",
+    ).bind(now, deviceID, now - LAST_SEEN_WRITE_INTERVAL_MS).run())
     .catch(() => {});
   if (ctx?.waitUntil) {
     ctx.waitUntil(update);
@@ -299,17 +303,21 @@ async function authenticate(request, env, deviceID) {
   return device;
 }
 
-async function readActivePlaylist(env) {
+async function readActivePlaylist(env, ifNoneMatch = null) {
   const active = await env.DB.prepare(
-    "SELECT playlist_id, revision FROM active_playlist WHERE singleton = 1",
+    "SELECT ap.playlist_id, ap.revision, p.rotation_interval, " +
+    "EXISTS (SELECT 1 FROM playlist_capture_items pci WHERE pci.playlist_id = ap.playlist_id AND pci.revision = ap.revision) AS has_captures " +
+    "FROM active_playlist ap JOIN playlists p ON p.playlist_id = ap.playlist_id AND p.revision = ap.revision " +
+    "WHERE ap.singleton = 1",
   ).first();
   if (!active || !ID_PATTERN.test(active.playlist_id ?? "") || !ID_PATTERN.test(active.revision ?? "")) {
     throw new HTTPError(503, "no active playlist is configured");
   }
-  const playlistRow = await env.DB.prepare(
-    "SELECT playlist_id, revision, rotation_interval FROM playlists WHERE playlist_id = ? AND revision = ?",
-  ).bind(active.playlist_id, active.revision).first();
-  if (!playlistRow) throw new HTTPError(502, "active playlist is missing");
+  const playlistRow = active;
+  const staticETag = `"${playlistRow.revision}"`;
+  if (!Number(active.has_captures) && matchesETag(ifNoneMatch, staticETag)) {
+    return { etag: staticETag, notModified: true };
+  }
   const [assetResult, captureResult] = await Promise.all([
     env.DB.prepare(
       "SELECT position, sha256, size FROM playlist_assets WHERE playlist_id = ? AND revision = ? ORDER BY position",
