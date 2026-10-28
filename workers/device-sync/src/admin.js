@@ -8,10 +8,10 @@ const MAX_JSON_BYTES = 64 << 10;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
 const ADMIN_FILES = new Map([
-  ["/admin/index.html", { key: "admin/index.html", contentType: "text/html; charset=utf-8" }],
-  ["/admin/app.js", { key: "admin/app.js", contentType: "text/javascript; charset=utf-8" }],
-  ["/admin/styles.css", { key: "admin/styles.css", contentType: "text/css; charset=utf-8" }],
-  ["/admin/capture-pending.png", { key: "admin/capture-pending.png", contentType: "image/png" }],
+  ["/admin/index.html", { key: "admin/index.html", contentType: "text/html; charset=utf-8", maxAge: 60 }],
+  ["/admin/app.js", { key: "admin/app.js", contentType: "text/javascript; charset=utf-8", maxAge: 300 }],
+  ["/admin/styles.css", { key: "admin/styles.css", contentType: "text/css; charset=utf-8", maxAge: 300 }],
+  ["/admin/capture-pending.png", { key: "admin/capture-pending.png", contentType: "image/png", maxAge: 3600 }],
 ]);
 
 class HTTPError extends Error {
@@ -43,12 +43,12 @@ export async function handleAdminRequest(request, env, ctx) {
   try {
     if (url.pathname === "/admin" || url.pathname === "/admin/") {
       if (request.method !== "GET") return methodNotAllowed("GET");
-      return await fetchAdminAsset(env, "/admin/index.html");
+      return await fetchAdminAsset(request, env, "/admin/index.html");
     }
 
     if (!url.pathname.startsWith("/admin/api/")) {
       if (request.method !== "GET") return methodNotAllowed("GET");
-      return await fetchAdminAsset(env, url.pathname);
+      return await fetchAdminAsset(request, env, url.pathname);
     }
 
     if (url.pathname === "/admin/api/overview") {
@@ -141,20 +141,39 @@ export async function handleAdminRequest(request, env, ctx) {
   }
 }
 
-async function fetchAdminAsset(env, pathname) {
+async function fetchAdminAsset(request, env, pathname) {
   const file = ADMIN_FILES.get(pathname);
   if (!file) return new Response("not found", { status: 404 });
+  const cacheControl = `private, max-age=${file.maxAge}, must-revalidate`;
+  if (request.headers.has("If-None-Match")) {
+    const metadata = await env.ASSETS.head(file.key);
+    if (!metadata) return new Response("management asset not found", { status: 404 });
+    if (metadata.httpEtag && matchesAssetETag(request.headers.get("If-None-Match"), metadata.httpEtag)) {
+      return new Response(null, { status: 304, headers: adminAssetHeaders(file, cacheControl, metadata.httpEtag) });
+    }
+  }
   const object = await env.ASSETS.get(file.key);
   if (!object) return new Response("management asset not found", { status: 404 });
-  const headers = new Headers();
-  headers.set("Content-Type", file.contentType);
+  const headers = adminAssetHeaders(file, cacheControl, object.httpEtag);
   headers.set("Content-Length", String(object.size));
-  headers.set("Cache-Control", "no-store");
-  headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
-  headers.set("Referrer-Policy", "no-referrer");
-  headers.set("X-Content-Type-Options", "nosniff");
-  headers.set("X-Frame-Options", "DENY");
   return new Response(object.body, { status: 200, headers });
+}
+
+function adminAssetHeaders(file, cacheControl, etag = null) {
+  const headers = new Headers({
+    "Content-Type": file.contentType,
+    "Cache-Control": cacheControl,
+    "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+  });
+  if (etag) headers.set("ETag", etag);
+  return headers;
+}
+
+function matchesAssetETag(header, etag) {
+  return (header ?? "").split(",").map((value) => value.trim()).some((value) => value === "*" || value === etag);
 }
 
 async function readOverview(env) {

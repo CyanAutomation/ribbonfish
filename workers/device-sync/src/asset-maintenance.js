@@ -4,6 +4,7 @@ import { storePngAsset } from "./asset-store.js";
 export const ASSET_RECONCILIATION_PAGE_SIZE = 40;
 export const LEGACY_ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
 const RECONCILIATION_LEASE_MS = 55_000;
+const DEFAULT_RECONCILIATION_INTERVAL_MS = 15 * 60 * 1000;
 const ASSET_KEY_PATTERN = /^assets\/([a-f0-9]{64})$/;
 const MAX_MISSING_REFERENCES_PER_PASS = 3;
 
@@ -86,8 +87,16 @@ export async function reconcileAssets(env, now = Date.now()) {
 
   try {
     const state = await env.DB.prepare(
-      "SELECT r2_cursor, reference_cursor FROM asset_reconciliation_state WHERE singleton = 1",
+      "SELECT r2_cursor, reference_cursor, last_completed_at FROM asset_reconciliation_state WHERE singleton = 1",
     ).first();
+    const configuredSeconds = Number(env.ASSET_RECONCILIATION_INTERVAL_SECONDS);
+    const intervalMs = Number.isSafeInteger(configuredSeconds) && configuredSeconds >= 0
+      ? configuredSeconds * 1000
+      : DEFAULT_RECONCILIATION_INTERVAL_MS;
+    const scanInProgress = state.r2_cursor !== null || state.reference_cursor !== null;
+    if (!scanInProgress && state.last_completed_at !== null && intervalMs > 0 && now - state.last_completed_at < intervalMs) {
+      return { skipped: true, deleted: 0, repaired: 0, issues: 0, cycle_completed: false };
+    }
     const pageSize = boundedPageSize(env.ASSET_RECONCILIATION_PAGE_SIZE);
     const orphanRecordsClaimed = await claimOrphanedAssetRecords(env.DB, pageSize, now);
     let deleted = await retryClaimedDeletions(env, pageSize, now);
@@ -128,6 +137,7 @@ export async function reconcileAssets(env, now = Date.now()) {
       orphan_records_claimed: orphanRecordsClaimed,
       repaired: referenceResult.repaired,
       issues: referenceResult.issues,
+      cycle_completed: complete,
       r2_truncated: listed.truncated,
       references_truncated: referencesTruncated,
     };

@@ -22,6 +22,9 @@ class EnrollmentDatabase {
       async first() {
         if (sql.includes("FROM devices WHERE device_id")) return database.devices.get(values[0]) ?? null;
         if (sql.includes("FROM enrollment_requests WHERE request_id")) return database.requests.get(values[0]) ?? null;
+        if (sql.includes("FROM active_playlist ap")) {
+          return { ...database.lastActivePlaylist, rotation_interval: "15s", has_captures: 0 };
+        }
         if (sql.includes("FROM active_playlist")) return database.lastActivePlaylist;
         if (sql.includes("FROM playlists WHERE playlist_id")) {
           return { playlist_id: values[0], revision: values[1], rotation_interval: "15s" };
