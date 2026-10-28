@@ -4,11 +4,50 @@ const AUDIT_EVENT_LABELS = {
   "device.disabled": "Disabled device",
   "device.enabled": "Enabled device",
   "enrollment_code.created": "Created enrollment code",
-  "playlist.activated": "Activated playlist revision",
+  "playlist.activated": "Activated playlist version",
   "playlist.deleted": "Deleted playlist",
-  "playlist.revision_created": "Staged playlist revision",
-  "development.bootstrap": "Initial playlist seeded",
+  "playlist.revision_created": "Created playlist version",
+  "development.bootstrap": "Created initial playlist",
 };
+
+export function formatPlaylistState(active) {
+  return active ? "Active" : "Ready to activate";
+}
+
+export function parsePageURLs(value) {
+  return String(value ?? "")
+    .split(/\r?\n/)
+    .map((url) => url.trim())
+    .filter(Boolean);
+}
+
+export function hasPageURLs(value) {
+  return parsePageURLs(value).length > 0;
+}
+
+export function formatScreenshotStatus(jobStatus, lastError, lastSuccessAt) {
+  if (jobStatus === "running") return { label: "Screenshot in progress", tone: "warning" };
+  if (jobStatus === "queued") return { label: "Screenshot queued", tone: "warning" };
+  if (lastError) return { label: "Needs attention", tone: "warning" };
+  if (lastSuccessAt) return { label: "Screenshot ready", tone: "success" };
+  return { label: "Waiting for first screenshot", tone: "neutral" };
+}
+
+export function formatCaptureInterval(seconds) {
+  if (seconds >= 86400 && seconds % 86400 === 0) {
+    const days = seconds / 86400;
+    return `Every ${days} day${days === 1 ? "" : "s"}`;
+  }
+  if (seconds >= 3600 && seconds % 3600 === 0) {
+    const hours = seconds / 3600;
+    return `Every ${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  if (seconds >= 60 && seconds % 60 === 0) {
+    const minutes = seconds / 60;
+    return `Every ${minutes === 1 ? "minute" : `${minutes} minutes`}`;
+  }
+  return `Every ${seconds} second${seconds === 1 ? "" : "s"}`;
+}
 
 export function formatTimestamp(value, locale) {
   if (value === null || value === undefined || value === "") return "Never seen";
@@ -94,7 +133,9 @@ function formatMetadataValue(key, value, locale) {
 
 function humanizeMetadataKey(key) {
   const words = String(key)
+    .replace(/\basset_count\b/gi, "image count")
     .replace(/_/g, " ")
+    .replace(/\brevision\b/gi, "version")
     .replace(/\bsha256\b/gi, "SHA-256")
     .replace(/\bid\b/gi, "ID")
     .replace(/\br2\b/gi, "R2");

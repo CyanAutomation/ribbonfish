@@ -8,11 +8,16 @@ import {
   compactIdentifier,
   confirmBeforeAction,
   formatActorLabel,
+  formatCaptureInterval,
   formatAuditDetails,
   formatAuditEventType,
   formatDeviceEnabledMessage,
   formatEnvironmentNotice,
+  formatPlaylistState,
+  formatScreenshotStatus,
   formatTimestamp,
+  hasPageURLs,
+  parsePageURLs,
 } from "./ui-utils.js";
 
 const message = document.querySelector("#message");
@@ -91,14 +96,7 @@ function table(caption, headers, rows, emptyState) {
     const row = node("tr", undefined, "empty-row");
     const cell = node("td", undefined, "empty-state-cell");
     cell.colSpan = headers.length;
-    const content = node("div", undefined, "empty-state");
-    content.append(node("p", emptyState.message));
-    if (emptyState.actionLabel && emptyState.href) {
-      const action = node("a", emptyState.actionLabel, "button button--secondary button--small");
-      action.href = emptyState.href;
-      content.append(action);
-    }
-    cell.append(content);
+    cell.append(renderEmptyState(emptyState.message, emptyState.actionLabel, emptyState.href, true));
     row.append(cell);
     body.append(row);
   }
@@ -112,6 +110,86 @@ function cell(label, value, className) {
   if (value instanceof Node) element.append(value);
   else element.textContent = value === null || value === undefined ? "—" : String(value);
   return element;
+}
+
+function renderEmptyState(messageTextValue, actionLabel, href, compact = false) {
+  const card = node("div", undefined, "empty-state");
+  card.append(node("p", messageTextValue));
+  if (actionLabel && href) {
+    const action = node("a", actionLabel, `button button--secondary${compact ? " button--small" : ""}`);
+    action.href = href;
+    card.append(action);
+  }
+  return card;
+}
+
+function renderResponsiveRecords({
+  tableSelector,
+  cardsSelector,
+  caption,
+  records,
+  fields,
+  emptyState,
+  cardTitleField,
+  cardStatusField,
+  cardActionField = "Actions",
+  cardClass = "data-card",
+}) {
+  const valuesFor = (record, layout) => fields.map((field) => ({
+    ...field,
+    value: field.render(record, layout),
+  }));
+  const rows = records.map((record) => {
+    const row = node("tr");
+    valuesFor(record, "table").forEach(({ label, value }) => row.append(cell(label, value)));
+    return row;
+  });
+  document.querySelector(tableSelector).replaceChildren(table(
+    caption,
+    fields.map(({ label }) => label),
+    rows,
+    emptyState,
+  ));
+
+  const cards = document.querySelector(cardsSelector);
+  cards.replaceChildren();
+  if (!records.length) {
+    cards.append(emptyCard(emptyState.message, emptyState.actionLabel, emptyState.href));
+    return;
+  }
+
+  records.forEach((record) => {
+    const recordFields = valuesFor(record, "card");
+    const card = node("article", undefined, cardClass);
+    const header = node("div", undefined, "data-card__header");
+    const title = recordFields.find(({ label }) => label === cardTitleField);
+    const titleHeading = node("h3");
+    if (title?.value instanceof Node) titleHeading.append(title.value);
+    else titleHeading.textContent = title?.value == null ? "—" : String(title.value);
+    header.append(titleHeading);
+    const status = recordFields.find(({ label }) => label === cardStatusField);
+    if (status) header.append(status.value);
+    card.append(header);
+
+    const cardAction = recordFields.find(({ label }) => label === cardActionField);
+    const detailsFields = recordFields.filter(({ label }) =>
+      label !== cardTitleField && label !== cardStatusField && label !== cardActionField);
+    if (detailsFields.length) {
+      const details = node("dl");
+      detailsFields.forEach(({ label, value }) => {
+        const field = node("div");
+        field.append(node("dt", label));
+        const content = node("dd");
+        if (value instanceof Node) content.append(value);
+        else content.textContent = value == null ? "—" : String(value);
+        field.append(content);
+        details.append(field);
+      });
+      card.append(details);
+    }
+    if (cardAction) card.append(cardAction.value);
+    cards.append(card);
+  });
 }
 
 function identifier(value, label) {
@@ -161,20 +239,32 @@ function playlistForm() {
   return document.querySelector("#playlist-form");
 }
 
+function playlistVersionKey(playlist) {
+  return JSON.stringify([playlist.playlist_id, playlist.revision]);
+}
+
+function syncScreenshotSettings() {
+  const settings = document.querySelector("#screenshot-settings");
+  const visible = hasPageURLs(document.querySelector('[name="capture_urls"]').value);
+  settings.hidden = !visible;
+  settings.disabled = !visible;
+}
+
 function resetPlaylistEditor() {
   const form = playlistForm();
   playlistEditSource = null;
-  form.querySelector("h3").textContent = "Create a playlist revision";
+  form.querySelector("h3").textContent = "Create a playlist version";
   form.querySelector("#playlist-form-help").textContent =
-    "Add PNG images, webpage URLs, or both. Uploads and captures use the same content-addressed image store. Saved revisions stay available until you delete their playlist.";
+    "Add PNG images or page URLs. Images and screenshots can be reused across playlists. Saved versions stay available until you delete the playlist.";
   form.querySelector("[name=assets]").required = false;
-  form.querySelector("#playlist-submit").textContent = "Save playlist revision";
+  form.querySelector("#playlist-submit").textContent = "Save playlist version";
   form.querySelector("#cancel-playlist-edit").hidden = true;
   for (const selector of ["#playlist-current-assets", "#playlist-current-captures"]) {
     const selection = document.querySelector(selector);
     selection.querySelector(".asset-selection__list").replaceChildren();
     selection.hidden = true;
   }
+  syncScreenshotSettings();
 }
 
 async function startPlaylistEdit(playlist) {
@@ -188,11 +278,11 @@ async function startPlaylistEdit(playlist) {
     playlistEditSource = { playlist_id: detail.playlist_id, revision: detail.revision };
     form.elements.namedItem("id").value = detail.playlist_id;
     form.elements.namedItem("rotation_interval").value = detail.rotation_interval;
-    form.querySelector("h3").textContent = "Edit playlist as a new revision";
+    form.querySelector("h3").textContent = "Edit playlist as a new version";
     form.querySelector("#playlist-form-help").textContent =
-      `Editing ${detail.playlist_id} from ${compactIdentifier(detail.revision)}. Keep the images and webpages you want, add PNGs or URLs, then save a new revision. This revision stays unchanged.`;
+      `Editing ${detail.playlist_id}, version ${compactIdentifier(detail.revision)}. Keep the images and page URLs you want, then save a new version. Saved versions do not change.`;
     form.querySelector("[name=assets]").required = false;
-    form.querySelector("#playlist-submit").textContent = "Save new revision";
+    form.querySelector("#playlist-submit").textContent = "Save as new version";
     form.querySelector("#cancel-playlist-edit").hidden = false;
     const selection = document.querySelector("#playlist-current-assets");
     const assetList = selection.querySelector(".asset-selection__list");
@@ -230,7 +320,7 @@ async function startPlaylistEdit(playlist) {
       preview.loading = "lazy";
       preview.decoding = "async";
       preview.addEventListener("error", () => { preview.hidden = true; }, { once: true });
-      const caption = node("span", `Keep webpage ${index + 1} · ${capture.url}`);
+      const caption = node("span", `Keep page ${index + 1} · ${capture.url}`);
       label.append(checkbox, preview, caption);
       captureList.append(label);
     });
@@ -243,23 +333,23 @@ async function startPlaylistEdit(playlist) {
   }
 }
 
-function playlistActionButtons(playlist, canDelete, revisionCount) {
-  const actions = node("div", undefined, "table-actions");
+function playlistActionButtons(playlist, canDelete, versionCount, layout) {
+  const actions = node("div", undefined, layout === "card" ? "card-actions" : "table-actions");
   const edit = button("Edit", "secondary");
-  edit.setAttribute("aria-label", `Edit playlist ${playlist.playlist_id} from revision ${compactIdentifier(playlist.revision)}`);
+  edit.setAttribute("aria-label", `Edit playlist ${playlist.playlist_id} from version ${compactIdentifier(playlist.revision)}`);
   edit.addEventListener("click", () => startPlaylistEdit(playlist));
   actions.append(edit);
 
   if (!playlist.active) {
-    const activate = button("Activate", "primary");
+    const activate = button("Activate version", "primary");
     activate.addEventListener("click", async () => {
-      const description = `Make “${playlist.playlist_id}” revision ${compactIdentifier(playlist.revision)} the active playlist. Enrolled devices will receive it the next time they sync.`;
+      const description = `Make playlist ${playlist.playlist_id}, version ${compactIdentifier(playlist.revision)}, active. Enrolled devices will receive it the next time they sync.`;
       try {
         const confirmed = await confirmBeforeAction(
           (text) => showConfirmDialog({
-            title: "Activate playlist revision?",
+            title: "Activate playlist version?",
             description: text,
-            confirmLabel: "Activate playlist",
+            confirmLabel: "Activate version",
           }),
           description,
           () => api("/admin/api/active-playlist", {
@@ -269,7 +359,7 @@ function playlistActionButtons(playlist, canDelete, revisionCount) {
           }),
         );
         if (!confirmed) return;
-        showMessage(`Playlist “${playlist.playlist_id}” is active. Devices will receive it on their next sync.`);
+        showMessage(`Playlist ${playlist.playlist_id} is active. Devices will receive it on their next sync.`);
         await refresh();
       } catch (error) { showMessage(error.message, true); }
     });
@@ -279,7 +369,7 @@ function playlistActionButtons(playlist, canDelete, revisionCount) {
   if (canDelete) {
     const remove = button("Delete playlist", "danger");
     remove.addEventListener("click", async () => {
-      const description = `Delete “${playlist.playlist_id}” and all ${revisionCount} of its saved revisions? Uploaded PNGs stay in storage and can be reused by another playlist.`;
+      const description = `Delete playlist ${playlist.playlist_id} and all ${versionCount} saved versions? Uploaded images stay available and can be reused by another playlist.`;
       try {
         const confirmed = await confirmBeforeAction(
           (text) => showConfirmDialog({
@@ -292,44 +382,13 @@ function playlistActionButtons(playlist, canDelete, revisionCount) {
           () => api(`/admin/api/playlists/${encodeURIComponent(playlist.playlist_id)}`, { method: "DELETE" }),
         );
         if (!confirmed) return;
-        showMessage(`Playlist “${playlist.playlist_id}” was deleted. Content-addressed images remain available for reuse.`);
+        showMessage(`Playlist ${playlist.playlist_id} was deleted. Uploaded images remain available for reuse.`);
         await refresh();
       } catch (error) { showMessage(error.message, true); }
     });
     actions.append(remove);
   }
   return actions;
-}
-
-function renderPlaylistCard(playlist, canDelete, revisionCount) {
-  const card = node("article", undefined, "data-card");
-  const header = node("div", undefined, "data-card__header");
-  header.append(node("h3", playlist.playlist_id), statusBadge(
-    playlist.active ? "Active" : "Staged",
-    playlist.active ? "success" : "neutral",
-  ));
-  card.append(header);
-  const details = node("dl");
-  [
-    ["Revision", identifier(playlist.revision, "revision ID")],
-    ["Rotation", String(playlist.rotation_interval)],
-    ["Items", String(playlist.asset_count)],
-    ["Created", formatTimestamp(playlist.created_at)],
-  ].forEach(([label, value]) => {
-    const field = node("div");
-    field.append(node("dt", label));
-    const content = node("dd");
-    if (value instanceof Node) content.append(value);
-    else content.textContent = value;
-    field.append(content);
-    details.append(field);
-  });
-  card.append(details);
-  const actions = playlistActionButtons(playlist, canDelete, revisionCount);
-  actions.classList.remove("table-actions");
-  actions.classList.add("card-actions");
-  card.append(actions);
-  return card;
 }
 
 function renderHealth(health) {
@@ -342,24 +401,24 @@ function renderHealth(health) {
   }
   panel.hidden = false;
   if (health.missing.length) {
-    panel.append(node("h2", "Missing assets in the active playlist", "error-title"));
-    panel.append(node("p", "Devices without cached copies will keep showing their last good playlist."));
+    panel.append(node("h2", "Images missing from the active playlist", "error-title"));
+    panel.append(node("p", "Devices without a cached image will keep showing their last working playlist."));
     const list = node("ul");
     health.missing.forEach((asset) => {
       const item = node("li");
-      item.append(identifier(asset.sha256, "asset SHA-256"), document.createTextNode(` (expected ${asset.expected_size} bytes)`));
+      item.append(identifier(asset.sha256, "image SHA-256"), document.createTextNode(` (expected ${asset.expected_size} bytes)`));
       list.append(item);
     });
     panel.append(list);
   }
   if (issues.length) {
-    panel.append(node("h2", "Asset reference issues", "error-title"));
-    panel.append(node("p", "These D1 references point to missing R2 objects. Missing holding images are restored when the published holding PNG matches. Missing playlist images are reported without changing immutable revisions; upload a replacement and create a new revision to repair one."));
+    panel.append(node("h2", "Image storage issues", "error-title"));
+    panel.append(node("p", "The database points to images that are missing from storage. Missing placeholder images are restored automatically when the published placeholder image is available. Saved playlist versions do not change; upload a replacement image and save a new version to repair one."));
     const list = node("ul");
     issues.forEach((issue) => {
       const item = node("li");
-      const label = issue.issue_type === "missing_playlist_asset" ? "Missing playlist image" : "Missing holding image";
-      item.append(document.createTextNode(`${label}: `), identifier(issue.sha256, "asset SHA-256"));
+      const label = issue.issue_type === "missing_playlist_asset" ? "Missing playlist image" : "Missing placeholder image";
+      item.append(document.createTextNode(`${label}: `), identifier(issue.sha256, "image SHA-256"));
       list.append(item);
     });
     panel.append(list);
@@ -368,54 +427,53 @@ function renderHealth(health) {
 
 function renderPlaylists(playlists) {
   const activeIDs = new Set(playlists.filter((playlist) => playlist.active).map((playlist) => playlist.playlist_id));
-  const revisionCounts = new Map();
-  playlists.forEach((playlist) => revisionCounts.set(
+  const versionCounts = new Map();
+  playlists.forEach((playlist) => versionCounts.set(
     playlist.playlist_id,
-    (revisionCounts.get(playlist.playlist_id) ?? 0) + 1,
+    (versionCounts.get(playlist.playlist_id) ?? 0) + 1,
   ));
-  const deleteIDs = new Set();
-  const rows = playlists.map((playlist) => {
-    const row = node("tr");
-    row.append(cell("Playlist", playlist.playlist_id));
-    row.append(cell("Revision", identifier(playlist.revision, "revision ID")));
-    row.append(cell("Rotation", playlist.rotation_interval));
-    row.append(cell("Items", playlist.asset_count));
-    row.append(cell("Created", formatTimestamp(playlist.created_at)));
-    row.append(cell("State", statusBadge(playlist.active ? "Active" : "Staged", playlist.active ? "success" : "neutral")));
-    const canDelete = !activeIDs.has(playlist.playlist_id) && !deleteIDs.has(playlist.playlist_id);
-    if (canDelete) deleteIDs.add(playlist.playlist_id);
-    row.append(cell("Actions", playlistActionButtons(
-      playlist,
-      canDelete,
-      playlist.revision_count ?? revisionCounts.get(playlist.playlist_id),
-    )));
-    return row;
+  const deletableVersions = new Set();
+  const seenPlaylistIDs = new Set();
+  playlists.forEach((playlist) => {
+    const canDelete = !activeIDs.has(playlist.playlist_id) && !seenPlaylistIDs.has(playlist.playlist_id);
+    if (canDelete) {
+      deletableVersions.add(playlistVersionKey(playlist));
+      seenPlaylistIDs.add(playlist.playlist_id);
+    }
   });
-  document.querySelector("#playlists").replaceChildren(table(
-    "Playlist revisions",
-    ["Playlist", "Revision", "Rotation", "Items", "Created", "State", "Actions"],
-    rows,
+  const fields = [
+    { label: "Playlist", render: (playlist) => playlist.playlist_id },
+    { label: "Version", render: (playlist) => identifier(playlist.revision, "version ID") },
+    { label: "Show each item for", render: (playlist) => playlist.rotation_interval },
+    { label: "Items", render: (playlist) => playlist.asset_count },
+    { label: "Created", render: (playlist) => formatTimestamp(playlist.created_at) },
     {
-      message: "No playlists yet. Add PNG images or webpage URLs to create your first playlist revision.",
-      actionLabel: "Create a playlist",
+      label: "Status",
+      render: (playlist) => statusBadge(formatPlaylistState(playlist.active), playlist.active ? "success" : "neutral"),
+    },
+    {
+      label: "Actions",
+      render: (playlist, layout) => playlistActionButtons(
+        playlist,
+        deletableVersions.has(playlistVersionKey(playlist)),
+        playlist.revision_count ?? versionCounts.get(playlist.playlist_id),
+        layout,
+      ),
+    },
+  ];
+  renderResponsiveRecords({
+    tableSelector: "#playlists",
+    cardsSelector: "#playlists-mobile",
+    caption: "Playlist versions",
+    records: playlists,
+    fields,
+    emptyState: {
+      message: "No playlists yet. Add images or page URLs to create your first playlist version.",
+      actionLabel: "Create playlist version",
       href: "#playlist-form",
     },
-  ));
-  const cards = document.querySelector("#playlists-mobile");
-  cards.replaceChildren();
-  if (!playlists.length) {
-    cards.append(emptyCard("No playlists yet. Add PNG images or webpage URLs to create your first playlist revision.", "Create a playlist", "#playlist-form"));
-    return;
-  }
-  const cardDeleteIDs = new Set();
-  playlists.forEach((playlist) => {
-    const canDelete = !activeIDs.has(playlist.playlist_id) && !cardDeleteIDs.has(playlist.playlist_id);
-    if (canDelete) cardDeleteIDs.add(playlist.playlist_id);
-    cards.append(renderPlaylistCard(
-      playlist,
-      canDelete,
-      playlist.revision_count ?? revisionCounts.get(playlist.playlist_id),
-    ));
+    cardTitleField: "Playlist",
+    cardStatusField: "Status",
   });
 }
 
@@ -423,14 +481,14 @@ function renderCaptureTargets(targets) {
   const container = document.querySelector("#capture-target-list");
   container.replaceChildren();
   if (!targets.length) {
-    container.append(node("p", "No webpage URLs are in a playlist yet. Add one below to schedule the first screenshot.", "muted"));
+    container.append(node("p", "No page screenshots yet. Add a page URL to a playlist to create one.", "muted"));
     return;
   }
   targets.forEach((target) => {
     const card = node("article", undefined, "capture-target");
     const preview = node("img", undefined, "capture-target__preview");
     preview.src = `/admin/api/assets/${target.sha256}`;
-    preview.alt = `Current screenshot or holding image for ${target.display_url}`;
+    preview.alt = `Latest screenshot or placeholder image for ${target.display_url}`;
     preview.loading = "lazy";
     preview.decoding = "async";
     preview.addEventListener("error", () => { preview.hidden = true; }, { once: true });
@@ -438,23 +496,15 @@ function renderCaptureTargets(targets) {
     const content = node("div", undefined, "capture-target__content");
     const heading = node("div", undefined, "capture-target__heading");
     heading.append(node("h4", target.display_url));
-    const status = target.job_status === "running"
-      ? statusBadge("Capturing", "warning")
-      : target.job_status === "queued"
-        ? statusBadge("Queued", "warning")
-        : target.last_error
-          ? statusBadge("Needs attention", "warning")
-          : target.last_success_at
-            ? statusBadge("Captured")
-            : statusBadge("Waiting for first capture", "neutral");
-    heading.append(status);
+    const screenshotStatus = formatScreenshotStatus(target.job_status, target.last_error, target.last_success_at);
+    heading.append(statusBadge(screenshotStatus.label, screenshotStatus.tone));
     content.append(heading);
-    content.append(node("p", `${Math.floor(target.capture_interval_seconds / 60)} minute interval · ${target.viewport.width}×${target.viewport.height} viewport`, "muted"));
-    content.append(node("p", target.last_success_at ? `Last capture ${formatTimestamp(target.last_success_at)}` : "No successful capture yet.", "muted"));
+    content.append(node("p", `${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`, "muted"));
+    content.append(node("p", target.last_success_at ? `Last screenshot ${formatTimestamp(target.last_success_at)}` : "No screenshot is ready yet.", "muted"));
     if (target.last_error) content.append(node("p", target.last_error, "error-title"));
 
     const actions = node("div", undefined, "action-row");
-    const capture = button("Capture now", "secondary");
+    const capture = button("Take screenshot now", "secondary");
     capture.addEventListener("click", async () => {
       capture.disabled = true;
       try {
@@ -463,7 +513,8 @@ function renderCaptureTargets(targets) {
           headers: { "Content-Type": "application/json" },
           body: "{}",
         });
-        showMessage(`Capture job ${compactIdentifier(result.job_id)} is ${result.status}.`);
+        const status = result.status === "running" ? "has started" : "is queued";
+        showMessage(`Screenshot job ${compactIdentifier(result.job_id)} ${status}.`);
         await refresh();
       } catch (error) { showMessage(error.message, true); }
       finally { capture.disabled = false; }
@@ -475,7 +526,7 @@ function renderCaptureTargets(targets) {
   });
 }
 
-function deviceActionButtons(device) {
+function deviceActionButtons(device, layout) {
   const toggle = button(device.enabled ? "Disable" : "Enable", device.enabled ? "secondary" : "primary");
   toggle.addEventListener("click", async () => {
     const nextEnabled = !device.enabled;
@@ -504,9 +555,9 @@ function deviceActionButtons(device) {
     } catch (error) { showMessage(error.message, true); }
   });
 
-  const actions = [toggle];
+  const buttons = [toggle];
   if (device.auth_type !== "key") {
-    const rotate = button("Rotate token", "danger");
+    const rotate = button("Rotate device token", "danger");
     rotate.addEventListener("click", async () => {
     let result;
     try {
@@ -514,7 +565,7 @@ function deviceActionButtons(device) {
         (text) => showConfirmDialog({
           title: "Rotate device token?",
           description: text,
-          confirmLabel: "Rotate token",
+          confirmLabel: "Rotate device token",
           destructive: true,
         }),
         `The current token for ${device.device_id} will stop working. Update the device with the new token right away.`,
@@ -531,59 +582,39 @@ function deviceActionButtons(device) {
       await refresh();
     } catch (error) { showMessage(error.message, true); }
     });
-    actions.push(rotate);
+    buttons.push(rotate);
   }
+  const actions = node("div", undefined, layout === "card" ? "card-actions" : "table-actions");
+  actions.append(...buttons);
   return actions;
 }
 
-function renderDeviceCard(device) {
-  const card = node("article", undefined, "data-card");
-  const header = node("div", undefined, "data-card__header");
-  const title = node("h3");
-  title.append(identifier(device.device_id, "device ID"));
-  header.append(title, statusBadge(device.enabled ? "Enabled" : "Disabled", device.enabled ? "success" : "neutral"));
-  card.append(header);
-  const details = node("dl");
-  const lastSeen = node("div");
-  lastSeen.append(node("dt", "Last check-in"), node("dd", formatTimestamp(device.last_seen_at)));
-  const authentication = node("div");
-  authentication.append(node("dt", "Authentication"), node("dd", device.auth_type === "key" ? "Key-based" : "Legacy token"));
-  details.append(authentication, lastSeen);
-  card.append(details);
-  const actions = node("div", undefined, "card-actions");
-  actions.append(...deviceActionButtons(device));
-  card.append(actions);
-  return card;
-}
-
 function renderDevices(devices) {
-  const rows = devices.map((device) => {
-    const row = node("tr");
-    row.append(cell("Device", identifier(device.device_id, "device ID")));
-    row.append(cell("Status", statusBadge(device.enabled ? "Enabled" : "Disabled", device.enabled ? "success" : "neutral")));
-    row.append(cell("Authentication", device.auth_type === "key" ? "Key-based" : "Legacy token"));
-    row.append(cell("Last check-in", formatTimestamp(device.last_seen_at)));
-    const actions = node("div", undefined, "table-actions");
-    actions.append(...deviceActionButtons(device));
-    row.append(cell("Actions", actions));
-    return row;
-  });
-  document.querySelector("#devices").replaceChildren(table(
-    "Enrolled devices",
-    ["Device", "Status", "Authentication", "Last check-in", "Actions"],
-    rows,
-    {
-      message: "No devices have been approved yet. New devices appear here after you approve their request.",
+  renderResponsiveRecords({
+    tableSelector: "#devices",
+    cardsSelector: "#devices-mobile",
+    caption: "Enrolled devices",
+    records: devices,
+    fields: [
+      { label: "Device", render: (device) => identifier(device.device_id, "device ID") },
+      {
+        label: "Status",
+        render: (device) => statusBadge(device.enabled ? "Enabled" : "Disabled", device.enabled ? "success" : "neutral"),
+      },
+      { label: "Authentication", render: (device) => device.auth_type === "key" ? "Key-based" : "Legacy token" },
+      { label: "Last check-in", render: (device) => formatTimestamp(device.last_seen_at) },
+      { label: "Actions", render: (device, layout) => deviceActionButtons(device, layout) },
+    ],
+    emptyState: {
+      message: "No devices have been approved yet. New devices appear here after you approve a request.",
     },
-  ));
-  const cards = document.querySelector("#devices-mobile");
-  cards.replaceChildren();
-  if (!devices.length) cards.append(emptyCard("No devices have been approved yet. New devices appear here after you approve their request."));
-  else devices.forEach((device) => cards.append(renderDeviceCard(device)));
+    cardTitleField: "Device",
+    cardStatusField: "Status",
+  });
 }
 
-function pendingRequestActions(request) {
-  const actions = node("div", undefined, "table-actions");
+function pendingRequestActions(request, layout) {
+  const actions = node("div", undefined, layout === "card" ? "card-actions" : "table-actions");
   const approve = button("Approve", "primary");
   approve.addEventListener("click", async () => {
     const replacement = request.replaces_existing
@@ -635,55 +666,30 @@ function pendingRequestActions(request) {
   return actions;
 }
 
-function renderPendingRequestCard(request) {
-  const card = node("article", undefined, "data-card");
-  const header = node("div", undefined, "data-card__header");
-  header.append(node("h3", request.device_id), statusBadge("Pending", "warning"));
-  card.append(header);
-  const details = node("dl");
-  const fingerprint = node("div");
-  fingerprint.append(node("dt", "Fingerprint"));
-  const value = node("dd");
-  value.append(fingerprintDisplay(request.fingerprint));
-  fingerprint.append(value);
-  details.append(fingerprint);
-  if (request.replaces_existing) {
-    const replacement = node("div");
-    replacement.append(node("dt", "Existing device"), node("dd", "Approval replaces its current credentials."));
-    details.append(replacement);
-  }
-  const created = node("div");
-  created.append(node("dt", "First seen"), node("dd", formatTimestamp(request.created_at)));
-  details.append(created);
-  card.append(details);
-  const actions = pendingRequestActions(request);
-  actions.classList.remove("table-actions");
-  actions.classList.add("card-actions");
-  card.append(actions);
-  return card;
-}
-
 function renderPendingEnrollments(requests) {
-  const rows = requests.map((request) => {
-    const row = node("tr");
-    row.append(cell("Device", identifier(request.device_id, "device ID")));
-    row.append(cell("Fingerprint", fingerprintDisplay(request.fingerprint)));
-    row.append(cell("First seen", formatTimestamp(request.created_at)));
-    row.append(cell("Expires", formatTimestamp(request.expires_at)));
-    row.append(cell("Existing device", request.replaces_existing ? "Credentials will be replaced" : "No"));
-    row.append(cell("Actions", pendingRequestActions(request)));
-    return row;
+  renderResponsiveRecords({
+    tableSelector: "#pending-enrollments",
+    cardsSelector: "#pending-enrollments-mobile",
+    caption: "Devices awaiting approval",
+    records: requests,
+    fields: [
+      { label: "Device", render: (request) => identifier(request.device_id, "device ID") },
+      { label: "Status", render: () => statusBadge("Awaiting approval", "warning") },
+      { label: "Fingerprint", render: (request) => fingerprintDisplay(request.fingerprint) },
+      { label: "First seen", render: (request) => formatTimestamp(request.created_at) },
+      { label: "Expires", render: (request) => formatTimestamp(request.expires_at) },
+      {
+        label: "Existing device",
+        render: (request) => request.replaces_existing ? "Yes, credentials will be replaced" : "No",
+      },
+      { label: "Actions", render: (request, layout) => pendingRequestActions(request, layout) },
+    ],
+    emptyState: {
+      message: "No devices are waiting for approval. New devices appear here after they connect.",
+    },
+    cardTitleField: "Device",
+    cardStatusField: "Status",
   });
-  document.querySelector("#pending-enrollments").replaceChildren(table(
-    "Pending device enrollment requests",
-    ["Device", "Fingerprint", "First seen", "Expires", "Existing device", "Actions"],
-    rows,
-    { message: "No devices are waiting for approval. New devices appear here automatically after they connect." },
-  ));
-  const cards = document.querySelector("#pending-enrollments-mobile");
-  cards.replaceChildren();
-  if (!requests.length) cards.append(emptyCard("No devices are waiting for approval. New devices appear here automatically after they connect."));
-  else requests.forEach((request) => cards.append(renderPendingRequestCard(request)));
 }
 
 function renderSubject(subjectType, subjectID) {
@@ -713,65 +719,28 @@ function renderAuditDetails(metadata) {
   return disclosure;
 }
 
-function renderAuditCard(event) {
-  const card = node("article", undefined, "data-card data-card--activity");
-  const header = node("div", undefined, "data-card__header");
-  header.append(node("h3", formatAuditEventType(event.event_type)));
-  card.append(header);
-  const fields = node("dl");
-  [
-    ["Time", formatTimestamp(event.occurred_at)],
-    ["Actor", formatActorLabel(event.actor_id)],
-    ["Subject", renderSubject(event.subject_type, event.subject_id)],
-  ].forEach(([label, value]) => {
-    const field = node("div");
-    field.append(node("dt", label));
-    const content = node("dd");
-    if (value instanceof Node) content.append(value);
-    else content.textContent = String(value);
-    field.append(content);
-    fields.append(field);
-  });
-  card.append(fields);
-  const details = renderAuditDetails(event.metadata);
-  if (details.tagName === "DETAILS") {
-    details.classList.add("activity-card__details");
-    card.append(details);
-  }
-  return card;
-}
-
 function emptyCard(messageTextValue, actionLabel, href) {
-  const card = node("div", undefined, "empty-state");
-  card.append(node("p", messageTextValue));
-  if (actionLabel && href) {
-    const action = node("a", actionLabel, "button button--secondary");
-    action.href = href;
-    card.append(action);
-  }
-  return card;
+  return renderEmptyState(messageTextValue, actionLabel, href);
 }
 
 function renderAudit(events) {
-  const rows = events.map((event) => {
-    const row = node("tr");
-    row.append(cell("Time", formatTimestamp(event.occurred_at)));
-    row.append(cell("Actor", formatActorLabel(event.actor_id)));
-    row.append(cell("Action", formatAuditEventType(event.event_type)));
-    row.append(cell("Subject", renderSubject(event.subject_type, event.subject_id)));
-    row.append(cell("Details", renderAuditDetails(event.metadata)));
-    return row;
+  renderResponsiveRecords({
+    tableSelector: "#audit",
+    cardsSelector: "#audit-mobile",
+    caption: "Recent activity",
+    records: events,
+    fields: [
+      { label: "Time", render: (event) => formatTimestamp(event.occurred_at) },
+      { label: "Actor", render: (event) => formatActorLabel(event.actor_id) },
+      { label: "Action", render: (event) => formatAuditEventType(event.event_type) },
+      { label: "Subject", render: (event) => renderSubject(event.subject_type, event.subject_id) },
+      { label: "Details", render: (event) => renderAuditDetails(event.metadata) },
+    ],
+    emptyState: { message: "No activity yet. Management actions will appear here." },
+    cardTitleField: "Action",
+    cardActionField: null,
+    cardClass: "data-card data-card--activity",
   });
-  document.querySelector("#audit").replaceChildren(table(
-    "Recent management activity",
-    ["Time", "Actor", "Action", "Subject", "Details"],
-    rows,
-    { message: "No activity yet. Management actions will appear here." },
-  ));
-  const cards = document.querySelector("#audit-mobile");
-  cards.replaceChildren();
-  if (!events.length) cards.append(emptyCard("No activity yet. Management actions will appear here."));
-  else events.forEach((event) => cards.append(renderAuditCard(event)));
 }
 
 async function refresh() {
@@ -860,6 +829,32 @@ function showConfirmDialog({ title, description, confirmLabel, destructive = fal
 
 document.querySelector("#dismiss-message").addEventListener("click", () => { message.hidden = true; });
 
+const sectionLinks = [...document.querySelectorAll(".section-nav a")];
+const observedSections = sectionLinks
+  .map((link) => document.querySelector(link.getAttribute("href")))
+  .filter(Boolean);
+if ("IntersectionObserver" in window) {
+  const visibleSections = new Set();
+  const sectionObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) visibleSections.add(entry.target);
+      else visibleSections.delete(entry.target);
+    });
+    const current = [...visibleSections]
+      .sort((left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top)[0];
+    if (!current) return;
+    sectionLinks.forEach((link) => {
+      if (link.hash === `#${current.id}`) link.setAttribute("aria-current", "location");
+      else link.removeAttribute("aria-current");
+    });
+  }, { rootMargin: "-20% 0px -65% 0px", threshold: [0, 0.1, 0.5] });
+  observedSections.forEach((section) => sectionObserver.observe(section));
+} else {
+  sectionLinks[0]?.setAttribute("aria-current", "location");
+}
+
+document.querySelector('[name="capture_urls"]').addEventListener("input", syncScreenshotSettings);
+
 document.querySelector("#openui-preview-button").addEventListener("click", () => {
   renderOpenUIProgram(openuiSource.value);
 });
@@ -880,7 +875,7 @@ document.querySelector("#openui-reset-button").addEventListener("click", () => {
 document.querySelector("#openui-copy-prompt").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(OPENUI_SYSTEM_PROMPT);
-    showOpenUIMessage("Prompt copied. Use it with your preferred model, then paste the result above.");
+    showOpenUIMessage("The prompt was copied. Use it with an external model, then paste the result here.");
   } catch {
     showOpenUIMessage("Clipboard access failed. Expand the prompt below and copy it manually.", true);
   }
@@ -912,7 +907,7 @@ document.querySelector("#reload").addEventListener("click", async (event) => {
   refreshButton.disabled = true;
   try {
     await refresh();
-    showMessage("Overview refreshed.");
+    showMessage("Management data refreshed.");
   } catch (error) { showMessage(error.message, true); }
   finally { refreshButton.disabled = false; }
 });
@@ -933,14 +928,14 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
   const captures = [...document.querySelectorAll("#playlist-current-captures input:checked")].map((input) => ({
     capture_id: input.dataset.captureId,
   }));
-  const newURLs = String(form.get("capture_urls") ?? "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+  const newURLs = parsePageURLs(form.get("capture_urls"));
   const captureInterval = Number(form.get("capture_interval_seconds"));
   const viewport = {
     width: Number(form.get("viewport_width")),
     height: Number(form.get("viewport_height")),
   };
   if (!files.length && !assets.length && !captures.length && !newURLs.length) {
-    return showInlineMessage(feedback, "Add at least one PNG image or webpage URL.", true);
+    return showInlineMessage(feedback, "Add at least one PNG image or page URL.", true);
   }
   submitButton.disabled = true;
   try {
@@ -966,9 +961,9 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
       }),
     });
     const captureNote = result.capture_count
-      ? " Initial webpage captures are queued after saving as capacity allows; recent screenshots and active jobs are reused."
+      ? " Initial screenshots are queued after saving when capacity allows. Recent screenshots and active jobs may be reused."
       : "";
-    showInlineMessage(feedback, `New revision ${compactIdentifier(result.revision)} is ready.${captureNote} Activate it whenever you’re ready.`);
+    showInlineMessage(feedback, `New version ${compactIdentifier(result.revision)} is ready to activate.${captureNote}`);
     formElement.reset();
     resetPlaylistEditor();
     await refresh();
@@ -979,7 +974,7 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
 document.querySelector("#cancel-playlist-edit").addEventListener("click", () => {
   playlistForm().reset();
   resetPlaylistEditor();
-  showInlineMessage(document.querySelector("#playlist-feedback"), "Editing cancelled. Your saved revisions are unchanged.");
+  showInlineMessage(document.querySelector("#playlist-feedback"), "Editing cancelled. Your saved versions are unchanged.");
 });
 
 document.querySelector("#copy-secret").addEventListener("click", async () => {
