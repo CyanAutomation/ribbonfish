@@ -132,6 +132,6 @@ test("Dependabot updates npm and pinned Docker base images", async () => {
 
   assert.match(dependabot, /package-ecosystem: npm\n    directory: \/workers\/device-sync/);
   assert.match(dependabot, /package-ecosystem: docker\n    directory: \/agent/);
-  assert.match(dockerfile, /^FROM --platform=\$BUILDPLATFORM golang:1\.26\.10-alpine@sha256:[a-f0-9]{64} AS build$/m);
+  assert.match(dockerfile, /^FROM --platform=\$BUILDPLATFORM golang:\d+\.\d+\.\d+-alpine@sha256:[a-f0-9]{64} AS build$/m);
   assert.match(dockerfile, /^FROM gcr\.io\/distroless\/static-debian12:nonroot@sha256:[a-f0-9]{64}$/m);
 });
