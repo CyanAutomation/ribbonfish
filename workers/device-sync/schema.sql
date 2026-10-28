@@ -86,6 +86,8 @@ CREATE TABLE IF NOT EXISTS capture_targets (
   next_due_at INTEGER NOT NULL,
   last_attempt_at INTEGER,
   last_success_at INTEGER,
+  validator_etag TEXT,
+  validator_last_modified TEXT,
   last_error TEXT,
   failure_count INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),

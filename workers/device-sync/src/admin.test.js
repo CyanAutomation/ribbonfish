@@ -157,21 +157,27 @@ function testEnvironment({ enabled = true, accessRequired = false } = {}) {
   const DB = new FakeDatabase();
   const objects = new Map();
   const writes = [];
+  const reads = [];
+  const metadataReads = [];
   return {
     DB,
     objects,
     writes,
+    reads,
+    metadataReads,
     ADMIN_ENABLED: enabled ? "true" : "false",
     ADMIN_ACCESS_REQUIRED: accessRequired ? "true" : "false",
     ASSETS: {
       async get(key) {
+        reads.push(key);
         const bytes = objects.get(key);
         if (!bytes) return null;
-        return { size: bytes.byteLength, body: new Response(bytes).body };
+        return { size: bytes.byteLength, httpEtag: `"${key}"`, body: new Response(bytes).body };
       },
       async head(key) {
+        metadataReads.push(key);
         const bytes = objects.get(key);
-        return bytes ? { size: bytes.byteLength } : null;
+        return bytes ? { size: bytes.byteLength, httpEtag: `"${key}"` } : null;
       },
       async put(key, bytes) {
         const copy = new Uint8Array(bytes);
@@ -212,7 +218,20 @@ test("management page is served from the private R2 bucket", async () => {
   assert.equal(response.status, 200);
   assert.equal(await response.text(), "<main>Ribbonfish</main>");
   assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
+  assert.equal(response.headers.get("cache-control"), "private, max-age=60, must-revalidate");
   assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'none'/);
+});
+
+test("management UI validators can return 304 without reading the R2 body", async () => {
+  const env = testEnvironment();
+  env.objects.set("admin/app.js", new TextEncoder().encode("console.log('cached')"));
+  const response = await handleAdminRequest(request("/admin/app.js", {
+    headers: { "If-None-Match": '"admin/app.js"' },
+  }), env);
+  assert.equal(response.status, 304);
+  assert.equal(response.headers.get("cache-control"), "private, max-age=300, must-revalidate");
+  assert.deepEqual(env.metadataReads, ["admin/app.js"]);
+  assert.deepEqual(env.reads, []);
 });
 
 test("capture holding image is served from the private R2 bucket", async () => {

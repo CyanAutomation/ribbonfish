@@ -42,7 +42,7 @@ function sqliteD1(sqlite, maxBindings = Infinity) {
   };
 }
 
-function environment(sqlite, { pageCap = Infinity, failDelete, maxBindings } = {}) {
+function environment(sqlite, { pageCap = Infinity, failDelete, maxBindings, reconciliationIntervalSeconds = 0 } = {}) {
   const objects = new Map([[
     "admin/capture-pending.png",
     { bytes: placeholder, uploaded: new Date(0) },
@@ -91,7 +91,7 @@ function environment(sqlite, { pageCap = Infinity, failDelete, maxBindings } = {
       };
     },
   };
-  return { DB, ASSETS, objects, listCalls, env: { DB, ASSETS } };
+  return { DB, ASSETS, objects, listCalls, env: { DB, ASSETS, ASSET_RECONCILIATION_INTERVAL_SECONDS: String(reconciliationIntervalSeconds) } };
 }
 
 async function freshDatabase() {
@@ -128,6 +128,26 @@ test("stored but unattached PNGs receive a staging lease and survive until it ex
 
     await reconcileAssets(env, lease.expires_at + 1);
     assert.equal(objects.has(`assets/${asset.sha256}`), false);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("completed inventory reconciliation waits for its configured interval", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, listCalls } = environment(sqlite, { reconciliationIntervalSeconds: 900 });
+    const start = 1_000_000;
+    const first = await reconcileAssets(env, start);
+    assert.equal(first.cycle_completed, true);
+    const scans = listCalls.length;
+    const skipped = await reconcileAssets(env, start + 899_999);
+    assert.equal(skipped.skipped, true);
+    assert.equal(listCalls.length, scans, "no R2 inventory page is read during the cooldown");
+    const due = await reconcileAssets(env, start + 900_000);
+    assert.equal(due.skipped, false);
+    assert.equal(due.cycle_completed, true);
+    assert.equal(listCalls.length, scans + 1);
   } finally {
     sqlite.close();
   }
