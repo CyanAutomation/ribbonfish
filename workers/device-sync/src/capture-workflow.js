@@ -27,10 +27,6 @@ export async function enqueueCapture(captureID, env, { now = Date.now(), schedul
     const existing = await env.DB.prepare(
       "SELECT job_id, status FROM capture_jobs WHERE capture_id = ? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1",
     ).bind(captureID).first();
-    if (scheduled) {
-      await env.DB.prepare("UPDATE capture_targets SET next_due_at = ? WHERE capture_id = ?")
-        .bind(now + target.capture_interval_seconds * 1000, captureID).run();
-    }
     return existing ? { job_id: existing.job_id, queued: false, status: existing.status } : null;
   }
   if (scheduled) {
@@ -211,7 +207,7 @@ async function deferCapture(env, jobID, captureID, at, reason, now) {
 async function handleCaptureFailure(env, message, job, error, now) {
   const attempts = job.attempts + 1;
   const errorMessage = safeCaptureError(error);
-  if (error.retryable !== false && attempts < MAX_CAPTURE_ATTEMPTS) {
+  if (error.retryable === true && attempts < MAX_CAPTURE_ATTEMPTS) {
     await env.DB.batch([
       env.DB.prepare(
         "UPDATE capture_jobs SET status = 'queued', lease_until = NULL, error = ? WHERE job_id = ?",

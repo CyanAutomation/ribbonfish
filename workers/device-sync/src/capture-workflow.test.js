@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
+import { enqueueCapture } from "./capture-workflow.js";
 import { fetchHandler, queueHandler, scheduledHandler } from "./index.js";
 import { handleAdminRequest } from "./admin.js";
 
@@ -228,6 +229,29 @@ test("capture requests reject private targets and queueing coalesces each target
   }
 });
 
+test("coalescing a scheduled request leaves the target due time unchanged", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const captureID = created.body.captures[0].capture_id;
+    const requested = await handleAdminRequest(await request(`/admin/api/captures/${captureID}/run`, {
+      method: "POST", body: {},
+    }), env);
+    assert.equal(requested.status, 202);
+    const originalDue = sqlite.prepare("SELECT next_due_at FROM capture_targets WHERE capture_id = ?")
+      .get(captureID).next_due_at;
+
+    const result = await enqueueCapture(captureID, env, { now: originalDue + 10_000, scheduled: true });
+
+    assert.equal(result.queued, false);
+    assert.equal(sqlite.prepare("SELECT next_due_at FROM capture_targets WHERE capture_id = ?")
+      .get(captureID).next_due_at, originalDue);
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("capture overview reports the safe holding preview and queued status", async () => {
   const sqlite = await freshDatabase();
   try {
@@ -309,6 +333,41 @@ test("Browser Run failures use bounded delayed retries and leave the holding ima
     assert.equal(sqlite.prepare("SELECT current_sha256 FROM capture_targets WHERE capture_id = ?").get(captureID).current_sha256, null);
     assert.equal(sqlite.prepare("SELECT browser_ms FROM capture_usage WHERE singleton = 1").get().browser_ms, 3 * 45_000,
       "requests without a usage header consume the configured safety reserve");
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("unexpected capture exceptions fail without retrying the queue delivery", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    let calls = 0;
+    const { env } = environment(sqlite, {
+      async quickAction() {
+        calls += 1;
+        return { ok: true, headers: null };
+      },
+    });
+    const created = await createCapturePlaylist(env);
+    const captureID = created.body.captures[0].capture_id;
+    const requested = await handleAdminRequest(await request(`/admin/api/captures/${captureID}/run`, {
+      method: "POST", body: {},
+    }), env);
+    const jobID = (await requested.json()).job_id;
+    const message = {
+      body: { job_id: jobID },
+      acked: false,
+      retryDelay: null,
+      ack() { this.acked = true; },
+      retry(options) { this.retryDelay = options.delaySeconds; },
+    };
+
+    await queueHandler({ messages: [message] }, env);
+
+    assert.equal(message.acked, true);
+    assert.equal(message.retryDelay, null);
+    assert.equal(calls, 1);
+    assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(jobID).status, "failed");
   } finally {
     sqlite.close();
   }
