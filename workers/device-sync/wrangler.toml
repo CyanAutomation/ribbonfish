@@ -19,3 +19,8 @@ binding = "DB"
 database_name = "ribbonfish-devices"
 database_id = "f17f5835-614a-4896-bb4c-12edc1b3546a"
 migrations_dir = "migrations"
+
+[[ratelimits]]
+name = "ENROLLMENT_RATE_LIMITER"
+namespace_id = "84310627"
+simple = { limit = 30, period = 60 }

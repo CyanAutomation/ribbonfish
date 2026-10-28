@@ -88,10 +88,10 @@ failed or incomplete update cannot remove the currently displayed content.
 `examples/raspberry-pi/docker-compose.simulator.yaml` runs the bundled software
 simulator with no network or DRM access. `docker-compose.yaml` runs a bundled
 hardware profile, maps one DRM card, and mounts one persistent state volume for
-the cache, last-good playlist, frames, and per-device token. It runs non-root
+the cache, last-good playlist, frames, and device identity. It runs non-root
 with a read-only root filesystem and no added capabilities. The network stays
-disabled unless `RIBBONFISH_NETWORK_MODE=bridge` is selected for enrollment or
-sync. `.env.example` matches the Ribbonfish Pi 3 A Plus: profile `pi3a-plus`,
+disabled unless `RIBBONFISH_NETWORK_MODE=bridge` is selected for initial device
+approval or sync. `.env.example` matches the Ribbonfish Pi 3 A Plus: profile `pi3a-plus`,
 `/dev/dri/card0`, and video GID 44. Verify those values on each host. Protected
 `main` pushes that change `agent/**` publish ARMv7/ARM64 images to GHCR and
 multi-architecture images to Docker Hub.

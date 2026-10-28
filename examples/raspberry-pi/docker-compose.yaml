@@ -21,6 +21,7 @@ services:
       RIBBONFISH_SYNC_INTERVAL: ${RIBBONFISH_SYNC_INTERVAL:-1m}
       RIBBONFISH_DEVICE_ID: ${RIBBONFISH_DEVICE_ID:-}
       RIBBONFISH_DEVICE_TOKEN_FILE: /var/lib/ribbonfish/device-token
+      RIBBONFISH_DEVICE_KEY_FILE: /var/lib/ribbonfish/device-key
 
     devices:
       - "${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE in .env}:${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE in .env}"

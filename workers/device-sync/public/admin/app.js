@@ -131,6 +131,18 @@ function identifier(value, label) {
   return wrapper;
 }
 
+function fingerprintDisplay(value) {
+  const wrapper = node("span", undefined, "fingerprint-display");
+  const code = node("code", String(value).toUpperCase(), "fingerprint-display__value");
+  wrapper.append(code);
+  const copy = button("Copy", "quiet");
+  copy.classList.add("button--small");
+  copy.setAttribute("aria-label", "Copy full device fingerprint");
+  copy.addEventListener("click", () => copyValue(value, "Device fingerprint copied."));
+  wrapper.append(copy);
+  return wrapper;
+}
+
 async function copyValue(value, successMessage) {
   try {
     await navigator.clipboard.writeText(value);
@@ -399,8 +411,10 @@ function deviceActionButtons(device) {
     } catch (error) { showMessage(error.message, true); }
   });
 
-  const rotate = button("Rotate token", "danger");
-  rotate.addEventListener("click", async () => {
+  const actions = [toggle];
+  if (device.auth_type !== "key") {
+    const rotate = button("Rotate token", "danger");
+    rotate.addEventListener("click", async () => {
     let result;
     try {
       const confirmed = await confirmBeforeAction(
@@ -423,8 +437,10 @@ function deviceActionButtons(device) {
       displaySecret(`New token for ${device.device_id}`, result.device_token);
       await refresh();
     } catch (error) { showMessage(error.message, true); }
-  });
-  return [toggle, rotate];
+    });
+    actions.push(rotate);
+  }
+  return actions;
 }
 
 function renderDeviceCard(device) {
@@ -437,7 +453,9 @@ function renderDeviceCard(device) {
   const details = node("dl");
   const lastSeen = node("div");
   lastSeen.append(node("dt", "Last check-in"), node("dd", formatTimestamp(device.last_seen_at)));
-  details.append(lastSeen);
+  const authentication = node("div");
+  authentication.append(node("dt", "Authentication"), node("dd", device.auth_type === "key" ? "Key-based" : "Legacy token"));
+  details.append(authentication, lastSeen);
   card.append(details);
   const actions = node("div", undefined, "card-actions");
   actions.append(...deviceActionButtons(device));
@@ -450,6 +468,7 @@ function renderDevices(devices) {
     const row = node("tr");
     row.append(cell("Device", identifier(device.device_id, "device ID")));
     row.append(cell("Status", statusBadge(device.enabled ? "Enabled" : "Disabled", device.enabled ? "success" : "neutral")));
+    row.append(cell("Authentication", device.auth_type === "key" ? "Key-based" : "Legacy token"));
     row.append(cell("Last check-in", formatTimestamp(device.last_seen_at)));
     const actions = node("div", undefined, "table-actions");
     actions.append(...deviceActionButtons(device));
@@ -458,18 +477,120 @@ function renderDevices(devices) {
   });
   document.querySelector("#devices").replaceChildren(table(
     "Enrolled devices",
-    ["Device", "Status", "Last check-in", "Actions"],
+    ["Device", "Status", "Authentication", "Last check-in", "Actions"],
     rows,
     {
-      message: "No devices are enrolled yet. Create an enrollment code to add the first device.",
-      actionLabel: "Create enrollment code",
-      href: "#enrollment-form",
+      message: "No devices have been approved yet. New devices appear here after you approve their request.",
     },
   ));
   const cards = document.querySelector("#devices-mobile");
   cards.replaceChildren();
-  if (!devices.length) cards.append(emptyCard("No devices are enrolled yet. Create an enrollment code to add the first device.", "Create enrollment code", "#enrollment-form"));
+  if (!devices.length) cards.append(emptyCard("No devices have been approved yet. New devices appear here after you approve their request."));
   else devices.forEach((device) => cards.append(renderDeviceCard(device)));
+}
+
+function pendingRequestActions(request) {
+  const actions = node("div", undefined, "table-actions");
+  const approve = button("Approve", "primary");
+  approve.addEventListener("click", async () => {
+    const replacement = request.replaces_existing
+      ? ` This will replace the existing credentials for ${request.device_id}.`
+      : "";
+    try {
+      const confirmed = await confirmBeforeAction(
+        (text) => showConfirmDialog({
+          title: "Approve device?",
+          description: text,
+          confirmLabel: "Approve device",
+        }),
+        `Only approve ${request.device_id} if its physical display shows the full fingerprint ${request.fingerprint}.${replacement}`,
+        () => api(`/admin/api/enrollment-requests/${request.request_id}/approve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        }),
+      );
+      if (!confirmed) return;
+      showMessage(`Device ${request.device_id} was approved.`);
+      await refresh();
+    } catch (error) { showMessage(error.message, true); }
+  });
+
+  const reject = button("Reject", "danger");
+  reject.addEventListener("click", async () => {
+    try {
+      const confirmed = await confirmBeforeAction(
+        (text) => showConfirmDialog({
+          title: "Reject device request?",
+          description: text,
+          confirmLabel: "Reject request",
+          destructive: true,
+        }),
+        `Reject the enrollment request from ${request.device_id}? The device will remain unable to sync.`,
+        () => api(`/admin/api/enrollment-requests/${request.request_id}/reject`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        }),
+      );
+      if (!confirmed) return;
+      showMessage(`Device request for ${request.device_id} was rejected.`);
+      await refresh();
+    } catch (error) { showMessage(error.message, true); }
+  });
+  actions.append(approve, reject);
+  return actions;
+}
+
+function renderPendingRequestCard(request) {
+  const card = node("article", undefined, "data-card");
+  const header = node("div", undefined, "data-card__header");
+  header.append(node("h3", request.device_id), statusBadge("Pending", "warning"));
+  card.append(header);
+  const details = node("dl");
+  const fingerprint = node("div");
+  fingerprint.append(node("dt", "Fingerprint"));
+  const value = node("dd");
+  value.append(fingerprintDisplay(request.fingerprint));
+  fingerprint.append(value);
+  details.append(fingerprint);
+  if (request.replaces_existing) {
+    const replacement = node("div");
+    replacement.append(node("dt", "Existing device"), node("dd", "Approval replaces its current credentials."));
+    details.append(replacement);
+  }
+  const created = node("div");
+  created.append(node("dt", "First seen"), node("dd", formatTimestamp(request.created_at)));
+  details.append(created);
+  card.append(details);
+  const actions = pendingRequestActions(request);
+  actions.classList.remove("table-actions");
+  actions.classList.add("card-actions");
+  card.append(actions);
+  return card;
+}
+
+function renderPendingEnrollments(requests) {
+  const rows = requests.map((request) => {
+    const row = node("tr");
+    row.append(cell("Device", identifier(request.device_id, "device ID")));
+    row.append(cell("Fingerprint", fingerprintDisplay(request.fingerprint)));
+    row.append(cell("First seen", formatTimestamp(request.created_at)));
+    row.append(cell("Expires", formatTimestamp(request.expires_at)));
+    row.append(cell("Existing device", request.replaces_existing ? "Credentials will be replaced" : "No"));
+    row.append(cell("Actions", pendingRequestActions(request)));
+    return row;
+  });
+  document.querySelector("#pending-enrollments").replaceChildren(table(
+    "Pending device enrollment requests",
+    ["Device", "Fingerprint", "First seen", "Expires", "Existing device", "Actions"],
+    rows,
+    { message: "No devices are waiting for approval. New devices appear here automatically after they connect." },
+  ));
+  const cards = document.querySelector("#pending-enrollments-mobile");
+  cards.replaceChildren();
+  if (!requests.length) cards.append(emptyCard("No devices are waiting for approval. New devices appear here automatically after they connect."));
+  else requests.forEach((request) => cards.append(renderPendingRequestCard(request)));
 }
 
 function renderSubject(subjectType, subjectID) {
@@ -561,12 +682,16 @@ function renderAudit(events) {
 }
 
 async function refresh() {
-  const overview = await api("/admin/api/overview");
+  const [overview, enrollmentRequests] = await Promise.all([
+    api("/admin/api/overview"),
+    api("/admin/api/enrollment-requests"),
+  ]);
   latestOverview = overview;
   renderEnvironment(overview.environment);
   renderHealth(overview.asset_health);
   renderPlaylists(overview.playlists);
   renderDevices(overview.devices);
+  renderPendingEnrollments(enrollmentRequests);
   renderAudit(overview.audit);
   if (!openuiInitialized) {
     renderOpenUIProgram(OPENUI_STARTER_SOURCE, false);
@@ -744,26 +869,6 @@ document.querySelector("#cancel-playlist-edit").addEventListener("click", () => 
   playlistForm().reset();
   resetPlaylistEditor();
   showInlineMessage(document.querySelector("#playlist-feedback"), "Editing cancelled. Your saved revisions are unchanged.");
-});
-
-document.querySelector("#enrollment-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const formElement = event.currentTarget;
-  const feedback = document.querySelector("#enrollment-feedback");
-  const submitButton = formElement.querySelector("button[type=submit]");
-  const form = new FormData(formElement);
-  submitButton.disabled = true;
-  try {
-    const result = await api("/admin/api/enrollment-codes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ expires_in_minutes: Number(form.get("expires_in_minutes")) }),
-    });
-    showInlineMessage(feedback, "Enrollment code created. Copy it from the one-time panel below.");
-    displaySecret("One-time enrollment code", result.code);
-    await refresh();
-  } catch (error) { showInlineMessage(feedback, error.message, true); }
-  finally { submitButton.disabled = false; }
 });
 
 document.querySelector("#copy-secret").addEventListener("click", async () => {
