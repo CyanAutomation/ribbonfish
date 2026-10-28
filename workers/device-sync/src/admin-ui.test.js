@@ -30,6 +30,11 @@ const overview = {
   asset_health: { missing: [] },
 };
 
+test("management page uses the Ribbonfish favicon", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  assert.match(html, /<link rel="icon" type="image\/png" href="\/admin\/favicon\.png">/);
+});
+
 test("OpenUI Core parses and evaluates a read-only fleet view", async () => {
   let overviewReads = 0;
   const runtime = createFleetOpenUI({
