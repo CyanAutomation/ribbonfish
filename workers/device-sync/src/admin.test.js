@@ -25,6 +25,7 @@ class FakeDatabase {
     }]]);
     this.activePlaylist = { playlist_id: "welcome", revision: "revision-1" };
     this.auditEvents = [];
+    this.assetIntegrityIssues = [];
   }
 
   prepare(sql) {
@@ -84,6 +85,7 @@ class FakeDatabase {
           return { results: row?.assets ?? [] };
         }
         if (sql.includes("FROM audit_events")) return { results: database.auditEvents.slice(-values[0]).reverse() };
+        if (sql.includes("FROM asset_integrity_issues")) return { results: database.assetIntegrityIssues };
         return { results: [] };
       },
       async run() {
@@ -241,6 +243,7 @@ test("R2 failures while serving management assets become an admin error response
 
 test("overview omits device token hashes and reports missing active assets", async () => {
   const env = testEnvironment();
+  env.DB.assetIntegrityIssues.push({ sha256: "b".repeat(64), issue_type: "missing_playlist_asset", first_seen_at: 1, last_seen_at: 2 });
   const response = await handleAdminRequest(request("/admin/api/overview"), env);
   assert.equal(response.status, 200);
   const body = await response.json();
@@ -249,6 +252,7 @@ test("overview omits device token hashes and reports missing active assets", asy
   assert.equal(body.devices[0].auth_type, "token");
   assert.equal(body.environment, "development");
   assert.deepEqual(body.asset_health.missing, [{ sha256: digest, expected_size: 4, actual_size: null }]);
+  assert.deepEqual(body.asset_health.integrity_issues, env.DB.assetIntegrityIssues);
 });
 
 test("overview identifies an Access-protected management deployment", async () => {
