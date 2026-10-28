@@ -4,7 +4,7 @@
 
 **Ribbonfish** is a Cloudflare-native platform for centrally managing information-only screens on lightweight Linux devices (primarily Raspberry Pi 3B/4). It renders websites remotely, distributes versioned screenshots, and displays them through Linux DRM/KMS without requiring a browser or desktop environment on the device.
 
-**Status:** The repository includes the Go agent, authenticated Cloudflare device sync, and an unauthenticated playlist/device management UI and API for an isolated development Worker. Management routes are disabled in the default Worker config and administrator authentication is deferred until production. Screenshot capture remains proposed; physical Raspberry Pi DRM/KMS support is only partially validated.
+**Status:** The repository includes the Go agent, authenticated Cloudflare device sync, and a production playlist/device management UI and API protected by Cloudflare Access. The device-sync Worker keeps management routes disabled. Local console work uses Wrangler's local D1/R2 emulation; no public development Worker is deployed. Screenshot capture remains proposed; physical Raspberry Pi DRM/KMS support is only partially validated.
 
 ## Key Architectural Principles
 
@@ -46,13 +46,13 @@ This is a **proposed monorepo layout** for the full implementation (not yet in p
 └── README.md
 ```
 
-Current state: the Go agent and device sync Worker are implemented. The development management API supports playlist revisions, enrollment codes, device controls, token rotation, audit events, and asset health. Browser rendering/scheduling remains design-stage, and the DRM/KMS backend still needs Pi 3B and Pi 4 dual-output acceptance.
+Current state: the Go agent and device-sync Worker are implemented. The production management API supports playlist revisions, enrollment codes, device controls, token rotation, audit events, and asset health behind Cloudflare Access. Browser rendering/scheduling remains design-stage, and the DRM/KMS backend still needs Pi 3B and Pi 4 dual-output acceptance.
 
 ## Cloudflare Services and Responsibilities
 
 | Service | Role |
 |---------|------|
-| **Workers** | Authenticated device endpoints and a development-only management API/UI; capture services remain proposed |
+| **Workers** | Authenticated device endpoints and an Access-protected production management API/UI; capture services remain proposed |
 | **D1** | Playlists, devices, enrollment codes, last-poll time, and management audit events; site/variant/capture state remains proposed |
 | **Browser Run** | Proposed headless page rendering and screenshot capture |
 | **R2** | Private content-addressed playlist assets; screenshot publication and retention remain proposed |
@@ -197,4 +197,4 @@ it does not satisfy physical hardware acceptance criteria.
 
 - **Architecture:** `/README.md` (comprehensive design doc with constraints, workflows, hardware criteria)
 - **Deployment template:** `/examples/raspberry-pi/` (Docker Compose proof of concept)
-- **Current status:** Device sync and development management controls are implemented; screenshot capture remains proposed
+- **Current status:** Device sync and Access-protected production management controls are implemented; screenshot capture remains proposed
