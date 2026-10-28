@@ -7,6 +7,7 @@ on:
     paths:
       - "workers/device-sync/**"
       - ".github/workflows/device-sync.yml"
+      - ".github/workflows/deploy-device-sync.yml"
   # Keep this unfiltered so required checks are reported for every PR.
   pull_request:
   workflow_dispatch:

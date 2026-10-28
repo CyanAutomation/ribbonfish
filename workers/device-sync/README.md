@@ -60,13 +60,20 @@ records the migrations already represented by that schema. Production schema
 changes use `npm run migrate:management`.
 
 The **Cloudflare Worker validation** GitHub workflow builds the console, runs
-tests, and dry-runs both production Worker configurations. It does not deploy.
-Deploy the Workers explicitly with `npm run deploy:production` and
+tests, and dry-runs both production Worker configurations. When Worker code,
+management assets, Wrangler settings, or deployment build inputs are merged
+into `main`, the **Deploy Ribbonfish Workers** GitHub workflow runs
+automatically. It validates the production build, then deploys both Workers and
+publishes the management panel to R2. It uses the repository secrets
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; the deploy job only runs
+from the protected default branch. You can also deploy explicitly from a
+trusted local checkout with `npm run deploy:production` and
 `npm run deploy:management`.
 
 `npm run deploy:management` publishes the management panel to the production R2
-bucket and deploys `wrangler.management.toml`. Run `npm run migrate:management`
-before deployment when migrations change. The Access policy is configured on
+bucket and deploys `wrangler.management.toml`. GitHub Actions does not apply D1
+migrations. Run `npm run migrate:management` separately when migrations change,
+before deploying code that depends on them. The Access policy is configured on
 the Worker in Cloudflare and must stay enabled; `ADMIN_ACCESS_REQUIRED` also
 blocks `/admin/` and `/admin/api/*` if an Access identity is missing.
 
