@@ -59,6 +59,9 @@ no OpenUI framework renderer is installed.
 `init:local` is only for a fresh local database. It applies `schema.sql` and
 records the migrations already represented by that schema. Production schema
 changes use `npm run migrate:management`.
+Migration `0006_asset_reconciliation.sql` adds the asset registry, sweep cursors,
+integrity issue records, and reference-write guards. Apply it with
+`npm run migrate:management` before deploying code that uses asset reconciliation.
 
 The management config uses a remote Browser binding so screenshot Quick Actions
 can run during local development. Queue messages and D1/R2 state remain local,
@@ -93,8 +96,10 @@ npx wrangler queues create ribbonfish-capture-dead-letter --config wrangler.mana
 ```
 
 Then apply migration `0005_webpage_capture.sql` with `npm run migrate:management`
-before merging. This implementation has not been deployed to production; enable
-capture only after the Browser Run binding and account quotas are available.
+before merging capture code. Apply `0006_asset_reconciliation.sql` before
+deploying asset reconciliation. This implementation has not been deployed to
+production; enable capture only after the Browser Run binding and account quotas
+are available.
 
 ## Management API
 
@@ -107,7 +112,7 @@ in Wrangler's local mode.
 | Method and path | Behavior |
 | --- | --- |
 | `GET /admin/` | Browser management panel |
-| `GET /admin/api/overview` | Devices, playlist revisions, current pointer, missing active assets, and recent audit events |
+| `GET /admin/api/overview` | Devices, playlist revisions, current pointer, missing active assets, unresolved asset integrity issues, and recent audit events |
 | `GET /admin/api/enrollment-requests` | List unexpired pending device requests, including the physical fingerprint |
 | `POST /admin/api/enrollment-requests/{request_id}/approve` | Approve the exact pending public key; body: `{}` |
 | `POST /admin/api/enrollment-requests/{request_id}/reject` | Reject the exact pending request; body: `{}` |
@@ -142,11 +147,23 @@ asset route. Failed captures keep displaying the last successful image. Each
 target retains at most 10 images for up to 30 days, then returns to its holding
 image.
 
-Cron runs each minute and queues due captures from D1. The consumer uses one
-message and one concurrent capture, coalesces each target to one open job,
-caps pending jobs at 100, spaces Browser Run requests by 10 seconds, and applies
-a daily browser-time budget (9 minutes by default, reserving 45 seconds for a
-capture when Browser Run usage is unavailable). Transient errors retry at
+Cron runs each minute and queues due captures from D1. Each scheduled pass also
+prunes capture history and advances a leased, cursor-based asset reconciliation:
+it checks up to 40 R2 objects and 40 distinct D1 references, then resumes from
+the saved cursors on the next pass until both inventories are scanned. It checks
+all playlist revisions plus holding/current images and capture history. Untracked
+legacy objects get a 24-hour grace period; unattached uploads are staged for up
+to seven days. Missing current screenshots are cleared, a missing holding PNG is
+restored when the published source matches its recorded hash and size, and
+missing playlist images appear as integrity issues without changing immutable
+revisions. It handles up to three missing D1 references per pass and resumes
+before any remaining issues. R2 deletion failures remain claimed and are retried
+on later passes.
+The consumer uses one message and one concurrent capture, coalesces each target
+to one open job, caps pending jobs at 100, spaces Browser Run requests by 10
+seconds, and applies a daily browser-time budget (9 minutes by default,
+reserving 45 seconds for a capture when Browser Run usage is unavailable).
+Transient errors retry at
 60 and 180 seconds; budget/rate deferrals wait for a later Cron tick. Check
 current account Browser Run quotas before enabling production capture.
 Deleting a playlist removes its revisions and image references from D1, while
@@ -203,8 +220,8 @@ node scripts/publish-playlist.mjs defaults/default-playlist.json --activate \
 
 The script calculates SHA-256 hashes and sizes, uploads immutable objects under
 `assets/<sha256>`, and records a new D1 revision before moving the active
-pointer. Older revisions and objects are retained; playlist asset garbage
-collection is not implemented.
+pointer. Objects stay available while any revision references them. The
+scheduled asset sweep removes an object after its final D1 reference is removed.
 
 ## Existing fleet provisioning
 

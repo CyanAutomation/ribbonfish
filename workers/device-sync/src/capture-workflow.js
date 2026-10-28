@@ -1,4 +1,6 @@
 import { captureScreenshot } from "./capture.js";
+import { ASSET_RECONCILIATION_PAGE_SIZE, deleteUnreferencedAssets } from "./asset-maintenance.js";
+import { markAssetLiveStatement } from "./asset-registry.js";
 
 export const MAX_CAPTURE_ATTEMPTS = 3;
 export const MAX_CAPTURE_HISTORY = 10;
@@ -140,6 +142,7 @@ async function processCaptureMessage(message, env, now) {
     : nonNegativeInteger(env.CAPTURE_BUDGET_RESERVE_MS, DEFAULT_BUDGET_RESERVE_MS);
   if (usedMs) await addBrowserUsage(env, usedMs, now);
   await env.DB.batch([
+    markAssetLiveStatement(env.DB, result.sha256, result.size, now),
     env.DB.prepare(
       "INSERT INTO capture_history (capture_id, job_id, sha256, size, captured_at, browser_ms) VALUES (?, ?, ?, ?, ?, ?)",
     ).bind(job.capture_id, jobID, result.sha256, result.size, now, usedMs),
@@ -253,21 +256,12 @@ async function pruneCaptureHistory(env, captureID, now) {
       "UPDATE capture_targets SET current_sha256 = NULL, current_size = NULL WHERE capture_id = ? AND current_sha256 = ?",
     ).bind(captureID, target.current_sha256));
   }
-  if (statements.length) await env.DB.batch(statements);
+  for (let offset = 0; offset < statements.length; offset += ASSET_RECONCILIATION_PAGE_SIZE) {
+    await env.DB.batch(statements.slice(offset, offset + ASSET_RECONCILIATION_PAGE_SIZE));
+  }
   const candidates = new Set(remove.map((row) => row.sha256));
   if (currentExpired) candidates.add(target.current_sha256);
-  for (const sha256 of candidates) await deleteIfUnreferenced(env, sha256);
-}
-
-async function deleteIfUnreferenced(env, sha256) {
-  const [playlist, capture, history] = await Promise.all([
-    env.DB.prepare("SELECT 1 AS present FROM playlist_assets WHERE sha256 = ? LIMIT 1").bind(sha256).first(),
-    env.DB.prepare(
-      "SELECT 1 AS present FROM capture_targets WHERE placeholder_sha256 = ? OR current_sha256 = ? LIMIT 1",
-    ).bind(sha256, sha256).first(),
-    env.DB.prepare("SELECT 1 AS present FROM capture_history WHERE sha256 = ? LIMIT 1").bind(sha256).first(),
-  ]);
-  if (!playlist && !capture && !history) await env.ASSETS.delete?.(`assets/${sha256}`);
+  await deleteUnreferencedAssets(env, [...candidates], now);
 }
 
 export async function cleanupExpiredCaptures(env, now = Date.now()) {
