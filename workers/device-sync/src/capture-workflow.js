@@ -70,14 +70,17 @@ export async function dispatchDueCaptures(env, now = Date.now()) {
   ).first();
   const capacity = Math.max(0, Math.min(MAX_PENDING_CAPTURE_JOBS, Number(env.CAPTURE_MAX_PENDING) || MAX_PENDING_CAPTURE_JOBS) - (pending?.count ?? 0));
   if (capacity === 0) return { enqueued: 0, skipped: false };
+  // Staged targets receive a first or stale-image warmup; recurring captures stay active-playlist only.
   const due = await env.DB.prepare(
     "SELECT t.capture_id FROM capture_targets t " +
     "WHERE t.enabled = 1 AND t.next_due_at <= ? " +
-    "AND EXISTS (SELECT 1 FROM playlist_capture_items p JOIN active_playlist a " +
+    "AND (EXISTS (SELECT 1 FROM playlist_capture_items p JOIN active_playlist a " +
     "ON a.playlist_id = p.playlist_id AND a.revision = p.revision WHERE p.capture_id = t.capture_id) " +
+    "OR ((t.current_sha256 IS NULL OR t.last_success_at IS NULL OR t.last_success_at < ?) " +
+    "AND EXISTS (SELECT 1 FROM playlist_capture_items p WHERE p.capture_id = t.capture_id))) " +
     "AND NOT EXISTS (SELECT 1 FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued', 'running')) " +
     "ORDER BY t.next_due_at, t.created_at LIMIT ?",
-  ).bind(now, capacity).all();
+  ).bind(now, now - CAPTURE_RETENTION_MS, capacity).all();
   let enqueued = 0;
   for (const target of due.results ?? []) {
     try {

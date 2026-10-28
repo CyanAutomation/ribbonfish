@@ -966,7 +966,7 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
       }),
     });
     const captureNote = result.capture_count
-      ? ` ${result.capture_count} webpage capture${result.capture_count === 1 ? "" : "s"} will start after activation.`
+      ? " Initial webpage captures are queued after saving as capacity allows; recent screenshots and active jobs are reused."
       : "";
     showInlineMessage(feedback, `New revision ${compactIdentifier(result.revision)} is ready.${captureNote} Activate it whenever you’re ready.`);
     formElement.reset();
