@@ -52,6 +52,7 @@ function environment(sqlite, { quickAction } = {}) {
       ADMIN_ACCESS_REQUIRED: "false",
       DAILY_BROWSER_BUDGET_MS: "540000",
       CAPTURE_MIN_REQUEST_GAP_MS: "0",
+      CAPTURE_ALLOWED_HOSTS: "example.com",
       CAPTURE_QUEUE: { async send(body) { messages.push(body); } },
       BROWSER: { async quickAction(...args) {
         if (!quickAction) throw new Error("Browser Run not configured");
@@ -271,6 +272,10 @@ test("capture requests reject private targets and queueing coalesces each target
   const sqlite = await freshDatabase();
   try {
     const { env, messages } = environment(sqlite);
+    const disallowed = await createCapturePlaylist(env, "https://not-allowed.example/status");
+    assert.equal(disallowed.response.status, 400);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM playlists").get().count, 0);
+
     const unsafe = await createCapturePlaylist(env, "https://127.0.0.1/private");
     assert.equal(unsafe.response.status, 400);
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM playlists").get().count, 0);
@@ -283,6 +288,51 @@ test("capture requests reject private targets and queueing coalesces each target
     assert.equal(second.status, 202);
     assert.equal(messages.length, 1);
     assert.equal((await first.json()).job_id, (await second.json()).job_id);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("manual capture runs reject a target removed from the allowlist before enqueueing", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const captureID = created.body.captures[0].capture_id;
+    env.CAPTURE_ALLOWED_HOSTS = "other.example";
+
+    const response = await handleAdminRequest(await request(`/admin/api/captures/${captureID}/run`, {
+      method: "POST", body: {},
+    }), env);
+
+    assert.equal(response.status, 409);
+    assert.match(await response.text(), /allowlist/i);
+    assert.equal(messages.length, 0);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_jobs").get().count, 0);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("scheduled capture dispatch skips targets removed from the allowlist", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const captureID = created.body.captures[0].capture_id;
+    const originalDue = sqlite.prepare("SELECT next_due_at FROM capture_targets WHERE capture_id = ?")
+      .get(captureID).next_due_at;
+    env.CAPTURE_ALLOWED_HOSTS = "other.example";
+
+    await assert.rejects(
+      enqueueCapture(captureID, env, { now: originalDue + 10_000, scheduled: true }),
+      /allowlist/i,
+    );
+
+    assert.equal(messages.length, 0);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_jobs").get().count, 0);
+    assert.equal(sqlite.prepare("SELECT next_due_at FROM capture_targets WHERE capture_id = ?")
+      .get(captureID).next_due_at, originalDue);
   } finally {
     sqlite.close();
   }
