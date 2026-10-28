@@ -1,0 +1,45 @@
+name: Verify Go agent
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-cross-compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.mod
+      - name: Check formatting
+        working-directory: agent
+        run: test -z "$(gofmt -l .)"
+      - name: Static analysis
+        working-directory: agent
+        run: go vet ./...
+      - name: Check for known Go vulnerabilities
+        working-directory: agent
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - name: Unit tests with race detector
+        working-directory: agent
+        run: go test -race ./...
+      - name: Cross-compile Linux ARMv7
+        working-directory: agent
+        env:
+          GOOS: linux
+          GOARCH: arm
+          GOARM: "7"
+        run: go build -o /tmp/ribbonfish-linux-armv7 ./cmd/ribbonfish
+      - name: Cross-compile Linux ARM64
+        working-directory: agent
+        env:
+          GOOS: linux
+          GOARCH: arm64
+        run: go build -o /tmp/ribbonfish-linux-arm64 ./cmd/ribbonfish
