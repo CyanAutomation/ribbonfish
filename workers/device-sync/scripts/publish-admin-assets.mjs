@@ -44,12 +44,16 @@ const files = [
   ["index.html", "text/html; charset=utf-8"],
   ["app.js", "text/javascript; charset=utf-8"],
   ["styles.css", "text/css; charset=utf-8"],
+  ["capture-pending.png", "image/png"],
 ];
 
 for (const [file, contentType] of files) {
+  const source = file === "capture-pending.png"
+    ? resolve(workerDirectory, "public/admin", file)
+    : resolve(buildDirectory, file);
   execFileSync("npx", [
     "wrangler", "r2", "object", "put", `${bucket}/admin/${file}`,
-    "--file", resolve(buildDirectory, file),
+    "--file", source,
     "--content-type", contentType,
     local ? "--local" : "--remote",
     "--force",
