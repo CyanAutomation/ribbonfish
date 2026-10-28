@@ -125,7 +125,7 @@ The service defaults to `network_mode: none`. Pulling the image needs a network
 connection; after it is present locally, the service itself can start offline.
 The image contains a starter playlist, and the Compose project-scoped
 `ribbonfish_ribbonfish-state` volume holds the cache, last-good playlist
-snapshot, frames, and device credential. The container runs as UID 65532 with
+snapshot, frames, and device identity key. The container runs as UID 65532 with
 a read-only root filesystem and no added capabilities.
 
 Protected `main` pushes that change `agent/**` and pass verification publish
@@ -141,11 +141,12 @@ that can read the package.
 ## Optional Cloudflare sync and enrollment
 
 The sync Worker serves one globally active versioned playlist to every
-enrolled device. D1 stores the playlist catalog and credential hashes; the Pi
-stores only its own random token and last-good playlist in the persistent state
-volume. The container image contains no Cloudflare account credential. Worker
-setup, trusted playlist publishing, enrollment-code generation, and revocation
-instructions are in
+approved device. New devices create a persistent Ed25519 key in the state
+volume and send a signed request automatically; the private key never leaves
+the Pi. The Worker stores the public key and keeps the request pending until
+you approve it in the management console. The container image contains no
+Cloudflare account credential. Worker setup, playlist publishing, approval,
+and revocation instructions are in
 [`../../workers/device-sync/README.md`](../../workers/device-sync/README.md).
 
 Sync is an explicit opt-in. Set the Worker URL and device ID to generate a
@@ -168,16 +169,21 @@ RIBBONFISH_SYNC_URL=https://ribbonfish.scheimann.workers.dev
 RIBBONFISH_DEVICE_ID=ribbonfish-01
 ```
 
-After enrollment, the agent downloads the currently active playlist and its
-verified assets from the Worker automatically, then keeps a last-good local
-copy for offline playback. The Worker supplies playlist content only; the Pi's
-DRM card, connectors, and display profile still come from the local image and
-must match the attached hardware. The device-sync Worker keeps management
-routes disabled; use the separate production management console behind
-Cloudflare Access to provision production devices.
+On first start, the agent displays the device ID and a grouped fingerprint on
+its screens while it waits. In the production management console, open
+**Waiting for approval**, compare the entire fingerprint with the physical
+display, then approve the device. Once approved, the agent downloads the
+currently active playlist and verified assets automatically, then keeps a
+last-good local copy for offline playback. The Worker supplies playlist
+content only; the Pi's DRM card, connectors, and display profile still come
+from the local image and must match the attached hardware. The device-sync
+Worker keeps management routes disabled; use the separate production
+management console behind Cloudflare Access to approve production devices.
 
-Exchange a one-time code through stdin. This writes the device token to the
-same named volume used by the service and does not print the token:
+Existing devices can continue to use the legacy one-time-code flow. New devices
+do not need a code or a separate enrollment command. To manually provision an
+older agent, exchange a one-time code through stdin; it writes the device token
+to the same named volume and does not print the token:
 
 ```sh
 read -r -s -p 'One-time code: ' enrollment_code

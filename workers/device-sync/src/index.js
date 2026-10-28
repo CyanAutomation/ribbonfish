@@ -3,8 +3,11 @@ import { handleAdminRequest } from "./admin.js";
 
 const MAX_ENROLLMENT_BYTES = 4 << 10;
 const MAX_ASSET_BYTES = 32 << 20;
+const ENROLLMENT_REQUEST_TTL_MS = 24 * 60 * 60 * 1000;
+const SIGNATURE_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
+const PUBLIC_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 class HTTPError extends Error {
   constructor(status, message) {
@@ -34,6 +37,11 @@ export async function fetchHandler(request, env, ctx) {
     if (url.pathname === "/v1/enroll") {
       if (request.method !== "POST") return methodNotAllowed("POST");
       return await enroll(request, env);
+    }
+
+    if (url.pathname === "/v1/enrollment-requests") {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      return await requestDeviceEnrollment(request, env);
     }
 
     if (url.pathname === "/v2/playlist") {
@@ -158,17 +166,100 @@ async function enroll(request, env) {
   return jsonResponse({ device_token: token }, 201);
 }
 
+async function requestDeviceEnrollment(request, env) {
+  const rateLimiter = env.ENROLLMENT_RATE_LIMITER;
+  if (rateLimiter) {
+    const ipAddress = request.headers.get("CF-Connecting-IP") ?? "unknown";
+    const { success } = await rateLimiter.limit({ key: ipAddress });
+    if (!success) throw new HTTPError(429, "too many enrollment requests; retry later");
+  }
+
+  const { data, bodyBytes } = await readJSONBody(request, MAX_ENROLLMENT_BYTES);
+  if (!hasExactKeys(data, ["device_id", "public_key"]) ||
+      !ID_PATTERN.test(data.device_id ?? "") || !PUBLIC_KEY_PATTERN.test(data.public_key ?? "")) {
+    throw new HTTPError(400, "invalid enrollment request");
+  }
+  const publicKeyBytes = decodeBase64Url(data.public_key);
+  if (publicKeyBytes.byteLength !== 32 || encodeBase64Url(publicKeyBytes) !== data.public_key) {
+    throw new HTTPError(400, "invalid enrollment public key");
+  }
+  if (!await verifyDeviceSignature(request, data.device_id, data.public_key, bodyBytes)) {
+    throw new HTTPError(401, "device enrollment proof failed");
+  }
+
+  const requestID = await sha256HexBytes(publicKeyBytes);
+  const fingerprint = formatFingerprint(requestID);
+  const now = Date.now();
+  const existingDevice = await env.DB.prepare(
+    "SELECT device_id, public_key, enabled FROM devices WHERE device_id = ?",
+  ).bind(data.device_id).first();
+  if (existingDevice?.public_key === data.public_key) {
+    return jsonResponse({
+      status: existingDevice.enabled === 1 ? "approved" : "disabled",
+      fingerprint,
+      request_id: requestID,
+      expires_at: null,
+      replaces_existing: false,
+    });
+  }
+
+  await env.DB.prepare("DELETE FROM enrollment_requests WHERE expires_at <= ?").bind(now).run();
+  const existingRequest = await env.DB.prepare(
+    "SELECT request_id, device_id, public_key, fingerprint, created_at, last_seen_at, expires_at, status " +
+    "FROM enrollment_requests WHERE request_id = ?",
+  ).bind(requestID).first();
+  if (existingRequest && (existingRequest.device_id !== data.device_id || existingRequest.public_key !== data.public_key)) {
+    throw new HTTPError(409, "enrollment request identity conflict");
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO enrollment_requests
+       (request_id, device_id, public_key, fingerprint, created_at, last_seen_at, expires_at, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+     ON CONFLICT(request_id) DO UPDATE SET last_seen_at = excluded.last_seen_at
+     WHERE enrollment_requests.status = 'pending'
+       AND enrollment_requests.device_id = excluded.device_id
+       AND enrollment_requests.public_key = excluded.public_key`,
+  ).bind(requestID, data.device_id, data.public_key, fingerprint, now, now, now + ENROLLMENT_REQUEST_TTL_MS).run();
+
+  const current = await env.DB.prepare(
+    "SELECT request_id, device_id, public_key, fingerprint, created_at, last_seen_at, expires_at, status " +
+    "FROM enrollment_requests WHERE request_id = ?",
+  ).bind(requestID).first();
+  if (!current || current.device_id !== data.device_id || current.public_key !== data.public_key) {
+    throw new HTTPError(409, "enrollment request is no longer active");
+  }
+  if (current.status === "approved") {
+    throw new HTTPError(409, "enrollment request was superseded by another device credential");
+  }
+  return jsonResponse({
+    status: current.status,
+    fingerprint,
+    request_id: requestID,
+    expires_at: current.expires_at,
+    replaces_existing: Boolean(existingDevice),
+  });
+}
+
 async function authenticate(request, env, deviceID) {
   if (!ID_PATTERN.test(deviceID)) throw new HTTPError(401, "device authentication failed");
-  const authorization = request.headers.get("Authorization") ?? "";
-  const match = authorization.match(/^Bearer ([A-Za-z0-9_-]{32,256})$/);
-  if (!match) throw new HTTPError(401, "device authentication failed");
   const device = await env.DB.prepare(
-    "SELECT device_id, token_hash, enabled FROM devices WHERE device_id = ?",
+    "SELECT device_id, token_hash, public_key, enabled FROM devices WHERE device_id = ?",
   ).bind(deviceID).first();
   if (!device || device.enabled !== 1) {
     throw new HTTPError(401, "device authentication failed");
   }
+
+  if (typeof device.public_key === "string" && device.public_key) {
+    if (!await verifyDeviceSignature(request, deviceID, device.public_key, new Uint8Array())) {
+      throw new HTTPError(401, "device authentication failed");
+    }
+    return device;
+  }
+
+  const authorization = request.headers.get("Authorization") ?? "";
+  const match = authorization.match(/^Bearer ([A-Za-z0-9_-]{32,256})$/);
+  if (!match) throw new HTTPError(401, "device authentication failed");
   const presentedHash = await sha256Hex(match[1]);
   if (!constantTimeEqual(presentedHash, device.token_hash)) {
     throw new HTTPError(401, "device authentication failed");
@@ -221,6 +312,10 @@ function validatePlaylist(playlist) {
 }
 
 async function readJSON(request, maxBytes) {
+  return (await readJSONBody(request, maxBytes)).data;
+}
+
+async function readJSONBody(request, maxBytes) {
   const reader = request.body?.getReader();
   if (!reader) throw new HTTPError(400, "request body is required");
   const chunks = [];
@@ -246,10 +341,62 @@ async function readJSON(request, maxBytes) {
       bytes.set(chunk, offset);
       offset += chunk.byteLength;
     }
-    return JSON.parse(new TextDecoder().decode(bytes));
+    return { data: JSON.parse(new TextDecoder().decode(bytes)), bodyBytes: bytes };
   } catch {
     throw new HTTPError(400, "request body must be valid JSON");
   }
+}
+
+async function verifyDeviceSignature(request, deviceID, publicKey, bodyBytes) {
+  const timestamp = request.headers.get("X-Ribbonfish-Timestamp") ?? "";
+  if (!/^\d{13}$/.test(timestamp)) return false;
+  const timestampValue = Number(timestamp);
+  if (!Number.isSafeInteger(timestampValue) || Math.abs(Date.now() - timestampValue) > SIGNATURE_CLOCK_SKEW_MS) return false;
+
+  const signatureText = request.headers.get("X-Ribbonfish-Signature") ?? "";
+  if (!/^[A-Za-z0-9_-]{86}$/.test(signatureText)) return false;
+  const signature = decodeBase64Url(signatureText);
+  const publicKeyBytes = decodeBase64Url(publicKey);
+  if (signature.byteLength !== 64 || publicKeyBytes.byteLength !== 32) return false;
+
+  try {
+    const key = await crypto.subtle.importKey("raw", publicKeyBytes, { name: "Ed25519" }, false, ["verify"]);
+    const url = new URL(request.url);
+    const target = url.pathname + url.search;
+    const bodyHash = await sha256HexBytes(bodyBytes);
+    const payload = [
+      "ribbonfish-device-v1",
+      request.method,
+      target,
+      deviceID,
+      timestamp,
+      request.headers.get("If-None-Match") ?? "",
+      bodyHash,
+    ].join("\n");
+    return await crypto.subtle.verify("Ed25519", key, signature, new TextEncoder().encode(payload));
+  } catch {
+    return false;
+  }
+}
+
+function decodeBase64Url(value) {
+  try {
+    const base64 = value.replaceAll("-", "+").replaceAll("_", "/");
+    const binary = atob(base64 + "=".repeat((4 - base64.length % 4) % 4));
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    return new Uint8Array();
+  }
+}
+
+function encodeBase64Url(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+function formatFingerprint(requestID) {
+  return requestID.slice(0, 32).match(/.{4}/g).join("-");
 }
 
 function randomToken() {
@@ -259,6 +406,10 @@ function randomToken() {
 
 export async function sha256Hex(value) {
   const bytes = new TextEncoder().encode(value);
+  return sha256HexBytes(bytes);
+}
+
+async function sha256HexBytes(bytes) {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }

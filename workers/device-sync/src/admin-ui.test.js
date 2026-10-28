@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import {
   createFleetOpenUI,
   OPENUI_STARTER_SOURCE,
@@ -163,6 +164,18 @@ test("waitForQueries rejects when the runtime is disposed during a pending query
 
   await assert.rejects(waiting, /disposed/i);
   resolveOverview(overview);
+});
+
+test("device management shows pending approval fingerprints and removes the enrollment-code form", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
+  assert.match(html, /id="pending-enrollments"/);
+  assert.match(html, /id="pending-enrollments-mobile"/);
+  assert.doesNotMatch(html, /id="enrollment-form"/);
+  assert.match(app, /physical display shows the full fingerprint/);
+  assert.match(app, /enrollment-requests\/\$\{request\.request_id\}\/approve/);
+  assert.match(app, /enrollment-requests\/\$\{request\.request_id\}\/reject/);
+  assert.doesNotMatch(app, /#enrollment-form/);
 });
 
 test("audit timestamps are explicit UTC and preserve the Unix epoch", () => {

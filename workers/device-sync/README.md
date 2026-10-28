@@ -1,10 +1,10 @@
 # Ribbonfish device sync and management Workers
 
 The Worker serves one globally active playlist to enrolled devices. D1 stores
-versioned playlists, the active-playlist pointer, device credential hashes,
-one-time enrollment codes, last-poll timestamps, and management audit events.
-R2 stores private content-addressed PNG assets. Devices receive only
-their application credential; they never receive a Cloudflare account token.
+versioned playlists, the active-playlist pointer, legacy credential hashes,
+approved device public keys, pending enrollment requests, last-poll timestamps,
+and management audit events. R2 stores private content-addressed PNG assets.
+Devices keep their own private key; the Worker stores only its public key.
 
 ## Workers and environments
 
@@ -72,10 +72,11 @@ trusted local checkout with `npm run deploy:production` and
 
 `npm run deploy:management` publishes the management panel to the production R2
 bucket and deploys `wrangler.management.toml`. GitHub Actions does not apply D1
-migrations. Run `npm run migrate:management` separately when migrations change,
-before deploying code that depends on them. The Access policy is configured on
-the Worker in Cloudflare and must stay enabled; `ADMIN_ACCESS_REQUIRED` also
-blocks `/admin/` and `/admin/api/*` if an Access identity is missing.
+migrations. The push to protected `main` deploys the Workers automatically, so
+apply `npm run migrate:management` before merging code that depends on a new
+migration. The Access policy is configured on the Worker in Cloudflare and must
+stay enabled; `ADMIN_ACCESS_REQUIRED` also blocks `/admin/` and
+`/admin/api/*` if an Access identity is missing.
 
 ## Management API
 
@@ -89,9 +90,12 @@ in Wrangler's local mode.
 | --- | --- |
 | `GET /admin/` | Browser management panel |
 | `GET /admin/api/overview` | Devices, playlist revisions, current pointer, missing active assets, and recent audit events |
-| `POST /admin/api/enrollment-codes` | Create a one-time code; body: `{"expires_in_minutes":30}`; plaintext code is returned once |
+| `GET /admin/api/enrollment-requests` | List unexpired pending device requests, including the physical fingerprint |
+| `POST /admin/api/enrollment-requests/{request_id}/approve` | Approve the exact pending public key; body: `{}` |
+| `POST /admin/api/enrollment-requests/{request_id}/reject` | Reject the exact pending request; body: `{}` |
+| `POST /admin/api/enrollment-codes` | Legacy provisioning API; create a one-time code with `{"expires_in_minutes":30}` |
 | `PATCH /admin/api/devices/{device_id}` | Enable or disable a device; body: `{"enabled":false}` |
-| `POST /admin/api/devices/{device_id}/rotate` | Replace a device token and return the new token once; body: `{}` |
+| `POST /admin/api/devices/{device_id}/rotate` | Replace a legacy device token and return it once; key-based devices use a new approval to change identity |
 | `POST /admin/api/assets` | Upload one PNG body with `Content-Type: image/png`; returns its SHA-256 and byte size |
 | `GET /admin/api/assets/{sha256}` | Preview a PNG that is referenced by a playlist revision |
 | `POST /admin/api/playlists` | Stage an immutable playlist revision; body includes `id`, `rotation_interval`, and ordered `{sha256,size}` asset references |
@@ -106,14 +110,40 @@ Editing a revision creates a new immutable revision. You can keep or remove its
 existing images and add uploaded PNGs; the source revision stays unchanged.
 Deleting a playlist removes its revisions and image references from D1, while
 content-addressed PNG objects remain in R2 for reuse. The UI uses text-only DOM
-rendering and applies a restrictive content security policy. Enrollment codes
-and rotated device tokens are never written to audit metadata.
+rendering and applies a restrictive content security policy. The approval UI
+shows the complete device fingerprint and asks the operator to compare it with
+the code physically displayed by that device. Approval binds that exact key to
+the device ID, disables any previous token for that device, and records an
+audit event. Rejection leaves the device unable to sync. Secrets and raw public
+keys are never returned by management APIs or written to audit metadata.
 
 Device sync remains:
 
-- `POST /v1/enroll` exchanges a one-time enrollment code for a random device token.
+- `POST /v1/enrollment-requests` verifies a request signed by the device's
+  Ed25519 key and creates or polls a pending approval. It grants no content
+  access. Pending requests expire after 24 hours; the device retries with the
+  same identity. Enrollment requests are rate limited to 30 per minute per
+  source IP as an abuse-control measure.
 - `GET /v2/playlist` returns the active playlist with conditional ETags.
 - `GET /v2/assets/{sha256}` returns an asset only when it is in the active playlist.
+
+New devices enroll automatically when `RIBBONFISH_SYNC_URL` and
+`RIBBONFISH_DEVICE_ID` are configured and no legacy device token exists. The
+agent creates a persistent Ed25519 identity in `/var/lib/ribbonfish/device-key`
+with mode `0600`, displays the device ID and grouped fingerprint on its output,
+and retries the signed request if the Worker is temporarily unreachable. An
+operator opens the production console, compares the complete fingerprint with
+the physical display, then approves or rejects the request. After approval the
+device begins polling and downloads the active playlist. Existing token-based
+devices continue to work with their token file. If an existing device has lost
+that file, its new key request is marked as a replacement in the console, and
+approval replaces the token with key-based authentication. Legacy
+`POST /v1/enroll` remains available for devices already provisioned with
+one-time codes.
+
+The rate-limit binding uses Cloudflare's per-location rate limiter, which is
+approximate rather than a globally exact quota. It complements signature
+validation and the approval step.
 
 Playlist polling updates `devices.last_seen_at`. This is a timestamp of the most
 recent poll, not a persistent connection or a precise online/offline signal.
@@ -144,9 +174,11 @@ previous migrations have been recorded:
 npx wrangler --config wrangler.management.toml d1 migrations apply ribbonfish-devices --remote
 ```
 
-The new migration adds last-poll telemetry and the management audit table. The
-sync Worker keeps management routes disabled; the production management Worker
-enables them behind Cloudflare Access.
+Migration `0004_pending_device_enrollment.sql` adds public-key device auth and
+the pending-request table while preserving existing token-authenticated
+devices. Apply it before deploying the code. The sync Worker keeps management
+routes disabled; the production management Worker enables them behind
+Cloudflare Access.
 
 To issue or revoke a device manually, use the production management panel. Keep
 the D1 database private and do not paste enrollment codes or device tokens into

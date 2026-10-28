@@ -86,9 +86,11 @@ a deployment. The published-image
 simulator Compose example is in
 `examples/raspberry-pi/docker-compose.published.yaml`. The hardware Compose
 example starts from bundled local content with no network by default. Optional
-sync requires an explicit bridge network, Worker URL, device ID, and a token
-provisioned with `-enroll`; the random device token is stored in the persistent
-state volume with mode 0600. Single-display 1080p KMS mode-setting and frame updates have been
+sync requires an explicit bridge network, Worker URL, and device ID. If no
+legacy token exists, the agent creates a persistent Ed25519 identity, displays
+its fingerprint, and waits for approval in the management console before it
+starts syncing. The private key is stored in the state volume with mode 0600.
+Older devices can continue using a one-time code through `-enroll`. Single-display 1080p KMS mode-setting and frame updates have been
 verified over SSH on a Pi 3 Model A Plus, and the user confirmed the sample
 slides were visible. Pi 3B and Pi 4 dual-display behavior still need physical
 acceptance. Emulated tests do not prove KMS scanout.

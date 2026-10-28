@@ -244,6 +244,10 @@ label { display: grid; gap: var(--space-1); color: var(--color-text-label); font
 .openui-notice-body { margin: 0; color: var(--color-muted); }
 
 .secret-panel code { display: block; margin: var(--space-3) 0; padding: var(--space-3); border-radius: var(--radius-control); background: var(--color-neutral-bg); overflow-wrap: anywhere; }
+.pending-enrollments { margin: var(--space-4) 0; padding: var(--space-4); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-panel); background: var(--color-surface-soft); }
+.pending-enrollments h3 { margin: 0; }
+.fingerprint-display { display: inline-flex; align-items: flex-start; gap: var(--space-2); max-width: 100%; }
+.fingerprint-display__value { max-width: 34rem; overflow-wrap: anywhere; font-size: .82rem; line-height: 1.5; }
 .confirm-dialog { width: min(32rem, calc(100% - 2rem)); max-width: none; padding: 0; border: 0; border-radius: var(--radius-panel); box-shadow: var(--shadow-dialog); color: var(--color-ink); }
 .confirm-dialog::backdrop { background: var(--color-overlay); }
 .confirm-dialog form { padding: var(--space-6); }
