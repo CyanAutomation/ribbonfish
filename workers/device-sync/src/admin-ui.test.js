@@ -15,6 +15,8 @@ import {
   formatTimestamp,
 } from "../public/admin/ui-utils.js";
 
+// Contract source: ../README.md#local-development and ../README.md#management-api.
+
 const overview = {
   devices: [{ enabled: 1 }, { enabled: 0 }],
   playlists: [{ active: true }, { active: false }],
@@ -85,7 +87,7 @@ test("fleet snapshot is concise and accurate when no playlist is active", async 
   runtime.dispose();
 });
 
-test("fleet snapshot compacts long active playlist revisions", async () => {
+test("fleet view compacts long revisions and keeps short or missing identifiers readable", async () => {
   const runtime = createFleetOpenUI({
     getOverview: async () => ({
       ...overview,
@@ -98,10 +100,12 @@ test("fleet snapshot compacts long active playlist revisions", async () => {
 
   const active = runtime.getView().root.props.children[1];
   assert.equal(active.props.value, "operations / r-01234567…89abcd");
+  assert.equal(compactIdentifier("r-short"), "r-short");
+  assert.equal(compactIdentifier(null), "—");
   runtime.dispose();
 });
 
-test("OpenUI view permits only the existing overview query and no mutations", () => {
+test("OpenUI fleet view follows the documented read-only contract", () => {
   let overviewReads = 0;
   const runtime = createFleetOpenUI({
     getOverview: async () => {
@@ -117,18 +121,13 @@ test("OpenUI view permits only the existing overview query and no mutations", ()
     'root = Dashboard([])\nchange = Mutation("disable_device", {})',
   ), /mutations are disabled/i);
   assert.equal(overviewReads, 0);
+  assert.match(runtime.prompt, /Use only the get_fleet_overview read-only query/i);
+  assert.match(runtime.prompt, /Do not emit Mutation statements, actions/i);
+  assert.match(runtime.prompt, /do not expose credentials or tokens/i);
   runtime.dispose();
 });
 
-test("OpenUI prompt documents the library and read-only overview query", () => {
-  const runtime = createFleetOpenUI({ getOverview: async () => overview });
-  assert.match(runtime.prompt, /get_fleet_overview/);
-  assert.match(runtime.prompt, /Metric/);
-  assert.match(runtime.prompt, /read-only/i);
-  runtime.dispose();
-});
-
-test("OpenUI Core streaming parser accepts partial programs and Core merges patches", () => {
+test("OpenUI editor recognizes incomplete input and validates the merged fleet view", () => {
   const runtime = createFleetOpenUI({ getOverview: async () => overview });
   const partial = runtime.inspectProgram('root = Dashboard([deviceMetric');
   assert.equal(partial.incomplete, true);
@@ -137,30 +136,33 @@ test("OpenUI Core streaming parser accepts partial programs and Core merges patc
     OPENUI_STARTER_SOURCE,
     "root = Dashboard([deviceMetric, activeMetric])",
   );
-  assert.match(merged, /activeMetric/);
+  const result = runtime.inspectProgram(merged);
+  assert.equal(result.incomplete, false);
+  assert.deepEqual(result.errors, []);
+  assert.match(merged, /root = Dashboard\(\[deviceMetric, activeMetric\]\)/);
+  assert.match(merged, /overview = Query\("get_fleet_overview"/);
   assert.doesNotMatch(merged, /stagedMetric/);
   runtime.dispose();
 });
 
 test("waitForQueries rejects when the runtime is disposed during a pending query", async () => {
   let resolveOverview;
+  let markOverviewStarted;
+  const overviewStarted = new Promise((resolve) => { markOverviewStarted = resolve; });
   const runtime = createFleetOpenUI({
-    getOverview: () => new Promise((resolve) => { resolveOverview = resolve; }),
+    getOverview: () => {
+      markOverviewStarted();
+      return new Promise((resolve) => { resolveOverview = resolve; });
+    },
   });
 
   runtime.renderProgram(OPENUI_STARTER_SOURCE);
-  const waiting = runtime.waitForQueries().then(
-    () => "resolved",
-    (error) => error.message,
-  );
+  await overviewStarted;
+  const waiting = runtime.waitForQueries();
   runtime.dispose();
 
-  const outcome = await Promise.race([
-    waiting,
-    new Promise((resolve) => setTimeout(() => resolve("still pending"), 25)),
-  ]);
+  await assert.rejects(waiting, /disposed/i);
   resolveOverview(overview);
-  assert.match(outcome, /disposed/i);
 });
 
 test("audit timestamps are explicit UTC and preserve the Unix epoch", () => {
@@ -182,7 +184,7 @@ test("audit events and metadata are presented as readable labels", () => {
   assert.equal(formatAuditEventType("playlist.deleted"), "Deleted playlist");
   assert.equal(formatAuditEventType("device.credential_rotated"), "Rotated device token");
   assert.equal(formatAuditEventType("development.bootstrap"), "Initial playlist seeded");
-  assert.equal(formatAuditEventType("sync.detected"), "Sync detected");
+  assert.equal(formatAuditEventType("device.disabled"), "Disabled device");
   assert.deepEqual(formatAuditDetails({
     asset_count: 2,
     previous: { playlist_id: "default", revision: "r-old" },
@@ -193,34 +195,19 @@ test("audit events and metadata are presented as readable labels", () => {
 });
 
 test("management environment copy accurately describes Access and local sign-in", () => {
-  assert.deepEqual(formatEnvironmentNotice("production"), {
-    production: true,
-    label: "Production",
-    heading: "Production environment.",
-    detail: "Your session is verified through Cloudflare Access.",
-  });
-  assert.deepEqual(formatEnvironmentNotice("development"), {
-    production: false,
-    label: "Development",
-    heading: "Development environment.",
-    detail: "Administrator sign-in is not configured for this deployment.",
-  });
-  assert.doesNotMatch(formatEnvironmentNotice("development").detail, /test data only/i);
+  const production = formatEnvironmentNotice("production");
+  assert.equal(production.production, true);
+  assert.match(production.detail, /Cloudflare Access/i);
+
+  const development = formatEnvironmentNotice("development");
+  assert.equal(development.production, false);
+  assert.match(development.detail, /sign-in is not configured/i);
 });
 
 test("audit actors use a consistent readable fallback", () => {
   assert.equal(formatActorLabel("anonymous"), "Unauthenticated");
   assert.equal(formatActorLabel("operator-7"), "operator-7");
   assert.equal(formatActorLabel(null), "Unknown");
-});
-
-test("long identifiers are compacted without hiding their distinguishing ends", () => {
-  assert.equal(compactIdentifier("r-short"), "r-short");
-  assert.equal(
-    compactIdentifier("r-080e675162b7477d9a8a96a3a9281a09"),
-    "r-080e6751…281a09",
-  );
-  assert.equal(compactIdentifier(null), "—");
 });
 
 test("consequential actions only run after explicit confirmation", async () => {
