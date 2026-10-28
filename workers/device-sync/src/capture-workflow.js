@@ -1,4 +1,4 @@
-import { captureScreenshot, normalizeCaptureURL } from "./capture.js";
+import { captureScreenshot, validateCaptureTargetURL } from "./capture.js";
 import { ASSET_RECONCILIATION_PAGE_SIZE, deleteUnreferencedAssets } from "./asset-maintenance.js";
 import { markAssetLiveStatement } from "./asset-registry.js";
 
@@ -171,7 +171,7 @@ export async function probeCaptureValidator(target, env, fetcher = globalThis.fe
   const approvedHosts = new Set(String(env.CAPTURE_VALIDATOR_HOSTS ?? "")
     .split(",").map((host) => host.trim().toLowerCase()).filter(Boolean));
   let url;
-  try { url = new URL(normalizeCaptureURL(target.url)); } catch { return null; }
+  try { url = new URL(validateCaptureTargetURL(target.url, env.CAPTURE_ALLOWED_HOSTS)); } catch { return null; }
   if (!approvedHosts.has(url.hostname)) return null;
 
   const headers = new Headers();

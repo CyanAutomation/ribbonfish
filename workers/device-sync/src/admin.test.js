@@ -153,7 +153,7 @@ class FakeDatabase {
   }
 }
 
-function testEnvironment({ enabled = true, accessRequired = false } = {}) {
+function testEnvironment({ enabled = true, accessRequired = false, allowedEmails = " ADMIN@EXAMPLE.COM " } = {}) {
   const DB = new FakeDatabase();
   const objects = new Map();
   const writes = [];
@@ -167,6 +167,7 @@ function testEnvironment({ enabled = true, accessRequired = false } = {}) {
     metadataReads,
     ADMIN_ENABLED: enabled ? "true" : "false",
     ADMIN_ACCESS_REQUIRED: accessRequired ? "true" : "false",
+    ADMIN_ALLOWED_EMAILS: allowedEmails,
     ASSETS: {
       async get(key) {
         reads.push(key);
@@ -209,6 +210,24 @@ test("Access-protected management routes reject requests without an identity", a
   const response = await handleAdminRequest(request("/admin/api/overview"), env);
   assert.equal(response.status, 401);
   assert.equal(await response.text(), "access required");
+});
+
+test("Access-protected management routes reject identities outside the admin allowlist", async () => {
+  const env = testEnvironment({ accessRequired: true, allowedEmails: "admin@example.com" });
+  const response = await handleAdminRequest(request("/admin/api/overview"), env, {
+    access: { async getIdentity() { return { email: "employee@example.com" }; } },
+  });
+  assert.equal(response.status, 403);
+  assert.equal(await response.text(), "admin access required");
+});
+
+test("Access-protected management routes fail closed when the admin allowlist is empty", async () => {
+  const env = testEnvironment({ accessRequired: true, allowedEmails: "" });
+  const response = await handleAdminRequest(request("/admin/api/overview"), env, {
+    access: { async getIdentity() { return { email: "admin@example.com" }; } },
+  });
+  assert.equal(response.status, 403);
+  assert.equal(await response.text(), "admin access required");
 });
 
 test("management page is served from the private R2 bucket", async () => {

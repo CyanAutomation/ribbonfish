@@ -52,6 +52,7 @@ function environment(sqlite, { quickAction } = {}) {
       ADMIN_ACCESS_REQUIRED: "false",
       DAILY_BROWSER_BUDGET_MS: "540000",
       CAPTURE_MIN_REQUEST_GAP_MS: "0",
+      CAPTURE_ALLOWED_HOSTS: "example.com",
       CAPTURE_QUEUE: { async send(body) { messages.push(body); } },
       BROWSER: { async quickAction(...args) {
         if (!quickAction) throw new Error("Browser Run not configured");
@@ -271,6 +272,10 @@ test("capture requests reject private targets and queueing coalesces each target
   const sqlite = await freshDatabase();
   try {
     const { env, messages } = environment(sqlite);
+    const disallowed = await createCapturePlaylist(env, "https://not-allowed.example/status");
+    assert.equal(disallowed.response.status, 400);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM playlists").get().count, 0);
+
     const unsafe = await createCapturePlaylist(env, "https://127.0.0.1/private");
     assert.equal(unsafe.response.status, 400);
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM playlists").get().count, 0);

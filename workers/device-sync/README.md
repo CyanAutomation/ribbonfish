@@ -18,8 +18,28 @@ available.
 `ribbonfish-mgmt`. It uses the live `ribbonfish-devices` D1 database and
 `ribbonfish-assets` R2 bucket, with `ADMIN_ENABLED = "true"` and
 `ADMIN_ACCESS_REQUIRED = "true"`. Cloudflare Access protects the Worker, and
-the admin routes fail closed unless the Worker receives an Access identity.
-Management audit events record the authenticated email as the actor.
+the admin routes fail closed unless the Worker receives an Access identity
+whose email is present in the `ADMIN_ALLOWED_EMAILS` Worker secret. The secret
+is a comma-separated list of exact email addresses, matched without case
+sensitivity; a missing or empty value denies all management access. Keep the
+Cloudflare Access policy restricted to the same administrator group. Management
+audit events record the authenticated email as the actor.
+
+Set the allowlist on the management Worker before enabling admin access:
+
+```sh
+npx wrangler secret put ADMIN_ALLOWED_EMAILS --config wrangler.management.toml
+```
+
+Capture targets also fail closed unless their exact hostnames are listed in
+`CAPTURE_ALLOWED_HOSTS` in `wrangler.management.toml` (comma-separated, with no
+wildcards). The checked hostname is revalidated immediately before Browser Run
+starts. The list is empty by default. Browser navigation can also follow
+redirects and load subresources; this Worker code cannot constrain those later
+browser requests, so allowlisted sites still need to be safe for the configured
+Browser Run network. Confirm that the deployed Browser Run environment blocks
+private and metadata addresses across redirects and subresources before
+enabling capture.
 
 There is no deployed development Worker. Local console development uses
 Wrangler's `--local` mode with the management config, which keeps D1 and R2 data
@@ -106,8 +126,9 @@ are available.
 
 All management routes require `ADMIN_ENABLED = "true"`. The production
 management Worker additionally requires a Cloudflare Access identity for every
-`/admin/` and `/admin/api/*` request. Its Access policy is limited to members of
-the Cloudflare account. The local Worker disables that check only while running
+`/admin/` and `/admin/api/*` request, and the identity email must appear in
+`ADMIN_ALLOWED_EMAILS`. Restrict the external Access policy to the intended
+administrators as well. The local Worker disables that check only while running
 in Wrangler's local mode.
 
 | Method and path | Behavior |
