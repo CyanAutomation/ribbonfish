@@ -84,7 +84,7 @@ const functions = [
   }),
   defineFunction({
     name: "PlaylistLabel",
-    description: "Names the active playlist and its revision.",
+    description: "Names the active playlist and its version.",
     params: z.object({ active: z.any().optional() }),
     returns: z.string(),
     fn: ({ active }) => active
@@ -101,38 +101,41 @@ const functions = [
       : "No playlist is active for enrolled devices",
   }),
   defineFunction({
-    name: "StagedCount",
-    description: "Counts playlist revisions that are not active.",
+    name: "ReadyCount",
+    description: "Counts playlist versions that are ready to activate.",
     params: z.object({ playlists: z.array(z.any()).optional().default([]) }),
     returns: z.string(),
-    fn: ({ playlists }) => `${playlists.filter((playlist) => !playlist.active).length} staged`,
+    fn: ({ playlists }) => {
+      const count = playlists.filter((playlist) => !playlist.active).length;
+      return `${count} version${count === 1 ? "" : "s"} ready to activate`;
+    },
   }),
   defineFunction({
-    name: "StagedDetail",
-    description: "Explains whether a staged playlist revision is ready to activate.",
+    name: "ReadyDetail",
+    description: "Explains whether any playlist versions are ready to activate.",
     params: z.object({ playlists: z.array(z.any()).optional().default([]) }),
     returns: z.string(),
     fn: ({ playlists }) => playlists.some((playlist) => !playlist.active)
-      ? "Ready to activate from the playlist list"
-      : "No revisions are waiting to be activated",
+      ? "Choose a version in Playlists to activate it"
+      : "No versions are waiting to be activated",
   }),
   defineFunction({
-    name: "AssetTone",
-    description: "Chooses warning tone when active playlist assets are missing.",
+    name: "ImageTone",
+    description: "Chooses a warning when active playlist images are missing.",
     params: z.object({ assets: z.array(z.any()).optional().default([]) }),
     returns: z.enum(["info", "warning"]),
     fn: ({ assets }) => assets.length ? "warning" : "info",
   }),
   defineFunction({
-    name: "AssetHealth",
-    description: "Summarizes missing assets in the active playlist.",
+    name: "ImageHealth",
+    description: "Summarizes missing images in the active playlist.",
     params: z.object({ assets: z.array(z.any()).optional().default([]), active: z.any().optional() }),
     returns: z.string(),
     fn: ({ assets, active }) => !active
       ? "No active playlist"
       : assets.length
-        ? `${assets.length} missing active asset${assets.length === 1 ? "" : "s"}`
-        : "All active assets available",
+        ? `${assets.length} image${assets.length === 1 ? "" : "s"} missing from the active playlist`
+        : "All active playlist images are available",
   }),
 ];
 
@@ -148,11 +151,11 @@ const parser = createParser(schema, "Dashboard");
 
 export const OPENUI_STARTER_SOURCE = [
   'overview = Query("get_fleet_overview", {}, {})',
-  "root = Dashboard([deviceMetric, activeMetric, stagedMetric, assetHealth])",
+  "root = Dashboard([deviceMetric, activeMetric, readyMetric, imageHealth])",
   'deviceMetric = Metric("Devices", @DeviceCount(overview.devices), @DeviceStatus(overview.devices))',
   'activeMetric = Metric("Active playlist", @PlaylistLabel(overview.active_playlist), @PlaylistDetail(overview.active_playlist))',
-  'stagedMetric = Metric("Staged revisions", @StagedCount(overview.playlists), @StagedDetail(overview.playlists))',
-  'assetHealth = Notice(@AssetTone(overview.asset_health.missing), "Asset health", @AssetHealth(overview.asset_health.missing, overview.active_playlist))',
+  'readyMetric = Metric("Versions to activate", @ReadyCount(overview.playlists), @ReadyDetail(overview.playlists))',
+  'imageHealth = Notice(@ImageTone(overview.asset_health.missing), "Image availability", @ImageHealth(overview.asset_health.missing, overview.active_playlist))',
 ].join("\n");
 
 export const OPENUI_SYSTEM_PROMPT = generateSystemPrompt({
@@ -161,7 +164,7 @@ export const OPENUI_SYSTEM_PROMPT = generateSystemPrompt({
     preamble: "Create compact, read-only summaries for the Ribbonfish device fleet.",
     tools: [{
       name: READ_ONLY_TOOL,
-      description: "Returns the current read-only fleet overview: devices, playlists, active playlist, asset health, and recent activity.",
+      description: "Returns the current read-only fleet overview: devices, playlists, active playlist, image availability, and recent activity.",
       inputSchema: { type: "object", properties: {} },
       outputSchema: {
         type: "object",
