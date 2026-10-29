@@ -6,6 +6,7 @@ import {
   OPENUI_STARTER_SOURCE,
 } from "../public/admin/openui-core.js";
 import {
+  confirmAction,
   confirmBeforeAction,
   formatAuditDetails,
   formatAuditEventType,
@@ -250,6 +251,30 @@ test("consequential actions only run after explicit confirmation", async () => {
   });
   assert.equal(accepted, true);
   assert.equal(actions, 1);
+});
+
+test("confirmed actions expose their awaited result and do not run when declined", async () => {
+  let actions = 0;
+  const declined = await confirmAction(() => false, "Rotate token?", () => {
+    actions += 1;
+    return { device_token: "unused" };
+  });
+  assert.deepEqual(declined, { confirmed: false, result: undefined });
+  assert.equal(actions, 0);
+
+  const accepted = await confirmAction(() => true, "Rotate token?", async () => {
+    actions += 1;
+    return { device_token: "new-token" };
+  });
+  assert.deepEqual(accepted, { confirmed: true, result: { device_token: "new-token" } });
+  assert.equal(actions, 1);
+});
+
+test("device token rotation reads the result returned by its confirmed action", async () => {
+  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
+
+  assert.match(app, /const \{ confirmed, result \} = await confirmAction\(/);
+  assert.doesNotMatch(app, /let result;/);
 });
 
 test("playlist editor adds scheduled page screenshots and reuses uploaded images", async () => {
