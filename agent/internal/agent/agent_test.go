@@ -204,8 +204,12 @@ func TestDynamicDisplayRecoversFromNoPlayableAssetsAndReportsHealth(t *testing.T
 		t.Fatal("ApplyConfig() stayed blocked after the empty schedule released its reader")
 	}
 	_ = receiveFrame(t, output.frames)
-	if got := tracker.Snapshot(time.Now()).Outputs[0].Status; got != "ready" {
-		t.Fatalf("recovered output status = %q, want ready", got)
+	deadline = time.Now().Add(2 * time.Second)
+	for tracker.Snapshot(time.Now()).Outputs[0].Status != "ready" {
+		if time.Now().After(deadline) {
+			t.Fatal("display health did not recover after the output accepted a frame")
+		}
+		time.Sleep(time.Millisecond)
 	}
 	cancel()
 	if err := <-done; err != nil {
