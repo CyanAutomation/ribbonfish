@@ -41,7 +41,7 @@
         <div class="section-heading">
           <div><p class="eyebrow">Overview</p><h2 id="overview-title">Fleet snapshot</h2></div>
         </div>
-        <div id="openui-preview" role="region" aria-label="Fleet snapshot" aria-live="polite"></div>
+        <div id="fleet-summary" role="region" aria-label="Fleet snapshot" aria-live="polite"></div>
       </section>
 
       <section id="playlist-section" class="panel" aria-labelledby="playlist-title">
@@ -105,25 +105,6 @@
         </div>
         <div id="audit" class="table-scroll desktop-data" role="region" aria-label="Recent management activity" tabindex="0"></div>
         <div id="audit-mobile" class="mobile-card-list" role="region" aria-label="Recent management activity"></div>
-      </section>
-
-      <section id="developer-tools-section" class="panel developer-panel" aria-label="Developer tools">
-        <details id="developer-tools" class="developer-tools">
-          <summary>Developer tools</summary>
-          <p class="muted">Customize the read-only fleet summary with OpenUI Lang and an external model.</p>
-          <label>OpenUI Lang program <textarea id="openui-source" class="field-control" rows="8" spellcheck="false"></textarea></label>
-          <div class="action-row">
-            <button id="openui-preview-button" class="button button--primary" type="button">Render view</button>
-            <button id="openui-merge-button" class="button button--secondary" type="button">Merge patch</button>
-            <button id="openui-reset-button" class="button button--secondary" type="button">Restore starter</button>
-          </div>
-          <p id="openui-message" class="inline-feedback" role="status" aria-live="polite"></p>
-          <details class="openui-prompt-details">
-            <summary>View generation prompt</summary>
-            <pre id="openui-prompt-text"></pre>
-            <button id="openui-copy-prompt" class="button button--secondary" type="button">Copy prompt</button>
-          </details>
-        </details>
       </section>
 
       <section id="secret-panel" class="panel secret-panel" hidden aria-labelledby="secret-title">

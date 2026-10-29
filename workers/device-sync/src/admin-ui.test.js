@@ -15,6 +15,7 @@ import {
   formatDeviceEnabledMessage,
   formatEnvironmentNotice,
   formatPlaylistState,
+  playlistDeleteActionStates,
   formatScreenshotStatus,
   formatTimestamp,
   hasPageURLs,
@@ -135,10 +136,13 @@ test("OpenUI fleet view follows the documented read-only contract", () => {
   assert.match(runtime.prompt, /Use only the get_fleet_overview read-only query/i);
   assert.match(runtime.prompt, /Do not emit Mutation statements, actions/i);
   assert.match(runtime.prompt, /do not expose credentials or tokens/i);
+  assert.doesNotMatch(runtime.prompt, /Mutation\("disable_device"/i);
+  assert.doesNotMatch(runtime.prompt, /## Mutation|Mutation.*write examples/i);
+  assert.ok(runtime.prompt.length < 4_000, "the behind-the-scenes prompt should stay concise");
   runtime.dispose();
 });
 
-test("OpenUI editor recognizes incomplete input and validates the merged fleet view", () => {
+test("OpenUI runtime recognizes incomplete programs and validates merged fleet views", () => {
   const runtime = createFleetOpenUI({ getOverview: async () => overview });
   const partial = runtime.inspectProgram('root = Dashboard([deviceMetric');
   assert.equal(partial.incomplete, true);
@@ -272,7 +276,7 @@ test("playlist editor adds scheduled page screenshots and reuses uploaded images
   assert.equal(hasPageURLs("https://status.example.com"), true);
 });
 
-test("management labels use one vocabulary and developer tools sit after routine activity", async () => {
+test("management keeps OpenUI behind the scenes and switches tables to cards before they cramp", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
   const styles = await readFile(new URL("../public/admin/styles.css", import.meta.url), "utf8");
@@ -285,9 +289,13 @@ test("management labels use one vocabulary and developer tools sit after routine
   assert.match(html, /id="reload"[^>]*>Refresh data<\/button>/);
   assert.doesNotMatch(html, /Browser Run|Web captures|Webpage captures|content-addressed image store|scheduler tick/);
 
-  const overview = html.slice(html.indexOf('id="overview-section"'), html.indexOf('id="playlist-section"'));
-  assert.doesNotMatch(overview, /developer-tools|OpenUI Lang/);
-  assert.ok(html.indexOf('id="developer-tools-section"') > html.indexOf('id="activity-section"'));
+  assert.match(html, /id="fleet-summary"[^>]*aria-label="Fleet snapshot"/);
+  assert.doesNotMatch(html, /developer-tools|openui-source|openui-prompt|OpenUI Lang|Merge patch|Restore starter|Copy prompt/i);
+  assert.doesNotMatch(app, /openui-preview-button|openui-merge-button|openui-reset-button|openui-copy-prompt/);
+  assert.match(app, /createFleetOpenUI/);
+  assert.match(app, /playlistDeleteActionStates\(playlists\)/);
+  assert.match(app, /remove\.disabled = true/);
+  assert.match(app, /deleteAction\.hint/);
 
   assert.match(app, /new IntersectionObserver/);
   assert.match(app, /aria-current", "location"/);
@@ -298,6 +306,8 @@ test("management labels use one vocabulary and developer tools sit after routine
   assert.match(styles, /\.section-nav a\[aria-current="location"\]/);
   assert.match(styles, /--font-size-body:/);
   assert.match(styles, /\.data-card, \.capture-target/);
+  assert.match(styles, /@media\s*\(max-width:\s*850px\)\s*\{[\s\S]*?\.desktop-data\s*\{\s*display:\s*none;/);
+  assert.doesNotMatch(styles, /developer-tools|openui-prompt-details/);
 });
 
 test("playlist state, screenshot status, and screenshot intervals use consistent labels", () => {
@@ -311,4 +321,52 @@ test("playlist state, screenshot status, and screenshot intervals use consistent
   assert.equal(formatCaptureInterval(60), "Every minute");
   assert.equal(formatCaptureInterval(300), "Every 5 minutes");
   assert.equal(formatCaptureInterval(90), "Every 90 seconds");
+});
+
+test("playlist delete action is visible once per group and explains the active-playlist guard", () => {
+  const playlists = [
+    { playlist_id: "BBC", revision: "r-active", created_at: 20, revision_count: 3, active: true },
+    { playlist_id: "BBC", revision: "r-latest-inactive", created_at: 30, revision_count: 3, active: false },
+    { playlist_id: "BBC", revision: "r-old", created_at: 10, revision_count: 3, active: false },
+    { playlist_id: "ops", revision: "r-ops", created_at: 40, revision_count: 1, active: false },
+  ];
+  const states = playlistDeleteActionStates(playlists);
+
+  assert.deepEqual(states.map(({ visible, disabled, versionCount, hint }) => ({
+    visible, disabled, versionCount, hint,
+  })), [
+    {
+      visible: false,
+      disabled: true,
+      versionCount: 3,
+      hint: "Activate another playlist first. Deleting removes all 3 saved versions.",
+    },
+    {
+      visible: true,
+      disabled: true,
+      versionCount: 3,
+      hint: "Activate another playlist first. Deleting removes all 3 saved versions.",
+    },
+    {
+      visible: false,
+      disabled: true,
+      versionCount: 3,
+      hint: "Activate another playlist first. Deleting removes all 3 saved versions.",
+    },
+    {
+      visible: true,
+      disabled: false,
+      versionCount: 1,
+      hint: "Deleting removes all 1 saved version.",
+    },
+  ]);
+
+  const afterActivatingAnotherPlaylist = playlists.map((playlist) => ({
+    ...playlist,
+    active: playlist.playlist_id === "ops",
+  }));
+  const afterSwitchStates = playlistDeleteActionStates(afterActivatingAnotherPlaylist);
+  assert.equal(afterSwitchStates[1].visible, true);
+  assert.equal(afterSwitchStates[1].disabled, false);
+  assert.equal(afterSwitchStates[1].hint, "Deleting removes all 3 saved versions.");
 });

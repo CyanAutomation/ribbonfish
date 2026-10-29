@@ -69,12 +69,13 @@ Worker. It bundles the browser app before publishing those files. Open
 `http://localhost:8787/admin/`. Upload PNG files through the panel, stage a
 playlist, then activate the revision. These commands use local D1 and R2 only.
 
-The panel's OpenUI Lang view uses only the framework-independent
-`@openuidev/lang-core` package. Its custom-view editor can parse and preview
-OpenUI programs and copy a generated prompt for use with an external model. The
-view exposes only the read-only fleet overview query; it does not execute
-OpenUI mutations or actions. The native DOM adapter is bundled with esbuild;
-no OpenUI framework renderer is installed.
+The fleet summary uses an internal, read-only OpenUI program backed by the
+framework-independent `@openuidev/lang-core` package. The management panel does
+not expose the editor or generation prompt. The Worker has no AI model binding
+configured yet; model-backed view generation should remain server-side and
+limited to the read-only fleet overview query. Mutations and actions are not
+enabled. The native DOM adapter is bundled with esbuild; no OpenUI framework
+renderer is installed.
 
 `init:local` is only for a fresh local database. It applies `schema.sql` and
 records the migrations already represented by that schema. Production schema
