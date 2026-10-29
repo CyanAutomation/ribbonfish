@@ -37,6 +37,17 @@ test("management page uses the Ribbonfish favicon", async () => {
   assert.match(html, /<link rel="icon" type="image\/png" href="\/admin\/favicon\.png">/);
 });
 
+test("device fleet renders health state and can load device health history", async () => {
+  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
+  assert.match(app, /label: "Health"/);
+  assert.match(app, /health-history\?limit=10/);
+  assert.match(app, /last_error_code/);
+  assert.match(app, /last_success_age_seconds/);
+  assert.match(app, /last_frame_age_seconds/);
+  assert.match(app, /temperature_millicelsius/);
+  assert.match(app, /setInterval\(/);
+});
+
 test("OpenUI Core parses and evaluates a read-only fleet view", async () => {
   let overviewReads = 0;
   const runtime = createFleetOpenUI({
@@ -51,14 +62,34 @@ test("OpenUI Core parses and evaluates a read-only fleet view", async () => {
   assert.deepEqual(initial.parseResult.meta.errors, []);
   await runtime.waitForQueries();
 
-  const [devices, active, ready, health] = runtime.getView().root.props.children;
+  const [devices, fleetHealth, active, ready, health] = runtime.getView().root.props.children;
   assert.equal(devices.props.value, "2 enrolled");
   assert.equal(devices.props.detail, "1 enabled · 1 disabled");
+  assert.equal(fleetHealth.props.label, "Device health");
+  assert.equal(fleetHealth.props.value, "0 healthy · 0 degraded · 0 stale/offline");
+  assert.equal(fleetHealth.props.detail, "1 unknown · 0 starting/stopping · 1 disabled");
   assert.equal(active.props.value, "operations / r-test");
   assert.equal(active.props.detail, "Ready for enrolled devices on their next sync");
   assert.equal(ready.props.value, "1 version ready to activate");
   assert.equal(health.props.body, "All active playlist images are available");
   assert.equal(overviewReads, 1);
+  runtime.dispose();
+});
+
+test("OpenUI fleet health keeps degraded, stale, offline, unknown, and disabled counts distinct", async () => {
+  const statuses = ["healthy", "degraded", "stale", "offline", "starting", "stopping", "unknown"];
+  const runtime = createFleetOpenUI({
+    getOverview: async () => ({
+      ...overview,
+      devices: statuses.map((status, index) => ({ device_id: `pi-${index}`, enabled: 1, health: { status } }))
+        .concat({ device_id: "pi-disabled", enabled: 0, health: { status: "healthy" } }),
+    }),
+  });
+  runtime.renderProgram(OPENUI_STARTER_SOURCE);
+  await runtime.waitForQueries();
+  const health = runtime.getView().root.props.children[1];
+  assert.equal(health.props.value, "1 healthy · 1 degraded · 2 stale/offline");
+  assert.equal(health.props.detail, "1 unknown · 2 starting/stopping · 1 disabled");
   runtime.dispose();
 });
 
@@ -73,7 +104,7 @@ test("OpenUI Core reports missing assets as a warning", async () => {
   runtime.renderProgram(OPENUI_STARTER_SOURCE);
   await runtime.waitForQueries();
 
-  const notice = runtime.getView().root.props.children[3];
+  const notice = runtime.getView().root.props.children[4];
   assert.equal(notice.props.tone, "warning");
   assert.equal(notice.props.body, "1 image missing from the active playlist");
   runtime.dispose();
@@ -92,7 +123,7 @@ test("fleet snapshot is concise and accurate when no playlist is active", async 
   runtime.renderProgram(OPENUI_STARTER_SOURCE);
   await runtime.waitForQueries();
 
-  const [devices, active, ready, health] = runtime.getView().root.props.children;
+  const [devices, fleetHealth, active, ready, health] = runtime.getView().root.props.children;
   assert.equal(active.props.value, "No active playlist");
   assert.equal(active.props.detail, "No playlist is active for enrolled devices");
   assert.equal(ready.props.detail, "No versions are waiting to be activated");
@@ -111,7 +142,7 @@ test("fleet view compacts long revisions and keeps short or missing identifiers 
   runtime.renderProgram(OPENUI_STARTER_SOURCE);
   await runtime.waitForQueries();
 
-  const active = runtime.getView().root.props.children[1];
+  const active = runtime.getView().root.props.children[2];
   assert.equal(active.props.value, "operations / r-01234567…89abcd");
   assert.equal(compactIdentifier("r-short"), "r-short");
   assert.equal(compactIdentifier(null), "—");

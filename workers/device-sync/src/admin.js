@@ -1,4 +1,5 @@
 import { isValidPositiveDuration } from "./duration.js";
+import { deriveDeviceHealth } from "./device-health.js";
 import { isPNG, MAX_ASSET_BYTES, storePngAsset } from "./asset-store.js";
 import { validateCaptureSettings, validateCaptureTargetURL } from "./capture.js";
 import { CaptureTargetNotAllowedError, dispatchDueCaptures, enqueueCapture } from "./capture-workflow.js";
@@ -58,6 +59,18 @@ export async function handleAdminRequest(request, env, ctx) {
     if (url.pathname === "/admin/api/overview") {
       if (request.method !== "GET") return methodNotAllowed("GET");
       return jsonResponse(await readOverview(env));
+    }
+
+    const deviceHistory = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/health-history$/);
+    if (deviceHistory) {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      return jsonResponse(await readDeviceHealthHistory(decodeURIComponent(deviceHistory[1]), url.searchParams, env));
+    }
+
+    const deviceHealth = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/health$/);
+    if (deviceHealth) {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      return jsonResponse(await readDeviceHealth(decodeURIComponent(deviceHealth[1]), env));
     }
 
     if (url.pathname === "/admin/api/enrollment-requests") {
@@ -188,11 +201,14 @@ function matchesAssetETag(header, etag) {
 }
 
 async function readOverview(env) {
+  const now = Date.now();
   const [devices, playlists, active, audit, captureTargets, integrityIssues] = await Promise.all([
     env.DB.prepare(
-      "SELECT device_id, enabled, created_at, last_seen_at, " +
-      "CASE WHEN public_key IS NULL THEN 'token' ELSE 'key' END AS auth_type " +
-      "FROM devices ORDER BY device_id",
+      "SELECT d.device_id, d.enabled, d.created_at, d.last_seen_at, " +
+      "CASE WHEN d.public_key IS NULL THEN 'token' ELSE 'key' END AS auth_type, " +
+      "h.received_at AS health_received_at, h.reported_state, h.agent_version, h.sync_status, " +
+      "h.applied_playlist_id, h.applied_revision, h.report_json " +
+      "FROM devices d LEFT JOIN device_health_latest h ON h.device_id = d.device_id ORDER BY d.device_id",
     ).all(),
     env.DB.prepare(
       "SELECT p.playlist_id, p.revision, p.rotation_interval, p.created_at, " +
@@ -252,7 +268,7 @@ async function readOverview(env) {
 
   return {
     environment: env.ADMIN_ACCESS_REQUIRED === "true" ? "production" : "development",
-    devices: devices.results ?? [],
+    devices: (devices.results ?? []).map((device) => summarizeDeviceHealth(device, now)),
     playlists: playlists.results ?? [],
     active_playlist: active,
     capture_targets: (captureTargets.results ?? []).map((target) => {
@@ -284,6 +300,97 @@ async function readOverview(env) {
       metadata: parseMetadata(event.metadata_json),
     })),
   };
+}
+
+function summarizeDeviceHealth(device, now) {
+  const report = parseHealthJSON(device.report_json);
+  return {
+    device_id: device.device_id,
+    enabled: device.enabled,
+    created_at: device.created_at,
+    last_seen_at: device.last_seen_at,
+    auth_type: device.auth_type,
+    health: {
+      status: device.enabled ? deriveDeviceHealth(report, device.health_received_at, now) : "disabled",
+      received_at: device.health_received_at ?? null,
+      reported_state: device.reported_state ?? null,
+      agent_version: device.agent_version ?? null,
+      sync_status: device.sync_status ?? "unknown",
+      applied_playlist_id: device.applied_playlist_id ?? null,
+      applied_revision: device.applied_revision ?? null,
+      outputs: (report?.outputs ?? []).map(({ display_id, connector, status, error_code }) => ({ display_id, connector, status, error_code })),
+      host: report?.host ?? null,
+      last_error_code: report?.startup_error_code ?? report?.sync?.error_code ?? report?.outputs?.find((item) => item.error_code)?.error_code ?? null,
+    },
+  };
+}
+
+async function readDeviceHealth(deviceID, env) {
+  const device = await env.DB.prepare("SELECT device_id, enabled FROM devices WHERE device_id = ?").bind(deviceID).first();
+  if (!device) throw new HTTPError(404, "device not found");
+  const [latest, events] = await Promise.all([
+    env.DB.prepare("SELECT instance_id, received_at, reported_state, agent_version, sync_status, report_json FROM device_health_latest WHERE device_id = ?")
+      .bind(deviceID).first(),
+    env.DB.prepare("SELECT event_id, received_at, event_type, reported_state, error_code, metadata_json FROM device_health_events WHERE device_id = ? ORDER BY received_at DESC LIMIT ?")
+      .bind(deviceID, 50).all(),
+  ]);
+  const report = parseHealthJSON(latest?.report_json);
+  return {
+    device_id: deviceID,
+    enabled: Boolean(device.enabled),
+    health_status: device.enabled ? deriveDeviceHealth(report, latest?.received_at, Date.now()) : "disabled",
+    received_at: latest?.received_at ?? null,
+    latest: report,
+    events: (events.results ?? []).map(formatHealthEvent),
+  };
+}
+
+async function readDeviceHealthHistory(deviceID, params, env) {
+  const device = await env.DB.prepare("SELECT device_id, enabled FROM devices WHERE device_id = ?").bind(deviceID).first();
+  if (!device) throw new HTTPError(404, "device not found");
+  const rawLimit = params.get("limit") ?? "100";
+  const limit = Number(rawLimit);
+  if (!/^\d+$/.test(rawLimit) || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+    throw new HTTPError(400, "limit must be an integer from 1 to 500");
+  }
+  const rawSince = params.get("since");
+  const since = rawSince === null ? Date.now() - 30 * 24 * 60 * 60 * 1000 : Number(rawSince);
+  if (rawSince !== null && (!/^\d+$/.test(rawSince) || !Number.isSafeInteger(since))) {
+    throw new HTTPError(400, "since must be a Unix timestamp in milliseconds");
+  }
+  const [samples, events] = await Promise.all([
+    env.DB.prepare("SELECT bucket_at, received_at, report_json FROM device_health_samples WHERE device_id = ? AND received_at >= ? ORDER BY received_at DESC LIMIT ?")
+      .bind(deviceID, since, limit).all(),
+    env.DB.prepare("SELECT event_id, received_at, event_type, reported_state, error_code, metadata_json FROM device_health_events WHERE device_id = ? AND received_at >= ? ORDER BY received_at DESC LIMIT ?")
+      .bind(deviceID, since, limit).all(),
+  ]);
+  return {
+    device_id: deviceID,
+    enabled: Boolean(device.enabled),
+    since,
+    samples: (samples.results ?? []).map((sample) => ({
+      bucket_at: sample.bucket_at,
+      received_at: sample.received_at,
+      report: parseHealthJSON(sample.report_json),
+    })),
+    events: (events.results ?? []).map(formatHealthEvent),
+  };
+}
+
+function formatHealthEvent(event) {
+  return {
+    event_id: event.event_id,
+    received_at: event.received_at,
+    event_type: event.event_type,
+    reported_state: event.reported_state,
+    error_code: event.error_code,
+    metadata: parseMetadata(event.metadata_json),
+  };
+}
+
+function parseHealthJSON(value) {
+  if (typeof value !== "string") return null;
+  try { return JSON.parse(value); } catch { return null; }
 }
 
 async function readEnrollmentRequests(env) {

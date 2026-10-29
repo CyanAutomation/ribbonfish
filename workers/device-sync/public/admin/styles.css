@@ -189,6 +189,12 @@ main > section[id], main > section[id] > section[id] { scroll-margin-top: 6rem; 
 .badge { display: inline-flex; align-items: center; padding: .2rem .5rem; border-radius: var(--radius-pill); background: var(--color-success-bg); color: var(--color-success); font-size: var(--font-size-caption); font-weight: 700; white-space: nowrap; }
 .badge--neutral { background: var(--color-neutral-bg); color: var(--color-muted); }
 .badge--warning { background: var(--color-warning-bg); color: var(--color-warning); }
+.device-health-details { min-width: 12rem; }
+.device-health-details summary { cursor: pointer; color: var(--color-brand); font-weight: 600; }
+.device-health-details__content { max-width: 34rem; padding: 0.5rem 0; color: var(--color-ink); white-space: normal; }
+.device-health-details__content ul { margin: 0.35rem 0 0.65rem; padding-left: 1.25rem; }
+.device-health-details__content h4 { margin: 0.8rem 0 0.2rem; }
+.health-error { color: var(--color-warning); font-weight: 600; }
 .identifier { display: inline-flex; align-items: center; gap: var(--space-1); max-width: 100%; }
 .identifier__value { display: inline-block; max-width: 13rem; overflow: hidden; color: var(--color-heading); text-overflow: ellipsis; vertical-align: middle; white-space: nowrap; }
 .identifier__copy { flex: none; }

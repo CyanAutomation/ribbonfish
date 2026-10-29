@@ -85,6 +85,10 @@ the asset registry and sweep cursors, then nullable source-validator metadata.
 Apply migrations with `npm run migrate:management` before deploying code that
 uses those features.
 
+Migration `0008_device_health.sql` adds latest device reports, five-minute
+history samples, and health transition events. Apply it with
+`npm run migrate:management` before deploying device-health reporting.
+
 The management config uses a remote Browser binding so screenshot Quick Actions
 can run during local development. Queue messages and D1/R2 state remain local,
 but Browser Run requests consume the configured Cloudflare account's usage.
@@ -136,6 +140,8 @@ in Wrangler's local mode.
 | --- | --- |
 | `GET /admin/` | Browser management panel |
 | `GET /admin/api/overview` | Devices, playlist revisions, current pointer, missing active assets, unresolved asset integrity issues, and recent audit events |
+| `GET /admin/api/devices/{device_id}/health` | Latest validated report, current derived health status, and up to 50 recent health transitions |
+| `GET /admin/api/devices/{device_id}/health-history?limit=100&since={unix_ms}` | Five-minute health samples and health transitions; default window is 30 days, maximum 500 rows per stream |
 | `GET /admin/api/enrollment-requests` | List unexpired pending device requests, including the physical fingerprint |
 | `POST /admin/api/enrollment-requests/{request_id}/approve` | Approve the exact pending public key; body: `{}` |
 | `POST /admin/api/enrollment-requests/{request_id}/reject` | Reject the exact pending request; body: `{}` |
@@ -202,7 +208,7 @@ the device ID, disables any previous token for that device, and records an
 audit event. Rejection leaves the device unable to sync. Secrets and raw public
 keys are never returned by management APIs or written to audit metadata.
 
-Device sync remains:
+Device sync and health reporting use the following device API:
 
 - `POST /v1/enrollment-requests` verifies a request signed by the device's
   Ed25519 key and creates or polls a pending approval. It grants no content
@@ -211,6 +217,18 @@ Device sync remains:
   source IP as an abuse-control measure.
 - `GET /v2/playlist` returns the active playlist with conditional ETags.
 - `GET /v2/assets/{sha256}` returns an asset only when it is in the active playlist.
+- `POST /v1/telemetry` accepts an authenticated, schema-versioned health report up to 8 KiB. Reports include agent lifecycle/version, sync status and applied revision, per-display connector and last-frame status, and optional host uptime, one-minute load, available memory, state-volume free space, and CPU temperature. Error fields use a fixed code list; reports never include logs, credentials, or raw error text.
+
+Agents send a report at startup, after a health transition, once per minute, and
+at shutdown when they can reach the Worker. The management Worker timestamps
+receipt, keeps the latest report, records at most one sample per five-minute
+bucket, and stores transition/restart events. Samples and events older than 30
+days are removed by the hourly scheduled cleanup. Dashboard health is derived
+from server receipt time: a report is stale after 3 minutes and offline after 5
+minutes; reported output or sync failures show as degraded. Disabled devices
+show as disabled, and devices that have never reported show as unknown.
+The one-minute scheduled pass records stale/offline transitions and the next
+report records recovery in that same event history.
 
 Playlist polling updates device `last_seen_at` at most once every five minutes.
 For static playlists, a matching ETag is checked from the active playlist row
