@@ -5,6 +5,7 @@ import {
 } from "./openui-core.js";
 import {
   compactIdentifier,
+  confirmAction,
   confirmBeforeAction,
   formatActorLabel,
   formatCaptureInterval,
@@ -548,28 +549,25 @@ function deviceActionButtons(device, layout) {
   if (device.auth_type !== "key") {
     const rotate = button("Rotate device token", "danger");
     rotate.addEventListener("click", async () => {
-    let result;
-    try {
-      const confirmed = await confirmBeforeAction(
-        (text) => showConfirmDialog({
-          title: "Rotate device token?",
-          description: text,
-          confirmLabel: "Rotate device token",
-          destructive: true,
-        }),
-        `The current token for ${device.device_id} will stop working. Update the device with the new token right away.`,
-        async () => {
-          result = await api("/admin/api/devices/" + encodeURIComponent(device.device_id) + "/rotate", {
+      try {
+        const { confirmed, result } = await confirmAction(
+          (text) => showConfirmDialog({
+            title: "Rotate device token?",
+            description: text,
+            confirmLabel: "Rotate device token",
+            destructive: true,
+          }),
+          `The current token for ${device.device_id} will stop working. Update the device with the new token right away.`,
+          () => api("/admin/api/devices/" + encodeURIComponent(device.device_id) + "/rotate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: "{}",
-          });
-        },
-      );
-      if (!confirmed) return;
-      displaySecret(`New token for ${device.device_id}`, result.device_token);
-      await refresh();
-    } catch (error) { showMessage(error.message, true); }
+          }),
+        );
+        if (!confirmed) return;
+        displaySecret(`New token for ${device.device_id}`, result.device_token);
+        await refresh();
+      } catch (error) { showMessage(error.message, true); }
     });
     buttons.push(rotate);
   }
