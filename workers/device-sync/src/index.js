@@ -77,10 +77,18 @@ export async function fetchHandler(request, env, ctx) {
     if (url.pathname === "/v1/telemetry") {
       if (request.method !== "POST") return methodNotAllowed("POST");
       const deviceID = request.headers.get("X-Ribbonfish-Device-ID") ?? "";
-      const { data, bodyBytes } = await readJSONBody(request, MAX_TELEMETRY_BYTES);
+      const device = await getEnabledDevice(env, deviceID);
+      let bodyBytes;
+      if (typeof device.public_key === "string" && device.public_key) {
+        bodyBytes = await readRequestBody(request, MAX_TELEMETRY_BYTES);
+        await authenticateDevice(request, deviceID, device, bodyBytes);
+      } else {
+        await authenticateDevice(request, deviceID, device);
+        bodyBytes = await readRequestBody(request, MAX_TELEMETRY_BYTES);
+      }
+      const data = parseJSONBody(bodyBytes);
       const report = validateDeviceHealthReport(data);
       if (!report) throw new HTTPError(400, "invalid device health report");
-      await authenticate(request, env, deviceID, bodyBytes);
       return jsonResponse(await persistDeviceHealth(env.DB, deviceID, report, Date.now()));
     }
 
@@ -295,6 +303,11 @@ async function requestDeviceEnrollment(request, env) {
 }
 
 async function authenticate(request, env, deviceID, bodyBytes = new Uint8Array()) {
+  const device = await getEnabledDevice(env, deviceID);
+  return authenticateDevice(request, deviceID, device, bodyBytes);
+}
+
+async function getEnabledDevice(env, deviceID) {
   if (!ID_PATTERN.test(deviceID)) throw new HTTPError(401, "device authentication failed");
   const device = await env.DB.prepare(
     "SELECT device_id, token_hash, public_key, enabled FROM devices WHERE device_id = ?",
@@ -302,7 +315,10 @@ async function authenticate(request, env, deviceID, bodyBytes = new Uint8Array()
   if (!device || device.enabled !== 1) {
     throw new HTTPError(401, "device authentication failed");
   }
+  return device;
+}
 
+async function authenticateDevice(request, deviceID, device, bodyBytes = new Uint8Array()) {
   if (typeof device.public_key === "string" && device.public_key) {
     if (!await verifyDeviceSignature(request, deviceID, device.public_key, bodyBytes)) {
       throw new HTTPError(401, "device authentication failed");
@@ -391,6 +407,11 @@ async function readJSON(request, maxBytes) {
 }
 
 async function readJSONBody(request, maxBytes) {
+  const bodyBytes = await readRequestBody(request, maxBytes);
+  return { data: parseJSONBody(bodyBytes), bodyBytes };
+}
+
+async function readRequestBody(request, maxBytes) {
   const reader = request.body?.getReader();
   if (!reader) throw new HTTPError(400, "request body is required");
   const chunks = [];
@@ -409,14 +430,18 @@ async function readJSONBody(request, maxBytes) {
   } finally {
     reader.releaseLock();
   }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function parseJSONBody(bodyBytes) {
   try {
-    const bytes = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return { data: JSON.parse(new TextDecoder().decode(bytes)), bodyBytes: bytes };
+    return JSON.parse(new TextDecoder().decode(bodyBytes));
   } catch {
     throw new HTTPError(400, "request body must be valid JSON");
   }
