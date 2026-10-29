@@ -354,10 +354,14 @@ async function readDeviceHealthHistory(deviceID, params, env) {
     throw new HTTPError(400, "limit must be an integer from 1 to 500");
   }
   const rawSince = params.get("since");
-  const since = rawSince === null ? Date.now() - 30 * 24 * 60 * 60 * 1000 : Number(rawSince);
+  const now = Date.now();
+  const retentionCutoff = now - 30 * 24 * 60 * 60 * 1000;
+  let since = rawSince === null ? retentionCutoff : Number(rawSince);
   if (rawSince !== null && (!/^\d+$/.test(rawSince) || !Number.isSafeInteger(since))) {
     throw new HTTPError(400, "since must be a Unix timestamp in milliseconds");
   }
+  if (since > now) throw new HTTPError(400, "since must not be in the future");
+  since = Math.max(since, retentionCutoff);
   const [samples, events] = await Promise.all([
     env.DB.prepare("SELECT bucket_at, received_at, report_json FROM device_health_samples WHERE device_id = ? AND received_at >= ? ORDER BY received_at DESC LIMIT ?")
       .bind(deviceID, since, limit).all(),

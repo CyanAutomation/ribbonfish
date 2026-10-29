@@ -119,6 +119,30 @@ test("telemetry requires enrolled-device auth and validates its bounded schema",
   } finally { env.sqlite.close(); }
 });
 
+test("telemetry authenticates before parsing JSON reports", async () => {
+  const env = await environment();
+  try {
+    const malformedBody = "{";
+    const unauthenticated = new Request("https://worker.test/v1/telemetry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Ribbonfish-Device-ID": deviceID },
+      body: malformedBody,
+    });
+    assert.equal((await fetchHandler(unauthenticated, env)).status, 401);
+
+    const authenticated = new Request("https://worker.test/v1/telemetry", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        "X-Ribbonfish-Device-ID": deviceID,
+      },
+      body: malformedBody,
+    });
+    assert.equal((await fetchHandler(authenticated, env)).status, 400);
+  } finally { env.sqlite.close(); }
+});
+
 test("key-authenticated telemetry signs the exact request body", async () => {
   const env = await environment();
   try {
@@ -142,6 +166,7 @@ test("key-authenticated telemetry signs the exact request body", async () => {
     });
     assert.equal((await fetchHandler(makeRequest(body), env)).status, 200);
     assert.equal((await fetchHandler(makeRequest(JSON.stringify({ ...report, agent_uptime_seconds: 121 })), env)).status, 401);
+    assert.equal((await fetchHandler(makeRequest("{"), env)).status, 401);
   } finally { env.sqlite.close(); }
 });
 
@@ -163,5 +188,25 @@ test("management health and history APIs expose the latest report without creden
     const history = await historyResponse.json();
     assert.equal(history.samples.length, 1);
     assert.equal(history.events.length, 1);
+  } finally { env.sqlite.close(); }
+});
+
+test("health history clamps old timestamps to retention and rejects future timestamps", async () => {
+  const env = await environment();
+  try {
+    const beforeRequest = Date.now();
+    const oldTimestamp = await handleAdminRequest(new Request(
+      `https://worker.test/admin/api/devices/${deviceID}/health-history?since=0&limit=10`,
+    ), env);
+    assert.equal(oldTimestamp.status, 200);
+    const history = await oldTimestamp.json();
+    assert.ok(history.since >= beforeRequest - 30 * 24 * 60 * 60 * 1000);
+    assert.ok(history.since <= Date.now());
+
+    const futureTimestamp = Date.now() + 60_000;
+    const future = await handleAdminRequest(new Request(
+      `https://worker.test/admin/api/devices/${deviceID}/health-history?since=${futureTimestamp}&limit=10`,
+    ), env);
+    assert.equal(future.status, 400);
   } finally { env.sqlite.close(); }
 });
