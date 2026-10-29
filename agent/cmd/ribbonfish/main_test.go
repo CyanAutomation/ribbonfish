@@ -286,7 +286,7 @@ func TestRunSyncLoopPersistsAndActivatesVerifiedContent(t *testing.T) {
 	remote := &oneShotSynchronizer{update: syncer.Update{Config: candidate, Snapshot: snapshot, ETag: `"remote-3"`, Changed: true}}
 	syncDone := make(chan error, 1)
 	go func() {
-		syncDone <- runSyncLoop(ctx, remote, cfg, playback, snapshotPath, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		syncDone <- runSyncLoop(ctx, remote, cfg, playback, snapshotPath, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	}()
 
 	deadline := time.After(3 * time.Second)
@@ -343,7 +343,7 @@ func TestRunSyncLoopLogsSuccessfulUnchangedPollsAndRecovery(t *testing.T) {
 			var logs bytes.Buffer
 			logger := slog.New(slog.NewTextHandler(&logs, nil))
 
-			if err := runSyncLoop(ctx, remote, config.Config{}, syncLoopTestPlayback{}, "", nil, logger); err != nil {
+			if err := runSyncLoop(ctx, remote, config.Config{}, syncLoopTestPlayback{}, "", nil, nil, logger); err != nil {
 				t.Fatalf("runSyncLoop() error = %v", err)
 			}
 			if got := strings.Count(logs.String(), `msg="remote synchronization succeeded"`); got != 1 {
@@ -413,7 +413,7 @@ func TestDeviceEnrollmentWaitsForApprovalThenStartsSignedSync(t *testing.T) {
 	pairing := display.NewPairingState("pi-office", key.Fingerprint())
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	err = runDeviceEnrollmentLoop(ctx, server.URL, "pi-office", key, store, config.Config{},
-		syncLoopTestPlayback{}, "", nil, pairing, logger)
+		syncLoopTestPlayback{}, "", nil, pairing, nil, nil, logger)
 	if err != nil {
 		t.Fatalf("runDeviceEnrollmentLoop() error = %v", err)
 	}

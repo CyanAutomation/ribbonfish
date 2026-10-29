@@ -20,6 +20,7 @@ import (
 	"github.com/CyanAutomation/ribbonfish/agent/internal/cache"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/config"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/display/simulator"
+	"github.com/CyanAutomation/ribbonfish/agent/internal/health"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/playlist"
 )
 
@@ -51,6 +52,9 @@ func TestAgentSharesTheActivePlaylistAndIntervalAcrossDisplays(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
+	tracker := health.NewTracker("test", cfg.Cache.Directory, []health.OutputSpec{{DisplayID: "display-left"}, {DisplayID: "display-right"}}, func() time.Time { return time.Unix(0, 0).UTC() })
+	tracker.SetState("ready")
+	app.SetHealthTracker(tracker)
 	// Simulate a cached file becoming corrupt after startup; playback must leave
 	// the display usable by choosing the next verified playlist entry.
 	firstHash := sha256.Sum256(leftFirstData)
@@ -62,6 +66,12 @@ func TestAgentSharesTheActivePlaylistAndIntervalAcrossDisplays(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- app.Run(ctx) }()
 	initial := collectFrames(t, output.frames, 2)
+	healthReport := tracker.Snapshot(time.Unix(1, 0).UTC())
+	for _, output := range healthReport.Outputs {
+		if output.Status != "ready" || output.LastFrameAgeSeconds == nil {
+			t.Errorf("display %s health = %#v, want ready with a recent frame", output.DisplayID, output)
+		}
+	}
 	if got := initial["display-left"].pixel; got != (color.RGBA{G: 150, A: 255}) {
 		t.Errorf("left initial frame = %#v, want second asset after corrupt first was skipped", got)
 	}
@@ -138,6 +148,69 @@ func TestAgentUsesCachedAssetWhenSourceIsUnavailable(t *testing.T) {
 		t.Errorf("Run() after cancellation = %v", err)
 	}
 	_ = restarted.Close()
+}
+
+func TestDynamicDisplayRecoversFromNoPlayableAssetsAndReportsHealth(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(dir, config.PlaylistConfig{ID: "offline", RotationInterval: "1m", Assets: []config.AssetConfig{{Path: filepath.Join(dir, "missing.png")}}})
+	cfg.Displays = []config.DisplayConfig{{ID: "display-main", Connector: "HDMI-A-1"}}
+	store, err := cache.NewFileStore(cfg.Cache.Directory, cfg.Cache.MaxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	output := &recordingOutput{frames: make(chan frameEvent, 1)}
+	app, err := New(context.Background(), cfg, store, output, slog.New(slog.NewTextHandler(io.Discard, nil)), newTestClock(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker := health.NewTracker("test", cfg.Cache.Directory, []health.OutputSpec{{DisplayID: "display-main", Connector: "HDMI-A-1"}}, time.Now)
+	tracker.SetState("ready")
+	app.SetHealthTracker(tracker)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- app.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for tracker.Snapshot(time.Now()).Outputs[0].Status != "failed" {
+		if time.Now().After(deadline) {
+			t.Fatal("display health did not report the empty playlist")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	assetPath := filepath.Join(dir, "available.png")
+	writePNG(t, assetPath, color.RGBA{G: 200, A: 255})
+	imageFile, err := os.Open(assetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset, err := store.Put(context.Background(), imageFile, "")
+	_ = imageFile.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := cfg
+	candidate.Playlist = config.PlaylistConfig{ID: "online", RotationInterval: "1m", Assets: []config.AssetConfig{{Path: assetPath, SHA256: asset.SHA256}}}
+	applyDone := make(chan error, 1)
+	go func() { applyDone <- app.ApplyConfig(ctx, candidate) }()
+	select {
+	case err := <-applyDone:
+		if err != nil {
+			t.Fatalf("ApplyConfig() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ApplyConfig() stayed blocked after the empty schedule released its reader")
+	}
+	_ = receiveFrame(t, output.frames)
+	if got := tracker.Snapshot(time.Now()).Outputs[0].Status; got != "ready" {
+		t.Fatalf("recovered output status = %q, want ready", got)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("Run() after cancellation = %v", err)
+	}
 }
 
 func TestAgentWritesTwoDisplaysThroughSoftwareBackend(t *testing.T) {
