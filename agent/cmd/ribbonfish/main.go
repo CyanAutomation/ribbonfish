@@ -10,7 +10,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 	"github.com/CyanAutomation/ribbonfish/agent/internal/display"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/display/drm"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/display/simulator"
+	"github.com/CyanAutomation/ribbonfish/agent/internal/health"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/logging"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/syncer"
 )
@@ -184,11 +187,17 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 		return fmt.Errorf("open image cache: %w", err)
 	}
 	hardwareConfig := cfg
+	healthSpecs := make([]health.OutputSpec, 0, len(hardwareConfig.Displays))
+	for _, item := range hardwareConfig.Displays {
+		healthSpecs = append(healthSpecs, health.OutputSpec{DisplayID: item.ID, Connector: item.Connector})
+	}
+	healthTracker := health.NewTracker(currentAgentVersion(), hardwareConfig.Cache.Directory, healthSpecs, time.Now)
 	snapshotPath := filepath.Join(cfg.Cache.Directory, "last-good.json")
 	var activeSnapshot *syncer.Update
 	if snapshot, loadErr := syncer.LoadSnapshot(snapshotPath, hardwareConfig, imageCache); loadErr == nil {
 		cfg = snapshot.Config
 		activeSnapshot = &snapshot
+		healthTracker.SetAppliedSnapshot(snapshot.Snapshot.ID, snapshot.Snapshot.Revision)
 		logger.Info("last-good remote content loaded", "revision", snapshot.Snapshot.Revision)
 	} else if !errors.Is(loadErr, os.ErrNotExist) {
 		logger.Warn("last-good remote content is unavailable; using bundled content", "error", loadErr)
@@ -198,6 +207,7 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 	var legacySynchronizer syncer.Synchronizer
 	var deviceKey *syncer.DeviceKey
 	var pairingState *display.PairingState
+	var healthClient *syncer.HealthClient
 	if syncURL != "" {
 		token, tokenErr := syncer.ReadDeviceToken(deviceTokenPath())
 		if tokenErr == nil {
@@ -205,6 +215,11 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 				logger.Warn("remote sync configuration is invalid; continuing with local content", "error", createErr)
 			} else {
 				legacySynchronizer = synchronizer
+				if client, clientErr := syncer.NewHealthClient(syncURL, deviceID, token, nil, nil); clientErr == nil {
+					healthClient = client
+				} else {
+					logger.Warn("remote health reporting is unavailable", "error", clientErr)
+				}
 			}
 		} else if errors.Is(tokenErr, os.ErrNotExist) {
 			if deviceID == "" {
@@ -213,6 +228,11 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 				logger.Warn("automatic device enrollment is unavailable; continuing with local content", "error", keyErr)
 			} else {
 				deviceKey = key
+				if client, clientErr := syncer.NewHealthClient(syncURL, deviceID, "", key, nil); clientErr == nil {
+					healthClient = client
+				} else {
+					logger.Warn("remote health reporting is unavailable", "error", clientErr)
+				}
 				pairingState = display.NewPairingState(deviceID, key.Fingerprint())
 				logger.Info("device identity is ready; waiting for management approval", "device_id", deviceID, "fingerprint", key.Fingerprint())
 			}
@@ -220,8 +240,21 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 			logger.Warn("remote sync is configured but device credential is invalid; continuing with local content", "error", tokenErr)
 		}
 	}
+	var healthReady = make(chan struct{})
+	var healthReadyOnce sync.Once
+	markHealthReady := func() { healthReadyOnce.Do(func() { close(healthReady) }) }
+	if legacySynchronizer != nil {
+		markHealthReady()
+		if healthClient != nil {
+			bestEffortHealthReport(healthClient, healthTracker)
+		}
+	}
 	outputBackend, err := newDisplayOutput(hardwareConfig)
 	if err != nil {
+		healthTracker.SetStartupFailure(startupErrorCode(err))
+		if healthClient != nil && legacySynchronizer != nil {
+			bestEffortHealthReport(healthClient, healthTracker)
+		}
 		_ = imageCache.Close()
 		return fmt.Errorf("start %s: %w", cfg.Output.EffectiveBackend(), err)
 	}
@@ -230,11 +263,25 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 	}
 	playback, err := agent.New(ctx, cfg, imageCache, outputBackend, logger, agent.RealClock{})
 	if err != nil {
+		healthTracker.SetStartupFailure("configuration_invalid")
+		if healthClient != nil && legacySynchronizer != nil {
+			bestEffortHealthReport(healthClient, healthTracker)
+		}
 		_ = outputBackend.Close()
 		_ = imageCache.Close()
 		return err
 	}
+	playback.SetHealthTracker(healthTracker)
+	healthTracker.SetState("ready")
 	logger.Info("agent started", "display_backend", cfg.Output.EffectiveBackend())
+	var healthDone chan struct{}
+	if healthClient != nil {
+		healthDone = make(chan struct{})
+		go func() {
+			defer close(healthDone)
+			runHealthReporterLoop(ctx, healthReady, healthClient, healthTracker, logger)
+		}()
+	}
 	var syncDone chan error
 	if legacySynchronizer != nil {
 		if synchronizer, ok := legacySynchronizer.(*syncer.HTTPClient); ok && activeSnapshot != nil {
@@ -242,15 +289,26 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 		}
 		syncDone = make(chan error, 1)
 		go func() {
-			syncDone <- runSyncLoop(ctx, legacySynchronizer, hardwareConfig, playback, snapshotPath, activeSnapshot, logger)
+			syncDone <- runSyncLoop(ctx, legacySynchronizer, hardwareConfig, playback, snapshotPath, activeSnapshot, healthTracker, logger)
 		}()
 	} else if deviceKey != nil {
 		syncDone = make(chan error, 1)
 		go func() {
-			syncDone <- runDeviceEnrollmentLoop(ctx, syncURL, deviceID, deviceKey, imageCache, hardwareConfig, playback, snapshotPath, activeSnapshot, pairingState, logger)
+			syncDone <- runDeviceEnrollmentLoop(ctx, syncURL, deviceID, deviceKey, imageCache, hardwareConfig, playback, snapshotPath, activeSnapshot, pairingState, healthTracker, healthReady, logger)
 		}()
 	}
 	runErr := playback.Run(ctx)
+	healthTracker.SetState("stopping")
+	if healthClient != nil {
+		select {
+		case <-healthReady:
+			if healthDone != nil {
+				<-healthDone
+			}
+			bestEffortHealthReport(healthClient, healthTracker)
+		default:
+		}
+	}
 	if syncDone != nil {
 		<-syncDone
 	}
@@ -260,7 +318,59 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 	return errors.Join(runErr, outputErr, cacheErr)
 }
 
-func runDeviceEnrollmentLoop(ctx context.Context, syncURL, deviceID string, key *syncer.DeviceKey, store cache.Store, hardware config.Config, playback syncPlayback, snapshotPath string, activeSnapshot *syncer.Update, pairing *display.PairingState, logger interface {
+func currentAgentVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" && len(setting.Value) >= 12 {
+				return setting.Value[:12]
+			}
+		}
+	}
+	return "dev"
+}
+
+func startupErrorCode(err error) string {
+	if code := health.ErrorCode(err); code != "unknown" {
+		return code
+	}
+	return "display_start_failed"
+}
+
+type healthWarningLogger interface{ Warn(string, ...any) }
+
+func bestEffortHealthReport(client *syncer.HealthClient, tracker *health.Tracker) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = client.Report(ctx, tracker.Snapshot(time.Now()))
+}
+
+func runHealthReporterLoop(ctx context.Context, ready <-chan struct{}, client *syncer.HealthClient, tracker *health.Tracker, logger healthWarningLogger) {
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		return
+	}
+	report := func() {
+		if err := client.Report(ctx, tracker.Snapshot(time.Now())); err != nil && ctx.Err() == nil {
+			logger.Warn("device health report failed; retrying on the next interval or state change", "error", err)
+		}
+	}
+	report()
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			report()
+		case <-tracker.Changes():
+			report()
+		}
+	}
+}
+
+func runDeviceEnrollmentLoop(ctx context.Context, syncURL, deviceID string, key *syncer.DeviceKey, store cache.Store, hardware config.Config, playback syncPlayback, snapshotPath string, activeSnapshot *syncer.Update, pairing *display.PairingState, tracker *health.Tracker, healthReady chan struct{}, logger interface {
 	Info(string, ...any)
 	Warn(string, ...any)
 }) error {
@@ -313,7 +423,10 @@ func runDeviceEnrollmentLoop(ctx context.Context, syncURL, deviceID string, key 
 				synchronizer.SetETag(activeSnapshot.ETag)
 			}
 			logger.Info("device enrollment approved; starting playlist sync", "device_id", deviceID)
-			return runSyncLoop(ctx, synchronizer, hardware, playback, snapshotPath, activeSnapshot, logger)
+			if healthReady != nil {
+				close(healthReady)
+			}
+			return runSyncLoop(ctx, synchronizer, hardware, playback, snapshotPath, activeSnapshot, tracker, logger)
 		}
 		if !waitForContext(ctx, interval) {
 			return nil
@@ -332,6 +445,16 @@ func configuredSyncInterval(logger interface{ Warn(string, ...any) }) time.Durat
 	return time.Minute
 }
 
+func syncErrorCode(err error) string {
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "unexpected http status 400") || strings.Contains(message, "unexpected http status 401") ||
+		strings.Contains(message, "unexpected http status 403") || strings.Contains(message, "validate snapshot") ||
+		strings.Contains(message, "decode snapshot") || strings.Contains(message, "etag") {
+		return "sync_rejected"
+	}
+	return "sync_unavailable"
+}
+
 func waitForContext(ctx context.Context, delay time.Duration) bool {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -348,7 +471,7 @@ type syncPlayback interface {
 	ApplyConfig(context.Context, config.Config) error
 }
 
-func runSyncLoop(ctx context.Context, synchronizer syncer.Synchronizer, hardware config.Config, playback syncPlayback, snapshotPath string, activeSnapshot *syncer.Update, logger interface {
+func runSyncLoop(ctx context.Context, synchronizer syncer.Synchronizer, hardware config.Config, playback syncPlayback, snapshotPath string, activeSnapshot *syncer.Update, tracker *health.Tracker, logger interface {
 	Info(string, ...any)
 	Warn(string, ...any)
 }) error {
@@ -363,6 +486,9 @@ func runSyncLoop(ctx context.Context, synchronizer syncer.Synchronizer, hardware
 				return nil
 			}
 			syncHealthy = false
+			if tracker != nil {
+				tracker.SetSyncFailure(syncErrorCode(err))
+			}
 			logger.Warn("remote synchronization failed; keeping last good content", "error", err)
 			delay = retryDelay
 			if retryDelay < 5*time.Minute/2 {
@@ -375,6 +501,9 @@ func runSyncLoop(ctx context.Context, synchronizer syncer.Synchronizer, hardware
 			previous := activeSnapshot
 			previousConfig := playback.CurrentConfig()
 			if err := syncer.SaveSnapshot(snapshotPath, update); err != nil {
+				if tracker != nil {
+					tracker.SetSyncFailure("sync_unavailable")
+				}
 				logger.Warn("could not persist remote content; keeping last good content", "error", err)
 				if restoreErr := restoreSnapshot(snapshotPath, previous); restoreErr != nil {
 					logger.Warn("could not restore last-good snapshot", "error", restoreErr)
@@ -382,6 +511,9 @@ func runSyncLoop(ctx context.Context, synchronizer syncer.Synchronizer, hardware
 				rollbackETag(synchronizer, previous)
 				restoreActivePins(ctx, synchronizer, previousConfig)
 			} else if err := playback.ApplyConfig(ctx, update.Config); err != nil {
+				if tracker != nil {
+					tracker.SetSyncFailure("sync_rejected")
+				}
 				logger.Warn("could not activate remote content; keeping last good content", "error", err)
 				if restoreErr := restoreSnapshot(snapshotPath, previous); restoreErr != nil {
 					logger.Warn("could not restore last-good snapshot", "error", restoreErr)
@@ -390,12 +522,23 @@ func runSyncLoop(ctx context.Context, synchronizer syncer.Synchronizer, hardware
 				restoreActivePins(ctx, synchronizer, previousConfig)
 			} else {
 				activeSnapshot = &update
+				if tracker != nil {
+					tracker.SetSyncSuccess(update.Snapshot.ID, update.Snapshot.Revision)
+				}
 				logger.Info("remote content snapshot activated", "revision", update.Snapshot.Revision)
 				syncHealthy = true
 				retryDelay = 5 * time.Second
 			}
 		} else {
 			retryDelay = 5 * time.Second
+			if tracker != nil {
+				playlistID := playback.CurrentConfig().Playlist.ID
+				revision := ""
+				if activeSnapshot != nil {
+					revision = activeSnapshot.Snapshot.Revision
+				}
+				tracker.SetSyncSuccess(playlistID, revision)
+			}
 			if !syncHealthy {
 				logger.Info("remote synchronization succeeded", "etag", update.ETag, "changed", update.Changed)
 			}

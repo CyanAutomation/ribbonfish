@@ -82,6 +82,28 @@ const functions = [
     },
   }),
   defineFunction({
+    name: "DeviceHealthSummary",
+    description: "Counts healthy, degraded, and stale or offline remote devices.",
+    params: z.object({ devices: z.array(z.any()).optional().default([]) }),
+    returns: z.string(),
+    fn: ({ devices }) => {
+      const counts = countDeviceHealth(devices);
+      if (!devices.length) return "No devices enrolled yet";
+      return `${counts.healthy} healthy · ${counts.degraded} degraded · ${counts.stale + counts.offline} stale/offline`;
+    },
+  }),
+  defineFunction({
+    name: "DeviceHealthDetail",
+    description: "Summarizes unknown, starting, and disabled remote devices.",
+    params: z.object({ devices: z.array(z.any()).optional().default([]) }),
+    returns: z.string(),
+    fn: ({ devices }) => {
+      const counts = countDeviceHealth(devices);
+      if (!devices.length) return "No device health reports are available";
+      return `${counts.unknown} unknown · ${counts.starting + counts.stopping} starting/stopping · ${counts.disabled} disabled`;
+    },
+  }),
+  defineFunction({
     name: "PlaylistLabel",
     description: "Names the active playlist and its version.",
     params: z.object({ active: z.any().optional() }),
@@ -138,6 +160,16 @@ const functions = [
   }),
 ];
 
+function countDeviceHealth(devices) {
+  const counts = { healthy: 0, degraded: 0, stale: 0, offline: 0, starting: 0, stopping: 0, unknown: 0, disabled: 0 };
+  for (const device of devices) {
+    const status = device.enabled === false || device.enabled === 0 ? "disabled" : device.health?.status ?? "unknown";
+    if (Object.hasOwn(counts, status)) counts[status] += 1;
+    else counts.unknown += 1;
+  }
+  return counts;
+}
+
 export const openUILibrary = createLibrary({
   id: "ribbonfish-fleet-readonly",
   root: "Dashboard",
@@ -150,8 +182,9 @@ const parser = createParser(schema, "Dashboard");
 
 export const OPENUI_STARTER_SOURCE = [
   'overview = Query("get_fleet_overview", {}, {})',
-  "root = Dashboard([deviceMetric, activeMetric, readyMetric, imageHealth])",
+  "root = Dashboard([deviceMetric, healthMetric, activeMetric, readyMetric, imageHealth])",
   'deviceMetric = Metric("Devices", @DeviceCount(overview.devices), @DeviceStatus(overview.devices))',
+  'healthMetric = Metric("Device health", @DeviceHealthSummary(overview.devices), @DeviceHealthDetail(overview.devices))',
   'activeMetric = Metric("Active playlist", @PlaylistLabel(overview.active_playlist), @PlaylistDetail(overview.active_playlist))',
   'readyMetric = Metric("Versions to activate", @ReadyCount(overview.playlists), @ReadyDetail(overview.playlists))',
   'imageHealth = Notice(@ImageTone(overview.asset_health.missing), "Image availability", @ImageHealth(overview.asset_health.missing, overview.active_playlist))',
@@ -168,8 +201,9 @@ const functionPrompt = Object.values(librarySpec.functions)
 export const OPENUI_SYSTEM_PROMPT = [
   "Create compact, read-only summaries for the Ribbonfish device fleet in OpenUI Lang.",
   "Return only a valid program. Put one statement on each line, use positional arguments, and define a Dashboard root.",
-  `Use only the ${READ_ONLY_TOOL} read-only query. Call it once: overview = Query("${READ_ONLY_TOOL}", {}, {}). Its result contains devices, playlists, active_playlist, and asset_health.missing.`,
+  `Use only the ${READ_ONLY_TOOL} read-only query. Call it once: overview = Query("${READ_ONLY_TOOL}", {}, {}). Its result contains device health, devices, playlists, active_playlist, and asset_health.missing.`,
   "Use only the registered components and functions below. Prefix data function calls with @. Do not emit Mutation statements, actions, or controls that change fleet state. Do not expose credentials or tokens.",
+  "Use each device's health.status to summarize healthy, degraded, stale, offline, unknown, and disabled devices separately.",
   `Components:\n${componentPrompt}`,
   `Data functions:\n${functionPrompt}`,
 ].join("\n\n");
