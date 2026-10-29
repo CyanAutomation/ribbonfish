@@ -14,6 +14,47 @@ export function formatPlaylistState(active) {
   return active ? "Active" : "Ready to activate";
 }
 
+export function playlistDeleteActionStates(playlists) {
+  const records = Array.isArray(playlists) ? playlists : [];
+  const groups = new Map();
+
+  records.forEach((playlist) => {
+    const playlistID = String(playlist?.playlist_id ?? "");
+    if (!playlistID) return;
+    let group = groups.get(playlistID);
+    if (!group) {
+      group = { count: 0, versionCount: 0, active: false, representative: null };
+      groups.set(playlistID, group);
+    }
+
+    group.count += 1;
+    group.versionCount = Math.max(group.versionCount, Number(playlist.revision_count) || 0, group.count);
+    group.active ||= playlist.active === true || playlist.active === 1;
+
+    const current = group.representative;
+    const candidateActive = playlist.active === true || playlist.active === 1;
+    const currentActive = current?.active === true || current?.active === 1;
+    const preferCandidate = !current ||
+      (currentActive && !candidateActive) ||
+      (currentActive === candidateActive && (Number(playlist.created_at) || 0) > (Number(current.created_at) || 0));
+    if (preferCandidate) group.representative = playlist;
+  });
+
+  return records.map((playlist) => {
+    const group = groups.get(String(playlist?.playlist_id ?? ""));
+    const versionCount = group?.versionCount ?? 0;
+    const versionLabel = versionCount === 1 ? "version" : "versions";
+    return {
+      visible: Boolean(group && group.representative === playlist),
+      disabled: Boolean(group?.active),
+      versionCount,
+      hint: group?.active
+        ? `Activate another playlist first. Deleting removes all ${versionCount} saved ${versionLabel}.`
+        : `Deleting removes all ${versionCount} saved ${versionLabel}.`,
+    };
+  });
+}
+
 export function parsePageURLs(value) {
   return String(value ?? "")
     .split(/\r?\n/)
@@ -109,10 +150,14 @@ export function formatAuditDetails(metadata, locale) {
 }
 
 export async function confirmBeforeAction(confirmFn, message, action) {
+  const { confirmed } = await confirmAction(confirmFn, message, action);
+  return confirmed;
+}
+
+export async function confirmAction(confirmFn, message, action) {
   if (typeof confirmFn !== "function") throw new TypeError("A confirmation function is required");
-  if (!(await confirmFn(message))) return false;
-  await action();
-  return true;
+  if (!(await confirmFn(message))) return { confirmed: false, result: undefined };
+  return { confirmed: true, result: await action() };
 }
 
 function formatMetadataValue(key, value, locale) {
