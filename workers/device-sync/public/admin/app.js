@@ -1,7 +1,6 @@
 import {
   createFleetOpenUI,
   OPENUI_STARTER_SOURCE,
-  OPENUI_SYSTEM_PROMPT,
   renderOpenUIElement,
 } from "./openui-core.js";
 import {
@@ -14,6 +13,7 @@ import {
   formatDeviceEnabledMessage,
   formatEnvironmentNotice,
   formatPlaylistState,
+  playlistDeleteActionStates,
   formatScreenshotStatus,
   formatTimestamp,
   hasPageURLs,
@@ -22,10 +22,7 @@ import {
 
 const message = document.querySelector("#message");
 const messageText = document.querySelector("#message-text");
-const openuiPreview = document.querySelector("#openui-preview");
-const openuiSource = document.querySelector("#openui-source");
-const openuiMessage = document.querySelector("#openui-message");
-const openuiPrompt = document.querySelector("#openui-prompt-text");
+const fleetSummary = document.querySelector("#fleet-summary");
 const confirmDialog = document.querySelector("#confirm-dialog");
 const confirmTitle = document.querySelector("#confirm-title");
 const confirmDescription = document.querySelector("#confirm-description");
@@ -34,14 +31,11 @@ const confirmCancel = document.querySelector("#confirm-cancel");
 const environmentTag = document.querySelector("#environment-tag");
 const environmentNotice = document.querySelector("#environment-notice");
 let latestOverview = null;
-let openuiProgram = OPENUI_STARTER_SOURCE;
-let openuiInitialized = false;
+let fleetSummaryInitialized = false;
 let playlistEditSource = null;
-const openuiRuntime = createFleetOpenUI({ getOverview: async () => latestOverview });
-openuiSource.value = OPENUI_STARTER_SOURCE;
-openuiPrompt.textContent = OPENUI_SYSTEM_PROMPT;
+const fleetViewRuntime = createFleetOpenUI({ getOverview: async () => latestOverview });
 
-openuiRuntime.subscribe(renderOpenUIView);
+fleetViewRuntime.subscribe(renderFleetSummary);
 
 function node(tag, text, className) {
   const value = document.createElement(tag);
@@ -333,7 +327,7 @@ async function startPlaylistEdit(playlist) {
   }
 }
 
-function playlistActionButtons(playlist, canDelete, versionCount, layout) {
+function playlistActionButtons(playlist, deleteAction, layout) {
   const actions = node("div", undefined, layout === "card" ? "card-actions" : "table-actions");
   const edit = button("Edit", "secondary");
   edit.setAttribute("aria-label", `Edit playlist ${playlist.playlist_id} from version ${compactIdentifier(playlist.revision)}`);
@@ -366,27 +360,33 @@ function playlistActionButtons(playlist, canDelete, versionCount, layout) {
     actions.append(activate);
   }
 
-  if (canDelete) {
-    const remove = button("Delete playlist", "danger");
-    remove.addEventListener("click", async () => {
-      const description = `Delete playlist ${playlist.playlist_id} and all ${versionCount} saved versions? Uploaded images stay available and can be reused by another playlist.`;
-      try {
-        const confirmed = await confirmBeforeAction(
-          (text) => showConfirmDialog({
-            title: "Delete playlist?",
-            description: text,
-            confirmLabel: "Delete playlist",
-            destructive: true,
-          }),
-          description,
-          () => api(`/admin/api/playlists/${encodeURIComponent(playlist.playlist_id)}`, { method: "DELETE" }),
-        );
-        if (!confirmed) return;
-        showMessage(`Playlist ${playlist.playlist_id} was deleted. Uploaded images remain available for reuse.`);
-        await refresh();
-      } catch (error) { showMessage(error.message, true); }
-    });
-    actions.append(remove);
+  if (deleteAction?.visible) {
+    const remove = button("Delete playlist", deleteAction.disabled ? "secondary" : "danger");
+    if (deleteAction.disabled) {
+      remove.disabled = true;
+      remove.setAttribute("aria-label", `Delete playlist unavailable. ${deleteAction.hint}`);
+      actions.append(remove, node("p", deleteAction.hint, "playlist-delete-hint"));
+    } else {
+      remove.addEventListener("click", async () => {
+        const description = `Delete playlist ${playlist.playlist_id} and all ${deleteAction.versionCount} saved versions? Uploaded images stay available and can be reused by another playlist.`;
+        try {
+          const confirmed = await confirmBeforeAction(
+            (text) => showConfirmDialog({
+              title: "Delete playlist?",
+              description: text,
+              confirmLabel: "Delete playlist",
+              destructive: true,
+            }),
+            description,
+            () => api(`/admin/api/playlists/${encodeURIComponent(playlist.playlist_id)}`, { method: "DELETE" }),
+          );
+          if (!confirmed) return;
+          showMessage(`Playlist ${playlist.playlist_id} was deleted. Uploaded images remain available for reuse.`);
+          await refresh();
+        } catch (error) { showMessage(error.message, true); }
+      });
+      actions.append(remove);
+    }
   }
   return actions;
 }
@@ -426,21 +426,11 @@ function renderHealth(health) {
 }
 
 function renderPlaylists(playlists) {
-  const activeIDs = new Set(playlists.filter((playlist) => playlist.active).map((playlist) => playlist.playlist_id));
-  const versionCounts = new Map();
-  playlists.forEach((playlist) => versionCounts.set(
-    playlist.playlist_id,
-    (versionCounts.get(playlist.playlist_id) ?? 0) + 1,
-  ));
-  const deletableVersions = new Set();
-  const seenPlaylistIDs = new Set();
-  playlists.forEach((playlist) => {
-    const canDelete = !activeIDs.has(playlist.playlist_id) && !seenPlaylistIDs.has(playlist.playlist_id);
-    if (canDelete) {
-      deletableVersions.add(playlistVersionKey(playlist));
-      seenPlaylistIDs.add(playlist.playlist_id);
-    }
-  });
+  const deleteStates = playlistDeleteActionStates(playlists);
+  const deleteStateByVersion = new Map(playlists.map((playlist, index) => [
+    playlistVersionKey(playlist),
+    deleteStates[index],
+  ]));
   const fields = [
     { label: "Playlist", render: (playlist) => playlist.playlist_id },
     { label: "Version", render: (playlist) => identifier(playlist.revision, "version ID") },
@@ -455,8 +445,7 @@ function renderPlaylists(playlists) {
       label: "Actions",
       render: (playlist, layout) => playlistActionButtons(
         playlist,
-        deletableVersions.has(playlistVersionKey(playlist)),
-        playlist.revision_count ?? versionCounts.get(playlist.playlist_id),
+        deleteStateByVersion.get(playlistVersionKey(playlist)),
         layout,
       ),
     },
@@ -756,11 +745,11 @@ async function refresh() {
   renderDevices(overview.devices);
   renderPendingEnrollments(enrollmentRequests);
   renderAudit(overview.audit);
-  if (!openuiInitialized) {
-    renderOpenUIProgram(OPENUI_STARTER_SOURCE, false);
-    openuiInitialized = true;
+  if (!fleetSummaryInitialized) {
+    fleetViewRuntime.renderProgram(OPENUI_STARTER_SOURCE);
+    fleetSummaryInitialized = true;
   } else {
-    openuiRuntime.refresh();
+    fleetViewRuntime.refresh();
   }
 }
 
@@ -776,40 +765,22 @@ function renderEnvironment(environment) {
   environmentNotice.hidden = false;
 }
 
-function renderOpenUIView(view) {
+function renderFleetSummary(view) {
   if (!view) return;
   if (view.loading) {
-    openuiPreview.setAttribute("aria-busy", "true");
-    openuiPreview.replaceChildren(node("p", "Loading fleet summary…", "muted"));
+    fleetSummary.setAttribute("aria-busy", "true");
+    fleetSummary.replaceChildren(node("p", "Loading fleet summary…", "muted"));
     return;
   }
-  openuiPreview.removeAttribute("aria-busy");
+  fleetSummary.removeAttribute("aria-busy");
   if (view.errors.length) {
-    openuiPreview.replaceChildren(node("p", view.errors.map((error) => error.message).join(" "), "error-title"));
+    fleetSummary.replaceChildren(node("p", view.errors.map((error) => error.message).join(" "), "error-title"));
     return;
   }
   try {
-    openuiPreview.replaceChildren(renderOpenUIElement(view.root));
+    fleetSummary.replaceChildren(renderOpenUIElement(view.root));
   } catch (error) {
-    openuiPreview.replaceChildren(node("p", error.message, "error-title"));
-  }
-}
-
-function showOpenUIMessage(text, isError = false) {
-  openuiMessage.textContent = text;
-  openuiMessage.classList.toggle("error", isError);
-}
-
-function renderOpenUIProgram(source, announce = true) {
-  try {
-    const view = openuiRuntime.renderProgram(source);
-    openuiProgram = source;
-    renderOpenUIView(view);
-    if (announce) showOpenUIMessage("View rendered.");
-    return true;
-  } catch (error) {
-    showOpenUIMessage(error.message, true);
-    return false;
+    fleetSummary.replaceChildren(node("p", error.message, "error-title"));
   }
 }
 
@@ -854,45 +825,6 @@ if ("IntersectionObserver" in window) {
 }
 
 document.querySelector('[name="capture_urls"]').addEventListener("input", syncScreenshotSettings);
-
-document.querySelector("#openui-preview-button").addEventListener("click", () => {
-  renderOpenUIProgram(openuiSource.value);
-});
-
-document.querySelector("#openui-merge-button").addEventListener("click", () => {
-  try {
-    const merged = openuiRuntime.mergePatch(openuiProgram, openuiSource.value);
-    openuiSource.value = merged;
-    renderOpenUIProgram(merged, false);
-  } catch (error) { showOpenUIMessage(error.message, true); }
-});
-
-document.querySelector("#openui-reset-button").addEventListener("click", () => {
-  openuiSource.value = OPENUI_STARTER_SOURCE;
-  renderOpenUIProgram(OPENUI_STARTER_SOURCE);
-});
-
-document.querySelector("#openui-copy-prompt").addEventListener("click", async () => {
-  try {
-    await navigator.clipboard.writeText(OPENUI_SYSTEM_PROMPT);
-    showOpenUIMessage("The prompt was copied. Use it with an external model, then paste the result here.");
-  } catch {
-    showOpenUIMessage("Clipboard access failed. Expand the prompt below and copy it manually.", true);
-  }
-});
-
-let openuiInputTimer;
-openuiSource.addEventListener("input", () => {
-  clearTimeout(openuiInputTimer);
-  openuiInputTimer = setTimeout(() => {
-    const status = openuiRuntime.inspectProgram(openuiSource.value);
-    if (status.errors.length) {
-      showOpenUIMessage(status.errors[0].message, true);
-    } else {
-      showOpenUIMessage(`${status.statementCount} statement${status.statementCount === 1 ? "" : "s"}${status.incomplete ? " · input is still streaming" : " · ready to preview"}`);
-    }
-  }, 200);
-});
 
 function displaySecret(title, value) {
   document.querySelector("#secret-title").textContent = title;
