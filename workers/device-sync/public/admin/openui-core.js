@@ -8,7 +8,6 @@ import {
   defineFunction,
   evaluate,
   evaluateElementProps,
-  generateSystemPrompt,
   mergeStatements,
 } from "@openuidev/lang-core";
 import { z } from "zod";
@@ -22,11 +21,11 @@ const Metric = defineComponent({
   description: "Shows one read-only fleet metric, its value, and a short detail.",
   component: ({ props }) => {
     const card = document.createElement("article");
-    card.className = "openui-metric";
+    card.className = "fleet-metric";
     card.append(
-      textElement("p", props.label, "openui-metric-label"),
-      textElement("strong", props.value, "openui-metric-value"),
-      textElement("p", props.detail, "openui-metric-detail"),
+      textElement("p", props.label, "fleet-metric-label"),
+      textElement("strong", props.value, "fleet-metric-value"),
+      textElement("p", props.detail, "fleet-metric-detail"),
     );
     return card;
   },
@@ -42,10 +41,10 @@ const Notice = defineComponent({
   description: "Shows a read-only informational or warning notice.",
   component: ({ props }) => {
     const notice = document.createElement("section");
-    notice.className = `openui-notice openui-notice--${props.tone}`;
+    notice.className = `fleet-notice fleet-notice--${props.tone}`;
     notice.append(
-      textElement("h3", props.title, "openui-notice-title"),
-      textElement("p", props.body, "openui-notice-body"),
+      textElement("h3", props.title, "fleet-notice-title"),
+      textElement("p", props.body, "fleet-notice-body"),
     );
     return notice;
   },
@@ -57,7 +56,7 @@ const Dashboard = defineComponent({
   description: "Arranges read-only fleet metrics and notices in a responsive dashboard.",
   component: ({ props, renderNode }) => {
     const grid = document.createElement("div");
-    grid.className = "openui-grid";
+    grid.className = "fleet-summary-grid";
     for (const child of props.children ?? []) grid.append(renderNode(child));
     return grid;
   },
@@ -158,36 +157,22 @@ export const OPENUI_STARTER_SOURCE = [
   'imageHealth = Notice(@ImageTone(overview.asset_health.missing), "Image availability", @ImageHealth(overview.asset_health.missing, overview.active_playlist))',
 ].join("\n");
 
-export const OPENUI_SYSTEM_PROMPT = generateSystemPrompt({
-  library: openUILibrary.toSpec(),
-  promptOptions: {
-    preamble: "Create compact, read-only summaries for the Ribbonfish device fleet.",
-    tools: [{
-      name: READ_ONLY_TOOL,
-      description: "Returns the current read-only fleet overview: devices, playlists, active playlist, image availability, and recent activity.",
-      inputSchema: { type: "object", properties: {} },
-      outputSchema: {
-        type: "object",
-        properties: {
-          devices: { type: "array", items: { type: "object" } },
-          playlists: { type: "array", items: { type: "object" } },
-          active_playlist: { anyOf: [{ type: "object" }, { type: "null" }] },
-          asset_health: { type: "object", properties: { missing: { type: "array", items: { type: "object" } } } },
-          audit: { type: "array", items: { type: "object" } },
-        },
-      },
-      annotations: { readOnlyHint: true, destructiveHint: false },
-    }],
-    toolCalls: true,
-    bindings: false,
-    additionalRules: [
-      "Use only the get_fleet_overview read-only query.",
-      "Do not emit Mutation statements, actions, or controls that change fleet state.",
-      "Use Dashboard as the root and only the registered Metric and Notice components.",
-      "Keep labels and details concise; do not expose credentials or tokens.",
-    ],
-  },
-});
+const librarySpec = openUILibrary.toSpec();
+const componentPrompt = Object.values(librarySpec.components)
+  .map(({ signature, description }) => `${signature} — ${description}`)
+  .join("\n");
+const functionPrompt = Object.values(librarySpec.functions)
+  .map(({ signature, description }) => `@${signature} — ${description}`)
+  .join("\n");
+
+export const OPENUI_SYSTEM_PROMPT = [
+  "Create compact, read-only summaries for the Ribbonfish device fleet in OpenUI Lang.",
+  "Return only a valid program. Put one statement on each line, use positional arguments, and define a Dashboard root.",
+  `Use only the ${READ_ONLY_TOOL} read-only query. Call it once: overview = Query("${READ_ONLY_TOOL}", {}, {}). Its result contains devices, playlists, active_playlist, and asset_health.missing.`,
+  "Use only the registered components and functions below. Prefix data function calls with @. Do not emit Mutation statements, actions, or controls that change fleet state. Do not expose credentials or tokens.",
+  `Components:\n${componentPrompt}`,
+  `Data functions:\n${functionPrompt}`,
+].join("\n\n");
 
 export function createFleetOpenUI({ getOverview }) {
   if (typeof getOverview !== "function") throw new TypeError("getOverview must be a function");
