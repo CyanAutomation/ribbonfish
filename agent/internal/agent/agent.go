@@ -17,6 +17,7 @@ import (
 	"github.com/CyanAutomation/ribbonfish/agent/internal/cache"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/config"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/display"
+	"github.com/CyanAutomation/ribbonfish/agent/internal/health"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/playlist"
 )
 
@@ -69,6 +70,17 @@ type Agent struct {
 	mu        sync.Mutex
 	state     *playbackState
 	changed   chan struct{}
+	health    *health.Tracker
+}
+
+// SetHealthTracker connects playback transitions to the optional telemetry
+// collector. It must be called before Run.
+func (a *Agent) SetHealthTracker(tracker *health.Tracker) { a.health = tracker }
+
+func (a *Agent) setOutputState(displayID, status, code string) {
+	if a.health != nil {
+		a.health.SetOutputState(displayID, status, code)
+	}
 }
 
 // New verifies configured assets into the local cache and prepares independent
@@ -351,6 +363,8 @@ func (a *Agent) runDynamicDisplay(ctx context.Context, displayID string) {
 			return
 		}
 		if schedule.DisplayID == "" {
+			a.setOutputState(displayID, "failed", "no_playable_assets")
+			a.releaseState(state)
 			select {
 			case <-changed:
 				continue
@@ -360,12 +374,21 @@ func (a *Agent) runDynamicDisplay(ctx context.Context, displayID string) {
 		}
 		now := a.clock.Now()
 		entry, frame, available := a.currentFrameFor(ctx, state.scheduler, schedule, now)
+		if !available {
+			code := "asset_unavailable"
+			if len(schedule.Entries) == 0 {
+				code = "no_playable_assets"
+			}
+			a.setOutputState(displayID, "failed", code)
+		}
 		if available && entry.SHA256 != lastDisplayed {
 			if err := a.output.Present(ctx, displayID, frame); err != nil {
+				a.setOutputState(displayID, "failed", health.ErrorCode(err))
 				if ctx.Err() == nil {
 					a.logger.Error("could not present display frame; keeping last good output", "display_id", displayID, "error", err)
 				}
 			} else {
+				a.setOutputState(displayID, "ready", "")
 				lastDisplayed = entry.SHA256
 				a.logger.Info("display frame updated", "display_id", displayID, "asset_sha256", entry.SHA256)
 			}
@@ -421,12 +444,21 @@ func (a *Agent) runDisplay(ctx context.Context, schedule playlist.Schedule) {
 	for ctx.Err() == nil {
 		now := a.clock.Now()
 		entry, frame, available := a.currentFrame(ctx, schedule, now)
+		if !available {
+			code := "asset_unavailable"
+			if len(schedule.Entries) == 0 {
+				code = "no_playable_assets"
+			}
+			a.setOutputState(schedule.DisplayID, "failed", code)
+		}
 		if available && entry.SHA256 != lastDisplayed {
 			if err := a.output.Present(ctx, schedule.DisplayID, frame); err != nil {
+				a.setOutputState(schedule.DisplayID, "failed", health.ErrorCode(err))
 				if ctx.Err() == nil {
 					a.logger.Error("could not present display frame; keeping last good output", "display_id", schedule.DisplayID, "error", err)
 				}
 			} else {
+				a.setOutputState(schedule.DisplayID, "ready", "")
 				lastDisplayed = entry.SHA256
 				a.logger.Info("display frame updated", "display_id", schedule.DisplayID, "asset_sha256", entry.SHA256)
 			}

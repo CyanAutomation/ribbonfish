@@ -98,3 +98,14 @@ acceptance. Emulated tests do not prove KMS scanout.
 The agent logs the first successful unchanged sync poll after startup or a
 sync failure with its ETag. Further unchanged polls stay quiet until the next
 failure; a changed, verified playlist is logged when it is activated.
+
+When `RIBBONFISH_SYNC_URL` and a valid device credential are configured, the
+agent also posts an authenticated health report to `/v1/telemetry`. It reports
+its process version and uptime, content-sync outcome and applied revision,
+configured display/connector status and age of the last successful frame, plus
+available host metrics: Linux uptime, one-minute load, available memory, free
+space on the state volume, and CPU temperature when the kernel exposes it.
+Reports are sent at startup, on health transitions, every minute, and best
+effort at shutdown. They contain stable error codes rather than logs or raw
+error messages. Reporting uses the existing bearer token or approved Ed25519
+device key and is bounded to 8 KiB per report.

@@ -576,6 +576,110 @@ function deviceActionButtons(device, layout) {
   return actions;
 }
 
+function healthBadge(health) {
+  const status = health?.status ?? "unknown";
+  const labels = {
+    healthy: ["Healthy", "success"],
+    degraded: ["Degraded", "warning"],
+    stale: ["Stale", "warning"],
+    offline: ["Offline", "warning"],
+    unknown: ["Unknown", "neutral"],
+    starting: ["Starting", "neutral"],
+    stopping: ["Stopping", "neutral"],
+    disabled: ["Disabled", "neutral"],
+  };
+  const [label, tone] = labels[status] ?? labels.unknown;
+  return statusBadge(label, tone);
+}
+
+function healthDetails(device) {
+  const details = node("details", undefined, "device-health-details");
+  details.append(node("summary", "Health details"));
+  const content = node("div", undefined, "device-health-details__content");
+  content.append(node("p", "Open to load device health and recent history.", "muted"));
+  details.append(content);
+  let loaded = false;
+  details.addEventListener("toggle", async () => {
+    if (!details.open || loaded) return;
+    loaded = true;
+    content.replaceChildren(node("p", "Loading health details…", "muted"));
+    try {
+      const devicePath = `/admin/api/devices/${encodeURIComponent(device.device_id)}`;
+      const [result, history] = await Promise.all([
+        api(`${devicePath}/health`),
+        api(`${devicePath}/health-history?limit=10`),
+      ]);
+      const report = result.latest;
+      content.replaceChildren();
+      if (!report) {
+        content.append(node("p", "This device has not reported health yet.", "muted"));
+        return;
+      }
+      content.append(node("p", `Fleet health ${result.health_status}.`));
+      content.append(node("p", `Last report ${formatTimestamp(result.received_at)} · Agent ${report.agent_version} · Uptime ${formatAge(report.agent_uptime_seconds)}`));
+      const lastSync = report.sync.last_success_age_seconds === null ? "never" : `${formatAge(report.sync.last_success_age_seconds)} ago`;
+      content.append(node("p", `Sync ${report.sync.status} · last success ${lastSync}${report.sync.applied_playlist_id ? ` · ${report.sync.applied_playlist_id} / ${report.sync.applied_revision ?? "revision unknown"}` : ""}`));
+      if (report.startup_error_code) content.append(node("p", `Startup issue: ${report.startup_error_code}`, "health-error"));
+      if (report.outputs.length) {
+        const outputList = node("ul");
+        for (const output of report.outputs) {
+          const connector = output.connector ? ` (${output.connector})` : "";
+          const issue = output.error_code ? ` · ${output.error_code}` : "";
+          const lastFrame = output.last_frame_age_seconds === null ? "no successful frame yet" : `last frame ${formatAge(output.last_frame_age_seconds)} ago`;
+          outputList.append(node("li", `${output.display_id}${connector}: ${output.status} · ${lastFrame}${issue}`));
+        }
+        content.append(outputList);
+      }
+      if (report.host) {
+        const readings = [];
+        if (Number.isFinite(report.host.uptime_seconds)) readings.push(`Host uptime ${formatAge(report.host.uptime_seconds)}`);
+        if (Number.isFinite(report.host.temperature_millicelsius)) readings.push(`Temperature ${(report.host.temperature_millicelsius / 1000).toFixed(1)}°C`);
+        if (Number.isFinite(report.host.memory_available_bytes)) readings.push(`Memory ${formatBytes(report.host.memory_available_bytes)} available`);
+        if (Number.isFinite(report.host.state_disk_free_bytes)) readings.push(`State disk ${formatBytes(report.host.state_disk_free_bytes)} free`);
+        if (Number.isFinite(report.host.load_1m)) readings.push(`1m load ${report.host.load_1m.toFixed(2)}`);
+        if (readings.length) content.append(node("p", readings.join(" · ")));
+      }
+      const events = history.events ?? [];
+      content.append(node("h4", "Recent health changes"));
+      if (!events.length) content.append(node("p", "No health changes recorded.", "muted"));
+      else {
+        const eventList = node("ul");
+        events.forEach((event) => {
+          const healthState = event.metadata?.health_status ? ` · ${event.metadata.health_status}` : "";
+          const transition = event.metadata?.previous_health_status
+            ? ` (${event.metadata.previous_health_status} → ${event.metadata.health_status})` : "";
+          eventList.append(node("li", `${formatTimestamp(event.received_at)} · ${event.event_type}${healthState}${transition}${event.error_code ? ` · ${event.error_code}` : ""}`));
+        });
+        content.append(eventList);
+      }
+      content.append(node("p", `${history.samples?.length ?? 0} health samples in the last 30 days.`, "muted"));
+    } catch (error) {
+      content.replaceChildren(node("p", error.message, "health-error"));
+    }
+  });
+  return details;
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let amount = bytes;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
+  return `${amount.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+function formatAge(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "unknown";
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
+}
+
 function renderDevices(devices) {
   renderResponsiveRecords({
     tableSelector: "#devices",
@@ -588,8 +692,18 @@ function renderDevices(devices) {
         label: "Status",
         render: (device) => statusBadge(device.enabled ? "Enabled" : "Disabled", device.enabled ? "success" : "neutral"),
       },
+      { label: "Health", render: (device) => healthBadge(device.health) },
       { label: "Authentication", render: (device) => device.auth_type === "key" ? "Key-based" : "Legacy token" },
-      { label: "Last check-in", render: (device) => formatTimestamp(device.last_seen_at) },
+      { label: "Last report", render: (device) => formatTimestamp(device.health?.received_at) },
+      { label: "Playback", render: (device) => {
+        if (device.health?.last_error_code) return `Issue: ${device.health.last_error_code}`;
+        const output = device.health?.outputs?.[0];
+        if (!output) return "—";
+        return output.error_code ? `${output.display_id}: ${output.error_code}` : `${output.display_id}: ${output.status}`;
+      } },
+      { label: "Playlist", render: (device) => device.health?.applied_playlist_id
+        ? `${device.health.applied_playlist_id} / ${compactIdentifier(device.health.applied_revision)}` : "—" },
+      { label: "Details", render: (device) => healthDetails(device) },
       { label: "Actions", render: (device, layout) => deviceActionButtons(device, layout) },
     ],
     emptyState: {
@@ -841,6 +955,10 @@ document.querySelector("#reload").addEventListener("click", async (event) => {
   } catch (error) { showMessage(error.message, true); }
   finally { refreshButton.disabled = false; }
 });
+
+setInterval(() => {
+  if (!document.hidden) refresh().catch(() => {});
+}, 60_000);
 
 document.querySelector("#playlist-form").addEventListener("submit", async (event) => {
   event.preventDefault();

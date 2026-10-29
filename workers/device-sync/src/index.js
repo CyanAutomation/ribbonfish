@@ -2,8 +2,10 @@ import { isValidPositiveDuration } from "./duration.js";
 import { handleAdminRequest } from "./admin.js";
 import { cleanupExpiredCaptures, dispatchDueCaptures, handleCaptureQueue } from "./capture-workflow.js";
 import { reconcileAssets } from "./asset-maintenance.js";
+import { cleanupDeviceHealth, persistDeviceHealth, refreshDeviceHealthStatuses, validateDeviceHealthReport } from "./device-health.js";
 
 const MAX_ENROLLMENT_BYTES = 4 << 10;
+const MAX_TELEMETRY_BYTES = 8 << 10;
 const MAX_ASSET_BYTES = 32 << 20;
 const ENROLLMENT_REQUEST_TTL_MS = 24 * 60 * 60 * 1000;
 const LAST_SEEN_WRITE_INTERVAL_MS = 5 * 60 * 1000;
@@ -37,12 +39,17 @@ export async function queueHandler(batch, env) {
 
 export async function scheduledHandler(controller, env) {
   const now = Number.isSafeInteger(controller?.scheduledTime) ? controller.scheduledTime : Date.now();
-  const [dispatch, assets] = await Promise.all([
+  const cleanHealth = new Date(now).getUTCMinutes() === 0;
+  const [dispatch, assets, healthTransitions, healthRecordsCleaned] = await Promise.all([
     dispatchDueCaptures(env, now),
     reconcileAssets(env, now),
+    refreshDeviceHealthStatuses(env.DB, now),
+    cleanHealth ? cleanupDeviceHealth(env.DB, now) : Promise.resolve(0),
   ]);
   const cleanup = assets.cycle_completed ? await cleanupExpiredCaptures(env, now) : 0;
-  return { ...dispatch, cleaned_targets: cleanup, asset_reconciliation: assets };
+  return { ...dispatch, cleaned_targets: cleanup, asset_reconciliation: assets,
+    ...(healthTransitions ? { device_health_transitions: healthTransitions } : {}),
+    ...(cleanHealth ? { device_health_records_cleaned: healthRecordsCleaned } : {}) };
 }
 
 export async function fetchHandler(request, env, ctx) {
@@ -65,6 +72,24 @@ export async function fetchHandler(request, env, ctx) {
     if (url.pathname === "/v1/enrollment-requests") {
       if (request.method !== "POST") return methodNotAllowed("POST");
       return await requestDeviceEnrollment(request, env);
+    }
+
+    if (url.pathname === "/v1/telemetry") {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      const deviceID = request.headers.get("X-Ribbonfish-Device-ID") ?? "";
+      const device = await getEnabledDevice(env, deviceID);
+      let bodyBytes;
+      if (typeof device.public_key === "string" && device.public_key) {
+        bodyBytes = await readRequestBody(request, MAX_TELEMETRY_BYTES);
+        await authenticateDevice(request, deviceID, device, bodyBytes);
+      } else {
+        await authenticateDevice(request, deviceID, device);
+        bodyBytes = await readRequestBody(request, MAX_TELEMETRY_BYTES);
+      }
+      const data = parseJSONBody(bodyBytes);
+      const report = validateDeviceHealthReport(data);
+      if (!report) throw new HTTPError(400, "invalid device health report");
+      return jsonResponse(await persistDeviceHealth(env.DB, deviceID, report, Date.now()));
     }
 
     if (url.pathname === "/v2/playlist") {
@@ -277,7 +302,12 @@ async function requestDeviceEnrollment(request, env) {
   });
 }
 
-async function authenticate(request, env, deviceID) {
+async function authenticate(request, env, deviceID, bodyBytes = new Uint8Array()) {
+  const device = await getEnabledDevice(env, deviceID);
+  return authenticateDevice(request, deviceID, device, bodyBytes);
+}
+
+async function getEnabledDevice(env, deviceID) {
   if (!ID_PATTERN.test(deviceID)) throw new HTTPError(401, "device authentication failed");
   const device = await env.DB.prepare(
     "SELECT device_id, token_hash, public_key, enabled FROM devices WHERE device_id = ?",
@@ -285,9 +315,12 @@ async function authenticate(request, env, deviceID) {
   if (!device || device.enabled !== 1) {
     throw new HTTPError(401, "device authentication failed");
   }
+  return device;
+}
 
+async function authenticateDevice(request, deviceID, device, bodyBytes = new Uint8Array()) {
   if (typeof device.public_key === "string" && device.public_key) {
-    if (!await verifyDeviceSignature(request, deviceID, device.public_key, new Uint8Array())) {
+    if (!await verifyDeviceSignature(request, deviceID, device.public_key, bodyBytes)) {
       throw new HTTPError(401, "device authentication failed");
     }
     return device;
@@ -374,6 +407,11 @@ async function readJSON(request, maxBytes) {
 }
 
 async function readJSONBody(request, maxBytes) {
+  const bodyBytes = await readRequestBody(request, maxBytes);
+  return { data: parseJSONBody(bodyBytes), bodyBytes };
+}
+
+async function readRequestBody(request, maxBytes) {
   const reader = request.body?.getReader();
   if (!reader) throw new HTTPError(400, "request body is required");
   const chunks = [];
@@ -392,14 +430,18 @@ async function readJSONBody(request, maxBytes) {
   } finally {
     reader.releaseLock();
   }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function parseJSONBody(bodyBytes) {
   try {
-    const bytes = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return { data: JSON.parse(new TextDecoder().decode(bytes)), bodyBytes: bytes };
+    return JSON.parse(new TextDecoder().decode(bodyBytes));
   } catch {
     throw new HTTPError(400, "request body must be valid JSON");
   }
