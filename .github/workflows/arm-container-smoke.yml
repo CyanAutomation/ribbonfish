@@ -55,6 +55,8 @@ jobs:
           python3 -m json.tool agent/defaults/simulator-pi3a-plus.json >/dev/null
           python3 -m json.tool agent/defaults/simulator-pi3b.json >/dev/null
           python3 -m json.tool agent/defaults/simulator-pi4.json >/dev/null
+          RIBBONFISH_SIMULATOR_PROFILE=simulator-pi4 docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml config --format json | python3 examples/raspberry-pi/tests/check-simulator-resources.py 4 536870912
+          RIBBONFISH_SIMULATOR_PROFILE=simulator-pi4 RIBBONFISH_SIMULATOR_CPUS=2 RIBBONFISH_SIMULATOR_MEMORY_LIMIT=3g docker compose -f examples/raspberry-pi/docker-compose.published.yaml config --format json | python3 examples/raspberry-pi/tests/check-simulator-resources.py 2 3221225472
           docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml config --quiet
           RIBBONFISH_SIMULATOR_PROFILE=simulator-pi3a-plus docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml config --quiet
           RIBBONFISH_SIMULATOR_PROFILE=simulator-pi3b docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml config --quiet
