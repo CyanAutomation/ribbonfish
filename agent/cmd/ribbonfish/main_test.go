@@ -249,6 +249,44 @@ func TestReportUnavailableDisplaysWarnsAndMarksHealthDegraded(t *testing.T) {
 	}
 }
 
+func TestRetryHealthReportRetriesTransientFailure(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	attempts := 0
+	if err := retryHealthReport(func(context.Context) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("temporary worker failure")
+		}
+		return nil
+	}, logger, 3, time.Millisecond); err != nil {
+		t.Fatalf("retryHealthReport() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("report attempts = %d, want 2", attempts)
+	}
+	if !strings.Contains(logs.String(), "startup health report failed") {
+		t.Fatalf("retry warning missing from logs: %s", logs.String())
+	}
+}
+
+func TestRetryHealthReportStopsAfterAttemptLimit(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	attempts := 0
+	wantErr := errors.New("worker unavailable")
+	err := retryHealthReport(func(context.Context) error {
+		attempts++
+		return wantErr
+	}, logger, 3, time.Millisecond)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("retryHealthReport() error = %v, want %v", err, wantErr)
+	}
+	if attempts != 3 {
+		t.Fatalf("report attempts = %d, want 3", attempts)
+	}
+}
+
 type diagnosticDisplayOutput struct{ unavailable []drm.DisplayTarget }
 
 func (*diagnosticDisplayOutput) Present(context.Context, string, image.Image) error { return nil }
