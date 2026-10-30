@@ -76,6 +76,60 @@ export function formatScreenshotStatus(jobStatus, lastError, lastSuccessAt) {
   return { label: "Waiting for first screenshot", tone: "neutral" };
 }
 
+export function summarizeFleetAttention(overview = {}, enrollmentRequests = []) {
+  const items = [];
+  const devices = Array.isArray(overview.devices) ? overview.devices : [];
+  const healthReviewCount = devices.filter((device) => {
+    if (device.enabled === false || device.enabled === 0) return false;
+    return ["degraded", "stale", "offline", "unknown"].includes(device.health?.status ?? "unknown");
+  }).length;
+  const assetIssues = [
+    ...(overview.asset_health?.missing ?? []),
+    ...(overview.asset_health?.integrity_issues ?? []),
+  ];
+  const uniqueAssetIssues = new Set(assetIssues.map((asset, index) => asset.sha256 ?? `issue-${index}`));
+  const failedCaptures = (overview.capture_targets ?? []).filter((target) =>
+    Boolean(target.last_error) && !["queued", "running"].includes(target.job_status)).length;
+
+  if (enrollmentRequests.length) {
+    items.push({
+      key: "enrollments",
+      count: enrollmentRequests.length,
+      singular: "device awaiting approval",
+      plural: "devices awaiting approval",
+      href: "#pending-enrollments-title",
+    });
+  }
+  if (healthReviewCount) {
+    items.push({
+      key: "devices",
+      count: healthReviewCount,
+      singular: "device needing health review",
+      plural: "devices needing health review",
+      href: "#device-section",
+    });
+  }
+  if (uniqueAssetIssues.size) {
+    items.push({
+      key: "assets",
+      count: uniqueAssetIssues.size,
+      singular: "image availability issue",
+      plural: "image availability issues",
+      href: "#asset-health",
+    });
+  }
+  if (failedCaptures) {
+    items.push({
+      key: "captures",
+      count: failedCaptures,
+      singular: "screenshot needing attention",
+      plural: "screenshots needing attention",
+      href: "#capture-targets",
+    });
+  }
+  return items;
+}
+
 export function formatCaptureInterval(seconds) {
   if (seconds >= 86400 && seconds % 86400 === 0) {
     const days = seconds / 86400;

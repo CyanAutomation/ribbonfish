@@ -22,6 +22,7 @@ import {
   playlistDeleteActionStates,
   formatScreenshotStatus,
   formatTimestamp,
+  summarizeFleetAttention,
   hasPageURLs,
   parsePageURLs,
 } from "../public/admin/ui-utils.js";
@@ -46,6 +47,58 @@ test("management page exposes accessible fleet and playlist sections", async () 
   assert.match(html, /aria-labelledby="playlist-title"/);
 });
 
+test("management page prioritizes task navigation and defers optional panels", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
+  assert.match(html, /id="fleet-attention"/);
+  assert.match(html, /<a href="#playlist-section">Playlists<\/a>/);
+  assert.match(html, /<a href="#device-section">Devices<\/a>/);
+  assert.match(html, /<details id="analysis-section"/);
+  assert.match(html, /<details id="playlist-editor"/);
+  assert.match(app, /summarizeFleetAttention\(overview, enrollmentRequests\)/);
+  assert.match(app, /document\.querySelector\("#playlist-editor"\)\.open = true/);
+  assert.match(app, /fleetAttention\.addEventListener\("click"/);
+});
+
+test("playlist editor and screenshot details use native disclosures", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
+  assert.match(html, /<details id="pending-enrollments-details"/);
+  assert.match(app, /hasNewRequest/);
+  assert.match(app, /else if \(!pendingEnrollmentsLoaded \|\| hasNewRequest\) pendingDetails\.open = true/);
+  assert.match(app, /capture-target__details/);
+  assert.match(app, /device-details/);
+});
+
+test("fleet attention shows only actionable health and content issues", () => {
+  const items = summarizeFleetAttention({
+    devices: [
+      { enabled: 1, health: { status: "healthy" } },
+      { enabled: 1, health: { status: "offline" } },
+      { enabled: 1, health: { status: "unknown" } },
+      { enabled: 0, health: { status: "offline" } },
+    ],
+    asset_health: {
+      missing: [{ sha256: "a" }, { sha256: "b" }],
+      integrity_issues: [{ sha256: "a" }, { sha256: "c" }],
+    },
+    capture_targets: [
+      { last_error: "failed" },
+      { last_error: null, job_status: "queued" },
+      { last_error: "old failure", job_status: "queued" },
+      { last_error: null },
+    ],
+  }, [{ request_id: "r1" }]);
+
+  assert.deepEqual(items, [
+    { key: "enrollments", count: 1, singular: "device awaiting approval", plural: "devices awaiting approval", href: "#pending-enrollments-title" },
+    { key: "devices", count: 2, singular: "device needing health review", plural: "devices needing health review", href: "#device-section" },
+    { key: "assets", count: 3, singular: "image availability issue", plural: "image availability issues", href: "#asset-health" },
+    { key: "captures", count: 1, singular: "screenshot needing attention", plural: "screenshots needing attention", href: "#capture-targets" },
+  ]);
+  assert.deepEqual(summarizeFleetAttention({ devices: [], asset_health: { missing: [] }, capture_targets: [] }, []), []);
+});
+
 test("management page exposes advisory fleet analysis and screenshot skip assessment controls", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
@@ -58,7 +111,7 @@ test("management page exposes advisory fleet analysis and screenshot skip assess
   assert.match(app, /\/skip-once/);
   assert.match(app, /showConfirmDialog\(\{/);
   assert.match(app, /Confirm skip this screenshot once/);
-  assert.match(app, /Assess screenshot skip/);
+  assert.match(app, /Assess screenshot schedule/);
   assert.match(app, /Advisory only/);
 });
 
@@ -236,7 +289,9 @@ test("OpenUI Core parses and evaluates a read-only fleet view", async () => {
   assert.equal(active.props.value, "operations / r-test");
   assert.equal(active.props.detail, "Ready for enrolled devices on their next sync");
   assert.equal(ready.props.value, "1 version ready to activate");
-  assert.equal(health.props.body, "All active playlist images are available");
+  assert.equal(health.props.label, "Image availability");
+  assert.equal(health.props.value, "All available");
+  assert.equal(health.props.detail, "All images in the active playlist are available");
   assert.equal(overviewReads, 1);
   runtime.dispose();
 });
@@ -258,7 +313,7 @@ test("OpenUI fleet health keeps degraded, stale, offline, unknown, and disabled 
   runtime.dispose();
 });
 
-test("OpenUI Core reports missing assets as a warning", async () => {
+test("OpenUI Core summarizes missing assets as a compact metric", async () => {
   const runtime = createFleetOpenUI({
     getOverview: async () => ({
       ...overview,
@@ -269,9 +324,10 @@ test("OpenUI Core reports missing assets as a warning", async () => {
   runtime.renderProgram(OPENUI_STARTER_SOURCE);
   await runtime.waitForQueries();
 
-  const notice = runtime.getView().root.props.children[4];
-  assert.equal(notice.props.tone, "warning");
-  assert.equal(notice.props.body, "1 image missing from the active playlist");
+  const imageHealth = runtime.getView().root.props.children[4];
+  assert.equal(imageHealth.props.label, "Image availability");
+  assert.equal(imageHealth.props.value, "1 missing");
+  assert.equal(imageHealth.props.detail, "1 image is missing from the active playlist");
   runtime.dispose();
 });
 
@@ -292,7 +348,8 @@ test("fleet snapshot is concise and accurate when no playlist is active", async 
   assert.equal(active.props.value, "No active playlist");
   assert.equal(active.props.detail, "No playlist is active for enrolled devices");
   assert.equal(ready.props.detail, "No versions are waiting to be activated");
-  assert.equal(health.props.body, "No active playlist");
+  assert.equal(health.props.value, "No active playlist");
+  assert.equal(health.props.detail, "No images can be checked until a playlist is active");
   runtime.dispose();
 });
 
