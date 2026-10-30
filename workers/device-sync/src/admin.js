@@ -140,7 +140,7 @@ export async function handleAdminRequest(request, env, ctx) {
       if (!hasExactKeys(data, ["due_at"]) || !Number.isSafeInteger(data.due_at) || data.due_at < 0) {
         throw new HTTPError(400, "request body must contain a valid due_at timestamp");
       }
-      await confirmCaptureSkip(captureSkipMatch[1], data.due_at, env, actorID);
+      await confirmCaptureSkip(captureSkipMatch[1].toLowerCase(), data.due_at, env, actorID);
       return jsonResponse({ confirmed: true, due_at: data.due_at }, 202);
     }
 
@@ -149,7 +149,7 @@ export async function handleAdminRequest(request, env, ctx) {
       if (request.method !== "POST") return methodNotAllowed("POST");
       let result;
       try {
-        result = await enqueueCapture(captureRunMatch[1], env);
+        result = await enqueueCapture(captureRunMatch[1].toLowerCase(), env);
       } catch (error) {
         if (error instanceof CaptureTargetNotAllowedError) throw new HTTPError(409, error.message);
         throw new HTTPError(503, "Capture could not be queued. Check the capture queue configuration and try again.");

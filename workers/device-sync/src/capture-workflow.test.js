@@ -132,7 +132,7 @@ test("a confirmed screenshot skip is bound to one due time and consumed once", a
     sqlite.prepare("INSERT OR IGNORE INTO active_playlist (singleton, playlist_id, revision) VALUES (1, 'operations', ?)")
       .run(created.body.revision);
 
-    const confirmed = await handleAdminRequest(await request(`/admin/api/captures/${captureID}/skip-once`, {
+    const confirmed = await handleAdminRequest(await request(`/admin/api/captures/${captureID.toUpperCase()}/skip-once`, {
       method: "POST", body: { due_at: dueAt },
     }), env);
     assert.equal(confirmed.status, 202, await confirmed.clone().text());
@@ -151,6 +151,22 @@ test("a confirmed screenshot skip is bound to one due time and consumed once", a
 
     await dispatchDueCaptures(env, dueAt + interval * 1000 + 1);
     assert.equal(messages.length, 1, "the following scheduled capture is not skipped");
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("manual capture run normalizes uppercase UUIDs before the database lookup", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const captureID = created.body.captures[0].capture_id;
+    const response = await handleAdminRequest(await request(`/admin/api/captures/${captureID.toUpperCase()}/run`, {
+      method: "POST", body: {},
+    }), env);
+    assert.equal(response.status, 202, await response.clone().text());
+    assert.equal((await response.json()).status, "queued");
   } finally {
     sqlite.close();
   }
