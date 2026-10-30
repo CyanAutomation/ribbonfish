@@ -249,6 +249,105 @@ func TestReportUnavailableDisplaysWarnsAndMarksHealthDegraded(t *testing.T) {
 	}
 }
 
+func TestRetryHealthReportRetriesTransientFailure(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	attempts := 0
+	if err := retryHealthReport(context.Background(), func(context.Context) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("temporary worker failure")
+		}
+		return nil
+	}, logger, 3, time.Millisecond); err != nil {
+		t.Fatalf("retryHealthReport() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("report attempts = %d, want 2", attempts)
+	}
+	if !strings.Contains(logs.String(), "startup health report failed") {
+		t.Fatalf("retry warning missing from logs: %s", logs.String())
+	}
+}
+
+func TestRetryHealthReportStopsAfterAttemptLimit(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	attempts := 0
+	wantErr := errors.New("worker unavailable")
+	err := retryHealthReport(context.Background(), func(context.Context) error {
+		attempts++
+		return wantErr
+	}, logger, 3, time.Millisecond)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("retryHealthReport() error = %v, want %v", err, wantErr)
+	}
+	if attempts != 3 {
+		t.Fatalf("report attempts = %d, want 3", attempts)
+	}
+}
+
+func TestRetryHealthReportCancelsInFlightAttemptWithParentContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- retryHealthReport(ctx, func(attemptCtx context.Context) error {
+			close(started)
+			<-attemptCtx.Done()
+			return attemptCtx.Err()
+		}, slog.New(slog.NewTextHandler(io.Discard, nil)), 3, time.Hour)
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("retryHealthReport() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retryHealthReport() did not stop when its parent context was canceled")
+	}
+}
+
+func TestRetryHealthReportCancellationInterruptsBackoff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	warned := make(chan struct{}, 1)
+	logger := healthRetryTestLogger{warned: warned}
+	attempts := 0
+	done := make(chan error, 1)
+	go func() {
+		done <- retryHealthReport(ctx, func(context.Context) error {
+			attempts++
+			return errors.New("temporary worker failure")
+		}, logger, 3, time.Hour)
+	}()
+	<-warned
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("retryHealthReport() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retryHealthReport() did not interrupt its backoff after cancellation")
+	}
+	if attempts != 1 {
+		t.Fatalf("report attempts = %d, want 1", attempts)
+	}
+}
+
+type healthRetryTestLogger struct{ warned chan struct{} }
+
+func (logger healthRetryTestLogger) Warn(string, ...any) {
+	select {
+	case logger.warned <- struct{}{}:
+	default:
+	}
+}
+
 type diagnosticDisplayOutput struct{ unavailable []drm.DisplayTarget }
 
 func (*diagnosticDisplayOutput) Present(context.Context, string, image.Image) error { return nil }

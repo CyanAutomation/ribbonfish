@@ -12,6 +12,7 @@ import {
   formatAuditEventType,
   formatActorLabel,
   compactIdentifier,
+  createRetryableLoadOnce,
   formatCaptureInterval,
   formatDeviceEnabledMessage,
   formatDeviceHealthDetails,
@@ -173,6 +174,43 @@ test("device health details tolerate missing sync data in stored reports", () =>
     latest: { ...latest, sync: { status: "ok" } },
   });
   assert.equal(missingAge.summary[2], "Sync ok · last success never");
+});
+
+test("health details loading can retry failures and caches the first success", async () => {
+  const loader = createRetryableLoadOnce();
+  let calls = 0;
+
+  await assert.rejects(loader.load(async () => {
+    calls += 1;
+    throw new Error("temporary request failure");
+  }), /temporary request failure/);
+  assert.equal(loader.loaded, false);
+
+  const value = await loader.load(async () => {
+    calls += 1;
+    return { report: "health" };
+  });
+  assert.deepEqual(value, { report: "health" });
+  assert.equal(loader.loaded, true);
+
+  const cached = await loader.load(async () => {
+    calls += 1;
+    return { report: "new health" };
+  });
+  assert.equal(cached, undefined);
+  assert.equal(calls, 2);
+});
+
+test("concurrent health detail opens share one request", async () => {
+  const loader = createRetryableLoadOnce();
+  let calls = 0;
+  let resolveRequest;
+  const request = new Promise((resolve) => { resolveRequest = resolve; });
+  const first = loader.load(() => { calls += 1; return request; });
+  const second = loader.load(() => { calls += 1; return request; });
+  resolveRequest("health");
+  assert.deepEqual(await Promise.all([first, second]), ["health", "health"]);
+  assert.equal(calls, 1);
 });
 
 test("OpenUI Core parses and evaluates a read-only fleet view", async () => {
