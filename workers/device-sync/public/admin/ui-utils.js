@@ -141,6 +141,83 @@ export function formatDeviceEnabledMessage(deviceID, enabled) {
   return `Device ${deviceID} is now ${enabled ? "enabled" : "disabled"}.`;
 }
 
+export function formatEnrollmentApprovalPrompt(request) {
+  const replacement = request.replaces_existing
+    ? ` This will replace the existing credentials for ${request.device_id}.`
+    : "";
+  return `Only approve ${request.device_id} if its physical display shows the full fingerprint ${request.fingerprint}.${replacement}`;
+}
+
+export function formatDeviceHealthDetails(result, history = {}) {
+  const report = result?.latest;
+  if (!report) return { message: "This device has not reported health yet." };
+
+  const sync = report.sync ?? {};
+  const lastSync = sync.last_success_age_seconds == null
+    ? "never"
+    : `${formatAge(sync.last_success_age_seconds)} ago`;
+  const summary = [
+    `Fleet health ${result.health_status}.`,
+    `Last report ${formatTimestamp(result.received_at)} · Agent ${report.agent_version} · Uptime ${formatAge(report.agent_uptime_seconds)}`,
+    `Sync ${sync.status ?? "unknown"} · last success ${lastSync}${sync.applied_playlist_id ? ` · ${sync.applied_playlist_id} / ${sync.applied_revision ?? "revision unknown"}` : ""}`,
+  ];
+  if (report.startup_error_code) summary.push(`Startup issue: ${report.startup_error_code}`);
+
+  const outputs = (report.outputs ?? []).map((output) => {
+    const connector = output.connector ? ` (${output.connector})` : "";
+    const issue = output.error_code ? ` · ${output.error_code}` : "";
+    const lastFrame = output.last_frame_age_seconds === null
+      ? "no successful frame yet"
+      : `last frame ${formatAge(output.last_frame_age_seconds)} ago`;
+    return `${output.display_id}${connector}: ${output.status} · ${lastFrame}${issue}`;
+  });
+
+  const host = [];
+  if (report.host) {
+    if (Number.isFinite(report.host.uptime_seconds)) host.push(`Host uptime ${formatAge(report.host.uptime_seconds)}`);
+    if (Number.isFinite(report.host.temperature_millicelsius)) host.push(`Temperature ${(report.host.temperature_millicelsius / 1000).toFixed(1)}°C`);
+    if (Number.isFinite(report.host.memory_available_bytes)) host.push(`Memory ${formatBytes(report.host.memory_available_bytes)} available`);
+    if (Number.isFinite(report.host.state_disk_free_bytes)) host.push(`State disk ${formatBytes(report.host.state_disk_free_bytes)} free`);
+    if (Number.isFinite(report.host.load_1m)) host.push(`1m load ${report.host.load_1m.toFixed(2)}`);
+  }
+
+  const events = (history.events ?? []).map((event) => {
+    const status = event.metadata?.health_status ? ` · ${event.metadata.health_status}` : "";
+    const transition = event.metadata?.previous_health_status
+      ? ` (${event.metadata.previous_health_status} → ${event.metadata.health_status})`
+      : "";
+    return `${formatTimestamp(event.received_at)} · ${event.event_type}${status}${transition}${event.error_code ? ` · ${event.error_code}` : ""}`;
+  });
+
+  return {
+    summary,
+    outputs,
+    host,
+    events,
+    sampleCount: history.samples?.length ?? 0,
+  };
+}
+
+function formatAge(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "unknown";
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let amount = bytes;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
+  return `${amount.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
 export function formatAuditDetails(metadata, locale) {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return [];
   return Object.entries(metadata).map(([key, value]) => ({
