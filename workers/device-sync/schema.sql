@@ -227,6 +227,17 @@ WHEN EXISTS (SELECT 1 FROM managed_assets WHERE sha256 = NEW.sha256 AND state = 
 BEGIN
   SELECT RAISE(ABORT, 'asset deletion in progress');
 END;
+
+CREATE TABLE IF NOT EXISTS capture_skip_approvals (
+  capture_id TEXT PRIMARY KEY,
+  due_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  actor_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (capture_id) REFERENCES capture_targets(capture_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS capture_skip_approvals_expiry_idx
+  ON capture_skip_approvals(expires_at);
 CREATE TRIGGER IF NOT EXISTS playlist_assets_not_deleting_update
 BEFORE UPDATE OF sha256, size ON playlist_assets
 WHEN EXISTS (SELECT 1 FROM managed_assets WHERE sha256 = NEW.sha256 AND state = 'deleting')

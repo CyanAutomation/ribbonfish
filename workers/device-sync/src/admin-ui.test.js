@@ -51,9 +51,12 @@ test("management page exposes advisory fleet analysis and screenshot skip assess
   assert.match(html, /href="#analysis-section"/);
   assert.match(html, /id="analysis-section"/);
   assert.match(html, /id="run-fleet-analysis"/);
-  assert.match(html, /advisory and never change the capture schedule/i);
+  assert.match(html, /advisory skip suggestion.*admin confirms it/i);
   assert.match(app, /\/admin\/api\/jev\/fleet-analysis/);
   assert.match(app, /\/admin\/api\/jev\/capture-assessment/);
+  assert.match(app, /\/skip-once/);
+  assert.match(app, /showConfirmDialog\(\{/);
+  assert.match(app, /Confirm skip this screenshot once/);
   assert.match(app, /Assess screenshot skip/);
   assert.match(app, /Advisory only/);
 });
@@ -354,6 +357,8 @@ test("audit events and metadata are presented as readable labels", () => {
   assert.equal(formatAuditEventType("playlist.revision_created"), "Created playlist version");
   assert.equal(formatAuditEventType("playlist.deleted"), "Deleted playlist");
   assert.equal(formatAuditEventType("device.credential_rotated"), "Rotated device token");
+  assert.equal(formatAuditEventType("capture.skip_once_confirmed"), "Confirmed one screenshot skip");
+  assert.equal(formatAuditEventType("capture.skip_once_applied"), "Skipped one scheduled screenshot");
   assert.equal(formatAuditEventType("development.bootstrap"), "Created initial playlist");
   assert.equal(formatAuditEventType("device.disabled"), "Disabled device");
   assert.deepEqual(formatAuditDetails({

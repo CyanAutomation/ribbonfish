@@ -1,5 +1,7 @@
 const AUDIT_EVENT_LABELS = {
   "asset.uploaded": "Uploaded playlist image",
+  "capture.skip_once_applied": "Skipped one scheduled screenshot",
+  "capture.skip_once_confirmed": "Confirmed one screenshot skip",
   "device.credential_rotated": "Rotated device token",
   "device.disabled": "Disabled device",
   "device.enabled": "Enabled device",

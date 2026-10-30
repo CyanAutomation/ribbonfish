@@ -1,5 +1,5 @@
 const JEV_ENDPOINT = "https://openrouter.ai/api/alpha/decisions";
-const DEFAULT_MODEL = "~typesafe/jev-latest";
+const PINNED_MODEL = "~typesafe/jev-latest";
 const MAX_STATE_BYTES = 16 * 1024;
 const MAX_RESPONSE_BYTES = 32 * 1024;
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -24,6 +24,11 @@ export async function callJevDecision(env, {
   }
   if (typeof state !== "string" || !state.trim()) throw new TypeError("JEV state must be a non-empty string.");
   if (new TextEncoder().encode(state).byteLength > MAX_STATE_BYTES) throw new RangeError("JEV state is too large.");
+  let structuredState;
+  try { structuredState = JSON.parse(state); } catch { throw new TypeError("JEV state must be a JSON object."); }
+  if (!structuredState || typeof structuredState !== "object" || Array.isArray(structuredState)) {
+    throw new TypeError("JEV state must be a JSON object.");
+  }
   if (!isQuestionSchema(questions)) throw new TypeError("JEV questions must be a fixed typed schema.");
   if (typeof fetcher !== "function") throw new TypeError("JEV fetcher must be a function.");
 
@@ -36,7 +41,7 @@ export async function callJevDecision(env, {
         "Content-Type": "application/json",
         Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
       },
-      body: JSON.stringify({ model: env.JEV_MODEL || DEFAULT_MODEL, state, questions }),
+      body: JSON.stringify({ model: PINNED_MODEL, state: structuredState, questions }),
       signal: controller.signal,
     });
     if (!response.ok) throw new JEVRequestError("JEV provider request failed.");
