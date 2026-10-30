@@ -13,10 +13,12 @@
   "displays": [
     {
       "id": "display-left",
+      "connector": "HDMI-A-1",
       "mode": "1920x1080@60"
     },
     {
       "id": "display-right",
+      "connector": "HDMI-A-2",
       "mode": "1920x1080@60"
     }
   ],
