@@ -142,6 +142,8 @@ The experimental deployment is **Docker Compose on Raspberry Pi OS Lite**, with 
 
 The Compose deployment maps only the selected DRM card and its numeric device group. The agent requests DRM master, configures the selected connector(s), and takes over scanout; the host display manager or compositor must release that card. Device access does not guarantee DRM master ownership or multi-output support. Select the bundled profile and verify the device path, group, and connector on each Pi. Avoid `privileged: true`.
 
+On Pi 4, use `/dev/dri/by-path/platform-gpu-card` rather than assuming `card0` or `card1`, since DRM card numbering can vary by device. See the [Raspberry Pi deployment guide](examples/raspberry-pi/README.md) for setup and restart-loop troubleshooting. Physical dual-HDMI scanout still needs acceptance on the target hardware.
+
 
 A small Go agent, packaged as a multi-architecture OCI image and deployed primarily with Docker Compose on Raspberry Pi OS Lite or another compatible Linux distribution:
 

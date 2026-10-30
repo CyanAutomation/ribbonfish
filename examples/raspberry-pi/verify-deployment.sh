@@ -53,7 +53,7 @@ case "$profile" in
 	*) fail "unsupported RIBBONFISH_PROFILE='$profile'" ;;
 esac
 [ -n "$drm_device" ] && [ -c "$drm_device" ] || fail "DRM device '$drm_device' is not a character device"
-device_gid=$(stat -c '%g' "$drm_device" 2>/dev/null || stat -f '%g' "$drm_device" 2>/dev/null || true)
+device_gid=$(stat -L -c '%g' "$drm_device" 2>/dev/null || stat -L -f '%g' "$drm_device" 2>/dev/null || true)
 [ -n "$device_gid" ] && [ "$drm_gid" = "$device_gid" ] || fail "RIBBONFISH_DRM_GID='$drm_gid' does not match $drm_device group '$device_gid'"
 
 if [ -n "$sync_url" ]; then

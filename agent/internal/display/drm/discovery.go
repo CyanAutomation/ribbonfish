@@ -24,6 +24,7 @@ type Connector struct {
 	Driver            string   `json:"driver"`
 	Status            string   `json:"status"`
 	Modes             []string `json:"modes"`
+	deviceNumber      string
 }
 
 // Discover lists DRM connectors by reading sysfs. It does not open DRM
@@ -60,7 +61,9 @@ func Discover(sysfsRoot, devRoot string) ([]Connector, error) {
 			modes = []string{}
 		}
 		connectorName := match[2]
-		device := filepath.Join(devRoot, "card"+strconv.Itoa(cardNumber))
+		cardName := "card" + strconv.Itoa(cardNumber)
+		device := filepath.Join(devRoot, cardName)
+		deviceNumber, _ := readTrimmed(filepath.Join(sysfsRoot, cardName, "dev"))
 		deviceInfo, statErr := os.Stat(device)
 		deviceNodePresent := statErr == nil && deviceInfo.Mode()&os.ModeDevice != 0 && deviceInfo.Mode()&os.ModeCharDevice != 0
 		connectors = append(connectors, Connector{
@@ -71,6 +74,7 @@ func Discover(sysfsRoot, devRoot string) ([]Connector, error) {
 			Driver:            readDriver(filepath.Join(sysfsRoot, "card"+strconv.Itoa(cardNumber), "device", "driver")),
 			Status:            status,
 			Modes:             modes,
+			deviceNumber:      deviceNumber,
 		})
 	}
 

@@ -9,10 +9,11 @@ when the Worker cannot be reached.
 
 The DRM/KMS output is experimental. One-display mode-setting, frame updates,
 and visible sample slides have been confirmed on a Pi 3 A+. Pi 3B scanout and
-Pi 4 dual-display acceptance remain open. The Pi 4 hardware profile expects
-both `HDMI-A-1` and `HDMI-A-2` to be connected and active; a headless Pi 4
-cannot pass preflight or verify physical scanout until both displays are
-connected.
+Pi 4 physical dual-display acceptance remain open. The Pi 4 hardware profile
+expects both `HDMI-A-1` and `HDMI-A-2` to be connected and active; a headless Pi
+4 cannot pass preflight or verify physical scanout until both displays are
+connected. The Pi 4 setup below selects the KMS device independently of its
+variable `card0`/`card1` numbering, but does not replace physical acceptance.
 
 ## Files
 
@@ -57,8 +58,9 @@ deployment files pinned to that commit into a temporary directory, and removes
 the temporary files after staging. It does not require Git or a repository
 clone. It needs outbound HTTPS access to GitHub and the image registry. The
 Pi profile helper detects Pi 3 A+, Pi 3 B, or Pi 4, reads the numeric group
-from the selected DRM card, and writes the hardware and requested sync settings
-into `.env`.
+from the selected DRM device, and writes the hardware and requested sync
+settings into `.env`. For Pi 4 it selects
+`/dev/dri/by-path/platform-gpu-card`, a stable alias for the KMS display card.
 Compose defaults to the published `latest` image. For repeatable deployments,
 pin an immutable `sha-<merge-commit-SHA>` tag or a manifest digest with
 `--image`:
@@ -94,8 +96,9 @@ this README in the deployment directory. It does not copy config or image
 assets. Use `--profile`, `--drm-device`, or `--drm-gid` to override detection.
 The Pi profile mapping is:
 
-- Pi 4 uses profile `pi4`, which requires both HDMI connectors listed above;
-  inspect the host to select its card and group.
+- Pi 4 uses profile `pi4`, which requires both HDMI connectors listed above.
+  The helper defaults to `/dev/dri/by-path/platform-gpu-card`; check that the
+  alias exists and points to the KMS display device before starting Compose.
 - Ribbonfish is a Pi 3 A+ using profile `pi3a-plus`, `/dev/dri/card0`, and GID `44`.
 - For Pi 3B, select `pi3b` and inspect the actual card and group first.
 
@@ -120,6 +123,60 @@ docker compose -p ribbonfish run --rm agent -list-displays
 docker compose -p ribbonfish exec -T agent /ribbonfish -check-displays
 docker compose -p ribbonfish logs -f agent
 ```
+
+These commands use the `agent` service name from this repository's Compose
+file. For an existing deployment with another service name, run
+`docker compose config --services` and substitute the listed name.
+
+### Raspberry Pi 4 DRM device selection
+
+Do not assume that `/dev/dri/card0` or `card1` is the display controller on a
+Pi 4. The V3D render driver and VC4 KMS display driver can receive different
+card numbers on different boots or devices. The Ribbonfish Pi 4 setup uses the
+KMS alias, which resolves to the correct numbered card on supported Raspberry
+Pi OS images:
+
+```sh
+ls -l /dev/dri/by-path
+readlink -f /dev/dri/by-path/platform-gpu-card
+stat -L -c '%g %G %n' /dev/dri/by-path/platform-gpu-card
+```
+
+The `readlink` command shows which `cardN` currently backs the alias; the
+`stat -L` command reports the target device's numeric group. The install helper
+uses these semantics when it detects a Pi 4 and writes `.env`. If you edit
+`.env` manually, use profile `pi4`, set
+`RIBBONFISH_DRM_DEVICE=/dev/dri/by-path/platform-gpu-card`, and set
+`RIBBONFISH_DRM_GID` to the numeric group reported by `stat -L` (often `44` on
+Raspberry Pi OS). The alias must exist before running Compose. The helper
+preserves an existing `.env` by default, so update a previous `card0` or
+`card1` setting manually; `prepare-deployment.sh` will not silently replace it.
+The display preflight matches the alias to each connector's owning card by
+Linux device number.
+
+If that alias is missing, inspect `ribbonfish -list-displays` output and
+`/sys/class/drm` to identify the card that owns `HDMI-A-1` and `HDMI-A-2`, then
+set `RIBBONFISH_DRM_DEVICE` and its actual group explicitly. Do not select a
+card just because its number matches another Pi.
+
+If startup logs report `read DRM resources ... operation not supported`, check
+that the mapped device is the KMS display card. A render-only V3D node does not
+provide the modesetting interface Ribbonfish needs. After correcting the path
+and group in `.env`, run preflight and recreate the container so Docker applies
+the updated device mapping:
+
+```sh
+./verify-deployment.sh --preflight
+docker compose -p ribbonfish up -d --force-recreate
+```
+
+Both HDMI displays must be connected for the Pi 4 profile's connector check to
+pass.
+
+If preflight says a connector belongs to `/dev/dri/cardN` but the configured
+device is `/dev/dri/by-path/platform-gpu-card`, the agent image predates
+by-path-aware preflight. Update to an image built from a revision with this
+support before using the deployment verifier.
 
 The service defaults to `network_mode: none`. Pulling the image needs a network
 connection; after it is present locally, the service itself can start offline.
@@ -260,7 +317,7 @@ Before deployment, inspect device nodes, groups, connectors, and modes:
 
 ```sh
 ls -l /dev/dri
-stat -c '%g %G %n' /dev/dri/card*
+stat -L -c '%g %G %n' /dev/dri/card*
 ls /sys/class/drm
 ```
 
