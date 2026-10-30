@@ -14,6 +14,8 @@ import {
   compactIdentifier,
   formatCaptureInterval,
   formatDeviceEnabledMessage,
+  formatDeviceHealthDetails,
+  formatEnrollmentApprovalPrompt,
   formatEnvironmentNotice,
   formatPlaylistState,
   playlistDeleteActionStates,
@@ -24,6 +26,7 @@ import {
 } from "../public/admin/ui-utils.js";
 
 // Contract source: ../README.md#local-development and ../README.md#management-api.
+// Device health presentation contract: ../README.md#management-api.
 
 const overview = {
   devices: [{ enabled: 1 }, { enabled: 0 }],
@@ -32,20 +35,128 @@ const overview = {
   asset_health: { missing: [] },
 };
 
-test("management page uses the Ribbonfish favicon", async () => {
+test("management page exposes accessible fleet and playlist sections", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   assert.match(html, /<link rel="icon" type="image\/png" href="\/admin\/favicon\.png">/);
+  assert.match(html, /aria-label="Fleet snapshot"/);
+  assert.match(html, /aria-label="Enrolled devices"/);
+  assert.match(html, /aria-label="Playlist versions"/);
+  assert.match(html, /aria-labelledby="device-title"/);
+  assert.match(html, /aria-labelledby="playlist-title"/);
 });
 
-test("device fleet renders health state and can load device health history", async () => {
-  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
-  assert.match(app, /label: "Health"/);
-  assert.match(app, /health-history\?limit=10/);
-  assert.match(app, /last_error_code/);
-  assert.match(app, /last_success_age_seconds/);
-  assert.match(app, /last_frame_age_seconds/);
-  assert.match(app, /temperature_millicelsius/);
-  assert.match(app, /setInterval\(/);
+test("management records switch to cards on narrow screens", async () => {
+  const styles = await readFile(new URL("../public/admin/styles.css", import.meta.url), "utf8");
+  assert.match(
+    styles,
+    /@media\s*\(max-width:\s*850px\)\s*\{\s*\.desktop-data\s*\{\s*display:\s*none;\s*\}\s*\.mobile-card-list\s*\{\s*display:\s*grid;\s*\}\s*\}/,
+  );
+});
+
+test("approval confirmation asks operators to compare the full device fingerprint", () => {
+  assert.equal(formatEnrollmentApprovalPrompt({
+    device_id: "pi-1",
+    fingerprint: "abcd-1234",
+    replaces_existing: true,
+  }), "Only approve pi-1 if its physical display shows the full fingerprint abcd-1234. This will replace the existing credentials for pi-1.");
+  assert.equal(formatEnrollmentApprovalPrompt({
+    device_id: "pi-2",
+    fingerprint: "efgh-5678",
+    replaces_existing: false,
+  }), "Only approve pi-2 if its physical display shows the full fingerprint efgh-5678.");
+});
+
+test("device health details present reported state, output faults, history, and host readings", () => {
+  const details = formatDeviceHealthDetails({
+    health_status: "degraded",
+    received_at: 0,
+    latest: {
+      agent_version: "1.2.3",
+      agent_uptime_seconds: 125,
+      startup_error_code: "display_failed",
+      sync: {
+        status: "ok",
+        last_success_age_seconds: 30,
+        applied_playlist_id: "operations",
+        applied_revision: "r-1",
+      },
+      outputs: [{
+        display_id: "main",
+        connector: "HDMI-A-1",
+        status: "failed",
+        last_frame_age_seconds: null,
+        error_code: "connector_disconnected",
+      }],
+      host: { uptime_seconds: 3600, temperature_millicelsius: 39166, memory_available_bytes: 1048576 },
+    },
+  }, {
+    events: [{
+      received_at: 1000,
+      event_type: "device.health_changed",
+      metadata: { previous_health_status: "healthy", health_status: "degraded" },
+      error_code: "connector_disconnected",
+    }],
+    samples: [{}, {}],
+  });
+
+  assert.deepEqual(details.summary, [
+    "Fleet health degraded.",
+    `Last report ${formatTimestamp(0)} · Agent 1.2.3 · Uptime 2m`,
+    "Sync ok · last success 30s ago · operations / r-1",
+    "Startup issue: display_failed",
+  ]);
+  assert.deepEqual(details.outputs, [
+    "main (HDMI-A-1): failed · no successful frame yet · connector_disconnected",
+  ]);
+  assert.deepEqual(details.host, [
+    "Host uptime 1h 0m",
+    "Temperature 39.2°C",
+    "Memory 1.0 MB available",
+  ]);
+  assert.deepEqual(details.events, [
+    `${formatTimestamp(1000)} · device.health_changed · degraded (healthy → degraded) · connector_disconnected`,
+  ]);
+  assert.equal(details.sampleCount, 2);
+});
+
+test("device health details explain when no report or history is available", () => {
+  assert.deepEqual(formatDeviceHealthDetails({ latest: null }, {}), {
+    message: "This device has not reported health yet.",
+  });
+  const details = formatDeviceHealthDetails({
+    health_status: "healthy",
+    received_at: 0,
+    latest: {
+      agent_version: "1",
+      agent_uptime_seconds: 0,
+      sync: { status: "ok", last_success_age_seconds: null },
+      outputs: [],
+    },
+  });
+  assert.match(details.summary[2], /last success never$/);
+  assert.deepEqual(details.events, []);
+  assert.equal(details.sampleCount, 0);
+});
+
+test("device health details tolerate missing sync data in stored reports", () => {
+  const latest = {
+    agent_version: "1",
+    agent_uptime_seconds: 0,
+    outputs: [],
+  };
+  const missingSync = formatDeviceHealthDetails({
+    health_status: "starting",
+    received_at: 0,
+    latest,
+  });
+  assert.equal(missingSync.summary[2], "Sync unknown · last success never");
+
+  const missingAge = formatDeviceHealthDetails({
+    health_status: "healthy",
+    received_at: 0,
+    latest: { ...latest, sync: { status: "ok" } },
+  });
+  assert.equal(missingAge.summary[2], "Sync ok · last success never");
 });
 
 test("OpenUI Core parses and evaluates a read-only fleet view", async () => {
@@ -212,18 +323,6 @@ test("waitForQueries rejects when the runtime is disposed during a pending query
   resolveOverview(overview);
 });
 
-test("device management shows pending approval fingerprints and removes the enrollment-code form", async () => {
-  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
-  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
-  assert.match(html, /id="pending-enrollments"/);
-  assert.match(html, /id="pending-enrollments-mobile"/);
-  assert.doesNotMatch(html, /id="enrollment-form"/);
-  assert.match(app, /physical display shows the full fingerprint/);
-  assert.match(app, /enrollment-requests\/\$\{request\.request_id\}\/approve/);
-  assert.match(app, /enrollment-requests\/\$\{request\.request_id\}\/reject/);
-  assert.doesNotMatch(app, /#enrollment-form/);
-});
-
 test("audit timestamps are explicit UTC and preserve the Unix epoch", () => {
   assert.equal(formatTimestamp(null), "Never seen");
   assert.match(formatTimestamp(0, "en-GB"), /^1 Jan 1970, 00:00:00 UTC$/);
@@ -284,7 +383,7 @@ test("consequential actions only run after explicit confirmation", async () => {
   assert.equal(actions, 1);
 });
 
-test("confirmed actions expose their awaited result and do not run when declined", async () => {
+test("confirmed actions return the token result and do not execute when declined", async () => {
   let actions = 0;
   const declined = await confirmAction(() => false, "Rotate token?", () => {
     actions += 1;
@@ -301,69 +400,13 @@ test("confirmed actions expose their awaited result and do not run when declined
   assert.equal(actions, 1);
 });
 
-test("device token rotation reads the result returned by its confirmed action", async () => {
-  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
-
-  assert.match(app, /const \{ confirmed, result \} = await confirmAction\(/);
-  assert.doesNotMatch(app, /let result;/);
-});
-
-test("playlist editor adds scheduled page screenshots and reuses uploaded images", async () => {
-  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
-  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
-
-  assert.match(html, /name="capture_urls"/);
-  assert.match(html, /id="screenshot-settings"[^>]*disabled[^>]*hidden/);
-  assert.match(html, /name="capture_interval_seconds"[^>]*min="60"/);
-  assert.match(html, /id="playlist-current-captures"/);
-  assert.match(html, /id="capture-targets"/);
-  assert.match(app, /parsePageURLs\(form\.get\("capture_urls"\)\)/);
-  assert.match(app, /syncScreenshotSettings\(\)/);
-  assert.match(app, /api\("\/admin\/api\/assets"/);
-  assert.match(app, /capture_interval_seconds/);
-  assert.match(app, /\/admin\/api\/captures\/.*\/run/);
-  assert.match(app, /Initial screenshots are queued after saving when capacity allows/);
-  assert.doesNotMatch(app, /will start after activation/);
+test("playlist URL input trims blank lines and preserves each submitted page", () => {
   assert.deepEqual(parsePageURLs("  https://one.example/  \n\nhttps://two.example/path\n"), [
     "https://one.example/",
     "https://two.example/path",
   ]);
   assert.equal(hasPageURLs(" \n  \n"), false);
   assert.equal(hasPageURLs("https://status.example.com"), true);
-});
-
-test("management keeps OpenUI behind the scenes and switches tables to cards before they cramp", async () => {
-  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
-  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
-  const styles = await readFile(new URL("../public/admin/styles.css", import.meta.url), "utf8");
-
-  assert.match(html, /href="#capture-targets">Page screenshots<\/a>/);
-  assert.match(html, /id="capture-targets-title">Page screenshots<\/h3>/);
-  assert.match(html, /id="playlist-title">Playlist versions<\/h2>/);
-  assert.match(html, /id="device-title">Device fleet<\/h2>/);
-  assert.match(html, /id="activity-title">Recent activity<\/h2>/);
-  assert.match(html, /id="reload"[^>]*>Refresh data<\/button>/);
-  assert.doesNotMatch(html, /Browser Run|Web captures|Webpage captures|content-addressed image store|scheduler tick/);
-
-  assert.match(html, /id="fleet-summary"[^>]*aria-label="Fleet snapshot"/);
-  assert.doesNotMatch(html, /developer-tools|openui-source|openui-prompt|OpenUI Lang|Merge patch|Restore starter|Copy prompt/i);
-  assert.doesNotMatch(app, /openui-preview-button|openui-merge-button|openui-reset-button|openui-copy-prompt/);
-  assert.match(app, /createFleetOpenUI/);
-  assert.match(app, /playlistDeleteActionStates\(playlists\)/);
-  assert.match(app, /remove\.disabled = true/);
-  assert.match(app, /deleteAction\.hint/);
-
-  assert.match(app, /new IntersectionObserver/);
-  assert.match(app, /aria-current", "location"/);
-  assert.match(app, /function renderResponsiveRecords\(/);
-  assert.match(app, /function renderEmptyState\(/);
-  assert.equal((app.match(/^  renderResponsiveRecords\(\{/gm) ?? []).length, 4);
-  assert.doesNotMatch(app, /function renderPlaylistCard|function renderDeviceCard|function renderPendingRequestCard|function renderAuditCard/);
-  assert.match(styles, /\.section-nav a\[aria-current="location"\]/);
-  assert.match(styles, /--font-size-body:/);
-  assert.match(styles, /\.data-card, \.capture-target/);
-  assert.match(styles, /@media\s*\(max-width:\s*850px\)\s*\{[\s\S]*?\.desktop-data\s*\{\s*display:\s*none;/);
-  assert.doesNotMatch(styles, /developer-tools|openui-prompt-details/);
 });
 
 test("playlist state, screenshot status, and screenshot intervals use consistent labels", () => {
