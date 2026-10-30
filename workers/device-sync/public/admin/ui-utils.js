@@ -200,6 +200,27 @@ export function formatDeviceHealthDetails(result, history = {}) {
   };
 }
 
+export function createRetryableLoadOnce() {
+  let loaded = false;
+  let pending = null;
+  return {
+    get loaded() { return loaded; },
+    load(loader) {
+      if (loaded) return Promise.resolve(undefined);
+      if (!pending) {
+        pending = Promise.resolve()
+          .then(loader)
+          .then((value) => {
+            loaded = true;
+            return value;
+          })
+          .finally(() => { pending = null; });
+      }
+      return pending;
+    },
+  };
+}
+
 function formatAge(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return "unknown";
   if (seconds < 60) return `${Math.floor(seconds)}s`;
