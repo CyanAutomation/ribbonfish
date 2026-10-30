@@ -26,6 +26,7 @@ class FakeDatabase {
     this.activePlaylist = { playlist_id: "welcome", revision: "revision-1" };
     this.auditEvents = [];
     this.assetIntegrityIssues = [];
+    this.mutationCalls = 0;
   }
 
   prepare(sql) {
@@ -36,6 +37,7 @@ class FakeDatabase {
       bind(...boundValues) { values = boundValues; return this; },
       get values() { return values; },
       async first() {
+        if (sql.includes("FROM capture_targets t")) return database.captureTarget ?? null;
         if (sql.includes("FROM active_playlist")) return database.activePlaylist;
         if (sql.includes("FROM playlists WHERE playlist_id")) {
           const row = database.playlists.get(values[0] + ":" + values[1]);
@@ -54,6 +56,7 @@ class FakeDatabase {
         return null;
       },
       async all() {
+        if (sql.includes("FROM capture_history")) return { results: database.captureHistory ?? [] };
         if (sql.includes("FROM playlists WHERE playlist_id")) {
           return { results: [...database.playlists.values()]
             .filter((row) => row.playlist_id === values[0])
@@ -89,6 +92,7 @@ class FakeDatabase {
         return { results: [] };
       },
       async run() {
+        database.mutationCalls++;
         await database.apply(sql, values);
         return { meta: { changes: 1 } };
       },
@@ -96,6 +100,7 @@ class FakeDatabase {
   }
 
   async batch(statements) {
+    this.mutationCalls++;
     let previousChanges = 1;
     const results = [];
     for (const statement of statements) {
@@ -168,6 +173,7 @@ function testEnvironment({ enabled = true, accessRequired = false, allowedEmails
     ADMIN_ENABLED: enabled ? "true" : "false",
     ADMIN_ACCESS_REQUIRED: accessRequired ? "true" : "false",
     ADMIN_ALLOWED_EMAILS: allowedEmails,
+    ENROLLMENT_RATE_LIMITER: { async limit() { return { success: true }; } },
     ASSETS: {
       async get(key) {
         reads.push(key);
@@ -203,6 +209,102 @@ test("management routes fail closed when the environment flag is disabled", asyn
   const response = await handleAdminRequest(request("/admin/api/overview"), env);
   assert.equal(response.status, 404);
   assert.equal(env.DB.auditEvents.length, 0);
+});
+
+test("JEV fleet analysis is Access protected, validates its request, and sends only summarized signals", async () => {
+  const protectedEnv = testEnvironment({ accessRequired: true });
+  const blocked = await handleAdminRequest(request("/admin/api/jev/fleet-analysis", { method: "POST", body: {} }), protectedEnv);
+  assert.equal(blocked.status, 401);
+
+  const env = testEnvironment();
+  env.OPENROUTER_API_KEY = "test-secret";
+  let rateLimitKey;
+  env.ENROLLMENT_RATE_LIMITER.limit = async ({ key }) => { rateLimitKey = key; return { success: true }; };
+  let sentState;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    sentState = body.state;
+    assert.equal(body.questions.focus.type, "choice");
+    return Response.json({ model: "typesafe/jev-test", id: "test-id", answers: {
+      analysis_status: { type: "choice", choice: "routine", probabilities: { routine: 1, review: 0, urgent: 0 }, confidence: 0.9 },
+      focus: { type: "choice", choice: "none", probabilities: { devices: 0, playlist: 0, screenshots: 0, assets: 0, none: 1 }, confidence: 0.9 },
+      urgency: { type: "score", score: 0, legend: { 0: "Routine", 1: "Review", 2: "Urgent" }, probabilities: { 0: 1, 1: 0, 2: 0 }, confidence: 0.9 },
+    } });
+  };
+  try {
+    const invalid = await handleAdminRequest(request("/admin/api/jev/fleet-analysis", { method: "POST", body: { state: "attacker-controlled" } }), env);
+    assert.equal(invalid.status, 400);
+    const response = await handleAdminRequest(request("/admin/api/jev/fleet-analysis", { method: "POST", body: {} }), env);
+    assert.equal(response.status, 200);
+    const data = await response.json();
+    assert.equal(data.answers.focus.choice, "none");
+    assert.equal(rateLimitKey, "jev:anonymous");
+    assert.doesNotMatch(sentState, /pi-office|do-not-return-this|welcome|revision-1/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("JEV decision routes stop before provider calls when the per-admin limit is reached", async () => {
+  const env = testEnvironment();
+  env.OPENROUTER_API_KEY = "test-secret";
+  env.ENROLLMENT_RATE_LIMITER.limit = async () => ({ success: false });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => assert.fail("rate-limited requests must not call JEV");
+  try {
+    const response = await handleAdminRequest(request("/admin/api/jev/fleet-analysis", { method: "POST", body: {} }), env);
+    assert.equal(response.status, 429);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("JEV screenshot skip recommendations are advisory and cause no capture writes or queue sends", async () => {
+  const env = testEnvironment();
+  env.OPENROUTER_API_KEY = "test-secret";
+  env.DB.captureTarget = {
+    url: "https://user:pass@example.com/private?token=secret",
+    capture_interval_seconds: 300,
+    last_success_at: 1000,
+    next_due_at: 2000,
+    failure_count: 0,
+    last_error: null,
+    job_status: null,
+  };
+  env.DB.captureHistory = [{ browser_ms: 1000 }];
+  let queueSends = 0;
+  env.CAPTURE_QUEUE = { async send() { queueSends++; } };
+  const dueAtBefore = env.DB.captureTarget.next_due_at;
+  const mutationsBefore = env.DB.mutationCalls;
+  let sentState;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    sentState = body.state;
+    assert.equal(body.questions.recommendation.type, "choice");
+    return Response.json({ model: "typesafe/jev-test", answers: {
+      recommendation: { type: "choice", choice: "skip_once", probabilities: { capture_now: 0.1, skip_once: 0.9 }, confidence: 0.85 },
+      risk: { type: "score", score: 0.2, legend: { 0: "Low", 1: "Moderate", 2: "High" }, probabilities: { 0: 0.8, 1: 0.2, 2: 0 }, confidence: 0.85 },
+    } });
+  };
+  try {
+    const response = await handleAdminRequest(request("/admin/api/jev/capture-assessment", {
+      method: "POST", body: { capture_id: "123e4567-e89b-12d3-a456-426614174000" },
+    }), env);
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).answers.recommendation.choice, "skip_once");
+    assert.doesNotMatch(sentState, /user|pass|private|token|secret/);
+    assert.equal(env.DB.auditEvents.length, 0);
+    assert.equal(env.DB.captureTarget.next_due_at, dueAtBefore);
+    assert.equal(env.DB.mutationCalls, mutationsBefore);
+    assert.equal(queueSends, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("JEV screenshot assessment rejects malformed UUIDs before reading capture state", async () => {
+  const env = testEnvironment();
+  const response = await handleAdminRequest(request("/admin/api/jev/capture-assessment", {
+    method: "POST", body: { capture_id: "------------------------------------" },
+  }), env);
+  assert.equal(response.status, 400);
+  assert.equal(env.DB.mutationCalls, 0);
 });
 
 test("Access-protected management routes reject requests without an identity", async () => {

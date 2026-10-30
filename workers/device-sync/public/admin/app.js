@@ -512,7 +512,28 @@ function renderCaptureTargets(targets) {
       finally { capture.disabled = false; }
     });
     actions.append(capture);
+    const assess = button("Assess screenshot skip", "secondary");
+    const assessment = node("div", undefined, "jev-result-slot");
+    assess.addEventListener("click", async () => {
+      assess.disabled = true;
+      assessment.setAttribute("aria-busy", "true");
+      assessment.replaceChildren(node("p", "Assessing current screenshot signals…", "muted"));
+      try {
+        const decision = await api("/admin/api/jev/capture-assessment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ capture_id: target.capture_id }),
+        });
+        assessment.removeAttribute("aria-busy");
+        assessment.replaceChildren(renderJevDecision(decision, "Screenshot skip assessment"));
+      } catch (error) {
+        assessment.removeAttribute("aria-busy");
+        assessment.replaceChildren(node("p", error.message, "error-title"));
+      } finally { assess.disabled = false; }
+    });
+    actions.append(assess);
     content.append(actions);
+    content.append(assessment);
     card.append(preview, content);
     container.append(card);
   });
@@ -855,6 +876,57 @@ function renderFleetSummary(view) {
   }
 }
 
+function renderJevDecision(result, title) {
+  const card = node("article", undefined, "jev-result");
+  card.append(node("h3", title));
+  const answers = node("div", undefined, "jev-result__answers");
+  for (const [key, answer] of Object.entries(result.answers ?? {})) {
+    const item = node("section", undefined, "jev-result__answer");
+    const label = key.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+    item.append(node("h4", label));
+    if (answer.type === "choice") item.append(node("p", `Recommendation: ${answer.choice.replaceAll("_", " ")}`));
+    else if (answer.type === "score") {
+      const maximum = Math.max(0, Object.keys(answer.legend ?? {}).length - 1);
+      item.append(node("p", `Score: ${Number(answer.score).toFixed(2)} / ${maximum}`));
+    } else if (answer.type === "noul") item.append(node("p", `Signal: ${Math.round(answer.noul * 100)}%`));
+    if (Number.isFinite(answer.confidence)) item.append(node("p", `Confidence: ${Math.round(answer.confidence * 100)}%`, "muted"));
+    if (answer.probabilities && typeof answer.probabilities === "object") {
+      const probabilities = node("ul", undefined, "jev-result__probabilities");
+      for (const [choice, probability] of Object.entries(answer.probabilities)) {
+        const choiceLabel = answer.legend?.[choice] ?? choice.replaceAll("_", " ");
+        const row = node("li", undefined, "jev-result__probability");
+        row.append(node("span", choiceLabel), node("span", `${Math.round(probability * 100)}%`));
+        probabilities.append(row);
+      }
+      item.append(probabilities);
+    }
+    answers.append(item);
+  }
+  const metadata = [`Advisory only · ${result.model || "JEV"}`];
+  if (Number.isFinite(result.usage?.cost)) metadata.push(`reported cost $${result.usage.cost.toFixed(6)}`);
+  if (Number.isSafeInteger(result.usage?.input_tokens)) metadata.push(`${result.usage.input_tokens} input tokens`);
+  card.append(answers, node("p", metadata.join(" · "), "jev-advisory"));
+  return card;
+}
+
+async function runFleetJevAnalysis() {
+  const buttonElement = document.querySelector("#run-fleet-analysis");
+  const result = document.querySelector("#fleet-analysis-result");
+  buttonElement.disabled = true;
+  result.setAttribute("aria-busy", "true");
+  result.replaceChildren(node("p", "Analyzing current fleet signals…", "muted"));
+  try {
+    const decision = await api("/admin/api/jev/fleet-analysis", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    result.removeAttribute("aria-busy");
+    result.replaceChildren(renderJevDecision(decision, "Fleet assessment"));
+  } catch (error) {
+    result.removeAttribute("aria-busy");
+    result.replaceChildren(node("p", error.message, "error-title"));
+  } finally { buttonElement.disabled = false; }
+}
+
 function showConfirmDialog({ title, description, confirmLabel, destructive = false }) {
   if (typeof confirmDialog.showModal !== "function") return Promise.resolve(window.confirm(description));
   confirmTitle.textContent = title;
@@ -870,6 +942,7 @@ function showConfirmDialog({ title, description, confirmLabel, destructive = fal
 }
 
 document.querySelector("#dismiss-message").addEventListener("click", () => { message.hidden = true; });
+document.querySelector("#run-fleet-analysis").addEventListener("click", runFleetJevAnalysis);
 
 const sectionLinks = [...document.querySelectorAll(".section-nav a")];
 const observedSections = sectionLinks
