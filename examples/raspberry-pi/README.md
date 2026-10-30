@@ -278,9 +278,35 @@ docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml cp agent:/
 
 For a one-display Pi 3B simulation, set
 `RIBBONFISH_SIMULATOR_PROFILE=simulator-pi3b`. Set it to `simulator-pi4` for
-the two-display Pi 4 profile. The simulator uses configured dimensions; it
-does not query monitor EDID or emulate DRM, memory pressure, or a specific Pi
-model.
+the two-display Pi 4 profile. The source-built Compose file targets ARM64;
+both simulator files allow up to four CPUs (`RIBBONFISH_SIMULATOR_CPUS`,
+default `4`). They default to a 512 MiB container memory limit; set
+`RIBBONFISH_SIMULATOR_MEMORY_LIMIT=3g` for the 4 GB Pi 4. The limit applies to
+the container, not the whole Pi. The simulator does not cap CPU frequency or
+emulate the Pi's GPU, DRM/KMS scanout, thermal behavior, or host memory
+pressure.
+
+The two inspected Pi 4s are Model B Rev 1.5, each with four ARM64 CPUs and
+Debian 13 (Trixie) on kernel `6.18.50+rpt-rpi-v8`. Both report a maximum CPU
+frequency of 1.8 GHz with the `ondemand` governor. One exposes about 0.9 GiB
+of RAM and the other about 3.8 GiB. Both report a 76 MiB GPU memory allocation.
+The stable `/dev/dri/by-path/platform-gpu-card` alias resolves to `card1` on
+one unit and `card0` on the other. Both HDMI connectors were disconnected
+during inspection, so their preferred display modes could not be read. The
+Pi 4 simulator therefore retains 1920x1080@60 as a nominal target mode; it
+renders PNG frames at 1920x1080, but does not scan out at 60 Hz or read EDID.
+
+For example, run the source-built simulator against the lower-memory Pi 4
+budget with:
+
+```sh
+RIBBONFISH_SIMULATOR_PROFILE=simulator-pi4 \
+  docker compose -f examples/raspberry-pi/docker-compose.simulator.yaml up --build -d
+```
+
+To use the 4 GB Pi's container budget, set
+`RIBBONFISH_SIMULATOR_MEMORY_LIMIT=3g` on that command. The published-image
+simulator accepts the same variables.
 
 The published-image simulator can run without a source checkout:
 

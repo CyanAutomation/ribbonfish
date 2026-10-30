@@ -7,6 +7,8 @@ services:
     image: cyanautomation/ribbonfish:latest
     environment:
       RIBBONFISH_PROFILE: ${RIBBONFISH_SIMULATOR_PROFILE:-simulator-pi3a-plus}
+    cpus: ${RIBBONFISH_SIMULATOR_CPUS:-4}
+    mem_limit: ${RIBBONFISH_SIMULATOR_MEMORY_LIMIT:-512m}
     user: "65532:65532"
     init: true
     restart: unless-stopped
