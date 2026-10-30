@@ -75,14 +75,20 @@ not expose the editor or generation prompt. JEV decisions use a separate
 server-side adapter and do not generate or parse OpenUI Lang. The management UI
 offers an advisory fleet analysis based on summarized device health, playlist,
 asset, and screenshot signals, plus a per-target screenshot skip assessment
-based on bounded operational metadata. Both use fixed typed questions, validate
-JEV's answer types, choices, probabilities, confidence, and score ranges, and
-render the results as ordinary UI data. Neither can change fleet state or
-capture scheduling. Screenshot pixels, raw error details, device identifiers,
-playlist identifiers, and URL query or fragment values are not sent to JEV.
+based on bounded operational metadata and recent screenshot hash-change counts.
+Both use fixed typed questions, validate JEV's answer types, choices,
+probabilities, confidence, and score ranges, and render the results as ordinary
+UI data. JEV cannot change capture scheduling. An admin may confirm a single
+skip for an exact upcoming due time; that confirmation expires five minutes
+after the due time, is audited, and the following capture remains scheduled.
+The skip is rejected for missing or stale screenshots, recent failures, or
+active jobs. Screenshot pixels, raw error details, device identifiers, playlist
+identifiers, and URL query or fragment values are not sent to JEV.
 
 Configure `OPENROUTER_API_KEY` as a secret on the management Worker before using
-JEV. The key is read only by the Worker. The OpenUI fleet snapshot remains
+JEV. The key is read only by the Worker. Requests use the pinned
+`~typesafe/jev-latest` model and send structured state objects with server-owned
+question schemas. The OpenUI fleet snapshot remains
 read-only and deterministic; no OpenUI generation provider is configured. The
 native DOM adapter is bundled with esbuild; no OpenUI framework renderer is
 installed.
@@ -98,6 +104,11 @@ uses those features.
 Migration `0008_device_health.sql` adds latest device reports, five-minute
 history samples, and health transition events. Apply it with
 `npm run migrate:management` before deploying device-health reporting.
+
+Migration `0009_capture_skip_approvals.sql` adds one-time, due-time-bound
+operator approvals for screenshot skips. Apply it with
+`npm run migrate:management` before deploying code that confirms screenshot
+skips.
 
 The management config uses a remote Browser binding so screenshot Quick Actions
 can run during local development. Queue messages and D1/R2 state remain local,
