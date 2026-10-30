@@ -66,10 +66,25 @@ func TestAgentSharesTheActivePlaylistAndIntervalAcrossDisplays(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- app.Run(ctx) }()
 	initial := collectFrames(t, output.frames, 2)
-	healthReport := tracker.Snapshot(time.Unix(1, 0).UTC())
-	for _, output := range healthReport.Outputs {
-		if output.Status != "ready" || output.LastFrameAgeSeconds == nil {
-			t.Errorf("display %s health = %#v, want ready with a recent frame", output.DisplayID, output)
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	var healthReport health.Report
+	for {
+		healthReport = tracker.Snapshot(time.Unix(1, 0).UTC())
+		allReady := len(healthReport.Outputs) == 2
+		for _, output := range healthReport.Outputs {
+			if output.Status != "ready" || output.LastFrameAgeSeconds == nil {
+				allReady = false
+				break
+			}
+		}
+		if allReady {
+			break
+		}
+		select {
+		case <-tracker.Changes():
+		case <-deadline.C:
+			t.Fatalf("display health did not catch up with initial frames: %#v", healthReport.Outputs)
 		}
 	}
 	if got := initial["display-left"].pixel; got != (color.RGBA{G: 150, A: 255}) {
