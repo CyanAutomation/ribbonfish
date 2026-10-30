@@ -70,7 +70,7 @@ docker compose --project-directory "$deployment_dir" -p ribbonfish config --quie
 image_id=$(docker image inspect --format '{{.Id}}' "$expected_image") || fail "image '$expected_image' is not present locally; pull it with docker compose pull first"
 [ -n "$image_id" ] || fail "could not resolve local image ID for '$expected_image'"
 
-connector_report=$(docker compose --project-directory "$deployment_dir" -p ribbonfish run --rm --no-deps -T agent -check-displays 2>&1) || fail "configured DRM connectors are unavailable or do not advertise the configured mode: $connector_report"
+connector_report=$(docker compose --project-directory "$deployment_dir" -p ribbonfish run --rm --no-deps -T agent -check-displays 2>&1) || fail "configured DRM connectors or modes could not be validated: $connector_report"
 printf '%s\n' "$connector_report"
 
 if [ "$preflight" = true ]; then
@@ -112,4 +112,4 @@ while [ "$attempt" -le "$verify_timeout" ]; do
 done
 [ "$attempt" -le "$verify_timeout" ] || fail "timed out after ${verify_timeout}s waiting for a successful display frame update"
 
-printf 'Deployment verified: profile=%s image=%s status=running network=%s; DRM connectors ready and display frame updated\n' "$profile" "$expected_image" "$network_mode"
+printf 'Deployment verified: profile=%s image=%s status=running network=%s; configured connectors checked and a display frame updated\n' "$profile" "$expected_image" "$network_mode"

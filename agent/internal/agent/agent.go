@@ -83,6 +83,11 @@ func (a *Agent) setOutputState(displayID, status, code string) {
 	}
 }
 
+func (a *Agent) displayAvailable(displayID string) bool {
+	availability, ok := a.output.(display.Availability)
+	return !ok || availability.DisplayAvailable(displayID)
+}
+
 // New verifies configured assets into the local cache and prepares independent
 // display schedules. Missing, corrupt, or cache-full assets are skipped while
 // other verified entries remain playable.
@@ -242,6 +247,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	if state != nil {
 		for _, displayConfig := range state.config.Displays {
 			displayID := displayConfig.ID
+			if !a.displayAvailable(displayID) {
+				a.setOutputState(displayID, "failed", "connector_disconnected")
+				continue
+			}
 			wait.Add(1)
 			go func() {
 				defer wait.Done()
@@ -254,6 +263,10 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.mu.Unlock()
 		for _, item := range displays {
 			item := item
+			if !a.displayAvailable(item.schedule.DisplayID) {
+				a.setOutputState(item.schedule.DisplayID, "failed", "connector_disconnected")
+				continue
+			}
 			wait.Add(1)
 			go func() {
 				defer wait.Done()

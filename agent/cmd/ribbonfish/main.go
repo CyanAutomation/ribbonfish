@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -30,7 +31,7 @@ import (
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to the agent JSON configuration")
 	listDisplays := flag.Bool("list-displays", false, "list DRM/KMS connectors from Linux sysfs and exit")
-	checkDisplays := flag.Bool("check-displays", false, "check configured DRM connectors against Linux sysfs without changing display state")
+	checkDisplays := flag.Bool("check-displays", false, "check configured DRM connectors, warning for disconnected outputs")
 	enroll := flag.Bool("enroll", false, "exchange a one-time code from stdin for a per-device sync credential")
 	flag.Parse()
 	if *listDisplays {
@@ -145,16 +146,26 @@ func checkDRMDisplays(configPath, sysfsRoot, devRoot string, output io.Writer) e
 	for _, target := range cfg.Displays {
 		targets = append(targets, drm.DisplayTarget{ID: target.ID, Connector: target.Connector, Mode: target.Mode})
 	}
-	if err := drm.ValidateTargets(cfg.Output.Device, targets, connectors); err != nil {
+	unavailable, err := drm.ValidateTargetsAllowDisconnected(cfg.Output.Device, targets, connectors)
+	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(output, "DRM display preflight passed: device=%s displays=%d\n", cfg.Output.Device, len(targets)); err != nil {
+	if len(unavailable) == 0 {
+		if _, err := fmt.Fprintf(output, "DRM display preflight passed: device=%s displays=%d\n", cfg.Output.Device, len(targets)); err != nil {
+			return fmt.Errorf("write DRM display check result: %w", err)
+		}
+	} else if _, err := fmt.Fprintf(output, "DRM display preflight found disconnected outputs: device=%s displays=%d\n", cfg.Output.Device, len(targets)); err != nil {
 		return fmt.Errorf("write DRM display check result: %w", err)
 	}
 	for _, target := range targets {
 		for _, connector := range connectors {
 			if connector.Name != target.Connector {
 				continue
+			}
+			if connector.Status == "disconnected" {
+				if _, err := fmt.Fprintf(output, "warning: display_id=%s connector=%s is disconnected; agent will continue without it\n", target.ID, connector.Name); err != nil {
+					return fmt.Errorf("write DRM display check result: %w", err)
+				}
 			}
 			if _, err := fmt.Fprintf(output, "display_id=%s connector=%s status=%s requested_mode=%s advertised_modes=%d\n", target.ID, connector.Name, connector.Status, target.Mode, len(connector.Modes)); err != nil {
 				return fmt.Errorf("write DRM display check result: %w", err)
@@ -258,6 +269,7 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 		_ = imageCache.Close()
 		return fmt.Errorf("start %s: %w", cfg.Output.EffectiveBackend(), err)
 	}
+	reportUnavailableDisplays(outputBackend, healthTracker, logger)
 	if pairingState != nil {
 		outputBackend = display.NewPairingOutput(outputBackend, pairingState)
 	}
@@ -612,5 +624,16 @@ func newDisplayOutput(cfg config.Config) (display.Output, error) {
 		return drm.NewOutput(cfg.Output.Device, targets, fit)
 	default:
 		return nil, fmt.Errorf("unsupported display backend %q", cfg.Output.EffectiveBackend())
+	}
+}
+
+func reportUnavailableDisplays(outputBackend display.Output, tracker *health.Tracker, logger *slog.Logger) {
+	outputStatus, ok := outputBackend.(interface{ UnavailableDisplays() []drm.DisplayTarget })
+	if !ok {
+		return
+	}
+	for _, item := range outputStatus.UnavailableDisplays() {
+		logger.Warn("configured display connector is disconnected; continuing without it", "display_id", item.ID, "connector", item.Connector)
+		tracker.SetOutputState(item.ID, "failed", "connector_disconnected")
 	}
 }
