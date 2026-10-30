@@ -31,11 +31,16 @@
 
       <nav class="section-nav" aria-label="Management sections">
         <a href="#overview-section">Overview</a>
-        <a href="#analysis-section">JEV analysis</a>
         <a href="#playlist-section">Playlists</a>
-        <a href="#capture-targets">Page screenshots</a>
         <a href="#device-section">Devices</a>
-        <a href="#activity-section">Recent activity</a>
+        <details class="section-nav__more">
+          <summary>More</summary>
+          <div class="section-nav__more-links">
+            <a href="#capture-targets">Page screenshots</a>
+            <a href="#analysis-section">Advisory analysis</a>
+            <a href="#activity-section">Recent activity</a>
+          </div>
+        </details>
       </nav>
 
       <section id="overview-section" class="panel" aria-labelledby="overview-title">
@@ -43,15 +48,7 @@
           <div><p class="eyebrow">Overview</p><h2 id="overview-title">Fleet snapshot</h2></div>
         </div>
         <div id="fleet-summary" role="region" aria-label="Fleet snapshot" aria-live="polite"></div>
-      </section>
-
-      <section id="analysis-section" class="panel" aria-labelledby="analysis-title">
-        <div class="section-heading">
-          <div><p class="eyebrow">Advisory analysis</p><h2 id="analysis-title">Fleet signals</h2></div>
-          <button id="run-fleet-analysis" class="button button--secondary" type="button">Analyze current signals</button>
-        </div>
-        <p class="muted">JEV reviews a limited summary of current device, playlist, asset, and screenshot signals. Recommendations are advisory and do not change fleet state.</p>
-        <div id="fleet-analysis-result" class="jev-result-slot" role="region" aria-label="Fleet signal analysis" aria-live="polite"></div>
+        <div id="fleet-attention" class="fleet-attention" role="region" aria-label="Needs attention"></div>
       </section>
 
       <section id="playlist-section" class="panel" aria-labelledby="playlist-title">
@@ -65,8 +62,9 @@
           <p class="muted">Each page URL is a reusable playlist item. A placeholder image appears until its first screenshot is ready. JEV uses recent screenshot change history to make an advisory skip suggestion. A skip only applies to one due screenshot after an admin confirms it.</p>
           <div id="capture-target-list" class="capture-target-list" role="region" aria-label="Scheduled page screenshots" aria-live="polite"></div>
         </section>
-        <form id="playlist-form" class="form-grid">
-          <h3>Create a playlist version</h3>
+        <details id="playlist-editor" class="playlist-editor">
+          <summary id="playlist-editor-summary">Create playlist version</summary>
+          <form id="playlist-form" class="form-grid">
           <p id="playlist-form-help" class="field--wide muted">Add PNG images or page URLs. Images and screenshots can be reused across playlists. Saved versions stay available until you delete the playlist.</p>
           <label>Playlist ID <input class="field-control" name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" placeholder="e.g. operations"></label>
           <label>Show each item for <input class="field-control" name="rotation_interval" required value="15s" placeholder="15s"><span class="field-hint">Use a duration such as 15s or 2m.</span></label>
@@ -92,19 +90,20 @@
             <button id="cancel-playlist-edit" class="button button--secondary" type="button" hidden>Cancel edit</button>
           </div>
           <p id="playlist-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
-        </form>
+          </form>
+        </details>
       </section>
 
       <section id="device-section" class="panel" aria-labelledby="device-title">
         <div class="section-heading">
           <div><p class="eyebrow">Devices</p><h2 id="device-title">Device fleet</h2></div>
         </div>
-        <section class="pending-enrollments" aria-labelledby="pending-enrollments-title">
-          <h3 id="pending-enrollments-title">Devices awaiting approval</h3>
+        <details id="pending-enrollments-details" class="pending-enrollments">
+          <summary><h3 id="pending-enrollments-title">Devices awaiting approval</h3><span id="pending-enrollment-count" class="disclosure-hint"></span></summary>
           <p class="muted">Compare the full fingerprint with the code shown on the device before approving it.</p>
           <div id="pending-enrollments" class="table-scroll desktop-data" role="region" aria-label="Devices awaiting approval" tabindex="0"></div>
           <div id="pending-enrollments-mobile" class="mobile-card-list" role="region" aria-label="Devices awaiting approval"></div>
-        </section>
+        </details>
         <div id="devices" class="table-scroll desktop-data" role="region" aria-label="Enrolled devices" tabindex="0"></div>
         <div id="devices-mobile" class="mobile-card-list" role="region" aria-label="Enrolled devices"></div>
       </section>
@@ -116,6 +115,16 @@
         <div id="audit" class="table-scroll desktop-data" role="region" aria-label="Recent management activity" tabindex="0"></div>
         <div id="audit-mobile" class="mobile-card-list" role="region" aria-label="Recent management activity"></div>
       </section>
+
+      <details id="analysis-section" class="panel advisory-panel" aria-labelledby="analysis-title">
+        <summary class="section-heading">
+          <div><p class="eyebrow">Optional advisory</p><h2 id="analysis-title">Fleet signal analysis</h2></div>
+          <span class="disclosure-hint">Open to analyze</span>
+        </summary>
+        <button id="run-fleet-analysis" class="button button--secondary" type="button">Analyze current signals</button>
+        <p class="muted">JEV reviews a limited summary of current device, playlist, asset, and screenshot signals. Recommendations are advisory and do not change fleet state.</p>
+        <div id="fleet-analysis-result" class="jev-result-slot" role="region" aria-label="Fleet signal analysis" aria-live="polite"></div>
+      </details>
 
       <section id="secret-panel" class="panel secret-panel" hidden aria-labelledby="secret-title">
         <div class="section-heading"><div><p class="eyebrow">Shown once</p><h2 id="secret-title">Credential</h2></div></div>
