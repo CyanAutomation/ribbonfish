@@ -23,7 +23,7 @@ networking disabled. Use --image to select an immutable tag or digest.
 Options:
   --target DIR          Deployment directory (default: ~/containers/ribbonfish)
   --profile PROFILE     pi3a-plus, pi3b, or pi4 (auto-detected where possible)
-  --drm-device PATH     DRM card device (default follows the profile)
+  --drm-device PATH     DRM device (Pi 4 defaults to its stable KMS alias)
   --drm-gid GID         Numeric group owning the DRM card (default: detected)
   --sync-url URL        Cloudflare Worker URL (requires --device-id)
   --device-id ID        Stable Worker device ID (requires --sync-url)
@@ -115,14 +115,14 @@ fi
 
 case "$profile" in
 	pi3a-plus|pi3b) default_device=/dev/dri/card0 ;;
-	pi4) default_device=/dev/dri/card1 ;;
+	pi4) default_device=/dev/dri/by-path/platform-gpu-card ;;
 	*) fail "unsupported Pi profile '$profile' (choose pi3a-plus, pi3b, or pi4)" ;;
 esac
 
 drm_device=${drm_device:-$default_device}
 [ -c "$drm_device" ] || fail "DRM device '$drm_device' is not a character device; inspect /dev/dri and pass --drm-device"
 
-device_gid=$(stat -c '%g' "$drm_device" 2>/dev/null || stat -f '%g' "$drm_device" 2>/dev/null || true)
+device_gid=$(stat -L -c '%g' "$drm_device" 2>/dev/null || stat -L -f '%g' "$drm_device" 2>/dev/null || true)
 case "$device_gid" in
 	''|*[!0-9]*) fail "could not read the numeric group for '$drm_device'" ;;
 esac

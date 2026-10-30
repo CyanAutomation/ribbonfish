@@ -3,6 +3,8 @@ package drm
 import (
 	"context"
 	"image"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -70,6 +72,38 @@ func TestValidateTargetsMatchesConfiguredHardware(t *testing.T) {
 
 	if err := ValidateTargets("/dev/dri/card0", targets, connectors); err != nil {
 		t.Fatalf("ValidateTargets() error = %v", err)
+	}
+}
+
+func TestValidateTargetsAcceptsStableByPathDeviceAlias(t *testing.T) {
+	deviceNumber, ok := DeviceNodeNumber(os.DevNull)
+	if !ok {
+		t.Skip("character-device identity is available only on Linux")
+	}
+	alias := filepath.Join(t.TempDir(), "platform-gpu-card")
+	if err := os.Symlink(os.DevNull, alias); err != nil {
+		t.Fatal(err)
+	}
+	connector := Connector{
+		Card:         0,
+		Name:         "HDMI-A-1",
+		Device:       "/dev/dri/card0",
+		deviceNumber: deviceNumber,
+		Status:       "connected",
+		Modes:        []string{"1920x1080"},
+	}
+	target := DisplayTarget{ID: "display-main", Connector: "HDMI-A-1", Mode: "preferred"}
+
+	if err := ValidateTargets(alias, []DisplayTarget{target}, []Connector{connector}); err != nil {
+		t.Fatalf("ValidateTargets() rejected the stable alias for its owning card: %v", err)
+	}
+
+	wrongAlias := filepath.Join(t.TempDir(), "other-device")
+	if err := os.Symlink("/dev/zero", wrongAlias); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateTargets(wrongAlias, []DisplayTarget{target}, []Connector{connector}); err == nil || !strings.Contains(err.Error(), "belongs to") {
+		t.Fatalf("ValidateTargets() accepted an alias for a different device: %v", err)
 	}
 }
 
