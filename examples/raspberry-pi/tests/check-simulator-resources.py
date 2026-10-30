@@ -6,6 +6,10 @@ import sys
 
 
 def main():
+    if len(sys.argv) != 3:
+        raise SystemExit(
+            f"usage: {sys.argv[0]} <expected_cpus> <expected_memory_bytes>"
+        )
     expected_cpus = float(sys.argv[1])
     expected_memory = int(sys.argv[2])
     service = json.load(sys.stdin)["services"]["agent"]
