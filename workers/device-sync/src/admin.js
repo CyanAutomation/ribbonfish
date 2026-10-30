@@ -89,10 +89,11 @@ export async function handleAdminRequest(request, env, ctx) {
       const target = await readCaptureAssessmentTarget(data.capture_id, env);
       if (!target) throw new HTTPError(404, "that page screenshot is not available for assessment");
       await enforceJevRateLimit(env, actorID);
-      return jsonResponse(await callJevDecision(env, {
+      const decision = await callJevDecision(env, {
         state: buildCaptureAssessmentState(target),
         questions: captureAssessmentQuestions,
-      }));
+      });
+      return jsonResponse({ ...decision, skip_eligibility: captureSkipEligibility(target, Date.now()) });
     }
 
     const deviceHistory = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/health-history$/);
@@ -130,6 +131,17 @@ export async function handleAdminRequest(request, env, ctx) {
     if (url.pathname === "/admin/api/assets") {
       if (request.method !== "POST") return methodNotAllowed("POST");
       return await uploadAsset(request, env, actorID);
+    }
+
+    const captureSkipMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/skip-once$/i);
+    if (captureSkipMatch) {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      const data = await readJSON(request);
+      if (!hasExactKeys(data, ["due_at"]) || !Number.isSafeInteger(data.due_at) || data.due_at < 0) {
+        throw new HTTPError(400, "request body must contain a valid due_at timestamp");
+      }
+      await confirmCaptureSkip(captureSkipMatch[1], data.due_at, env, actorID);
+      return jsonResponse({ confirmed: true, due_at: data.due_at }, 202);
     }
 
     const captureRunMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/run$/i);
@@ -197,16 +209,79 @@ export async function handleAdminRequest(request, env, ctx) {
 async function readCaptureAssessmentTarget(captureID, env) {
   const target = await env.DB.prepare(
     "SELECT t.url, t.capture_interval_seconds, t.last_success_at, t.next_due_at, t.failure_count, t.last_error, " +
+    "t.current_sha256, t.current_size, t.enabled, " +
     "(SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued', 'running') " +
     "ORDER BY j.created_at DESC LIMIT 1) AS job_status " +
     "FROM capture_targets t WHERE t.capture_id = ? AND t.enabled = 1 " +
     "AND EXISTS (SELECT 1 FROM playlist_capture_items p WHERE p.capture_id = t.capture_id) LIMIT 1",
   ).bind(captureID).first();
   if (!target) return null;
-  const history = await env.DB.prepare(
-    "SELECT browser_ms FROM capture_history WHERE capture_id = ? ORDER BY captured_at DESC LIMIT 5",
-  ).bind(captureID).all();
-  return { ...target, history: history.results ?? [] };
+  const [history, image] = await Promise.all([
+    env.DB.prepare(
+      "SELECT browser_ms, sha256, captured_at FROM capture_history WHERE capture_id = ? ORDER BY captured_at DESC LIMIT 10",
+    ).bind(captureID).all(),
+    target.current_sha256 ? env.ASSETS.head(`assets/${target.current_sha256}`) : Promise.resolve(null),
+  ]);
+  return {
+    ...target,
+    current_asset_present: Boolean(image && image.size === target.current_size),
+    history: history.results ?? [],
+  };
+}
+
+const CAPTURE_SKIP_APPROVAL_GRACE_MS = 5 * 60 * 1000;
+
+function captureSkipEligibility(target, now) {
+  let reason = null;
+  const intervalMs = Number.isSafeInteger(target.capture_interval_seconds)
+    ? target.capture_interval_seconds * 1000 : 0;
+  if (target.enabled !== undefined && target.enabled !== 1) reason = "This screenshot target is disabled.";
+  else if (!target.current_sha256 || !Number.isSafeInteger(target.last_success_at)) reason = "A successful screenshot is required before skipping.";
+  else if (!target.current_asset_present) reason = "The current screenshot asset is missing or inconsistent.";
+  else if (!Number.isSafeInteger(target.next_due_at) || target.next_due_at <= now) reason = "The next screenshot is due or already being processed.";
+  else if (target.job_status) reason = "A screenshot job is already queued or running.";
+  else if (target.failure_count > 0 || target.last_error) reason = "Recent screenshot failures require another capture.";
+  else if (!hasStableRecentScreenshots(target)) reason = "At least three recent identical screenshots are required before considering a skip.";
+  else if (!intervalMs || target.last_success_at > now || target.next_due_at - target.last_success_at > intervalMs * 2) {
+    reason = "The current screenshot may be too old to skip safely.";
+  }
+  return { eligible: reason === null, reason, due_at: Number.isSafeInteger(target.next_due_at) ? target.next_due_at : null };
+}
+
+function hasStableRecentScreenshots(target) {
+  const recent = (target.history ?? []).slice(0, 3);
+  return recent.length === 3 && Boolean(target.current_sha256) &&
+    recent.every((item) => item.sha256 === target.current_sha256);
+}
+
+async function confirmCaptureSkip(captureID, dueAt, env, actorID) {
+  const now = Date.now();
+  const target = await readCaptureAssessmentTarget(captureID, env);
+  if (!target) throw new HTTPError(404, "That webpage capture is no longer available.");
+  const eligibility = captureSkipEligibility(target, now);
+  if (!eligibility.eligible || eligibility.due_at !== dueAt) {
+    throw new HTTPError(409, eligibility.reason ?? "The screenshot schedule changed. Assess it again before confirming.");
+  }
+  const expiresAt = dueAt + CAPTURE_SKIP_APPROVAL_GRACE_MS;
+  const batch = await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO capture_skip_approvals (capture_id, due_at, expires_at, actor_id, created_at) " +
+      "SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM capture_targets t WHERE t.capture_id = ? AND t.enabled = 1 " +
+      "AND t.next_due_at = ? AND t.current_sha256 IS NOT NULL AND t.last_success_at <= ? AND t.failure_count = 0 " +
+      "AND t.last_error IS NULL AND (? - t.last_success_at) <= (t.capture_interval_seconds * 2000) " +
+      "AND (SELECT COUNT(*) FROM (SELECT sha256 FROM capture_history WHERE capture_id = t.capture_id " +
+      "ORDER BY captured_at DESC LIMIT 3) recent WHERE recent.sha256 = t.current_sha256) = 3 " +
+      "AND EXISTS (SELECT 1 FROM playlist_capture_items p WHERE p.capture_id = t.capture_id) " +
+      "AND NOT EXISTS (SELECT 1 FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued', 'running'))) " +
+      "ON CONFLICT(capture_id) DO UPDATE SET due_at = excluded.due_at, expires_at = excluded.expires_at, " +
+      "actor_id = excluded.actor_id, created_at = excluded.created_at",
+    ).bind(captureID, dueAt, expiresAt, actorID, now, captureID, dueAt, now, dueAt),
+    auditStatement(env, actorID, "capture.skip_once_confirmed", "capture", captureID,
+      { due_at: dueAt, expires_at: expiresAt }, { onlyWhenPreviousChanged: true }),
+  ]);
+  if (batch[0]?.meta?.changes !== 1) {
+    throw new HTTPError(409, "The screenshot schedule changed. Assess it again before confirming.");
+  }
 }
 
 async function enforceJevRateLimit(env, actorID) {

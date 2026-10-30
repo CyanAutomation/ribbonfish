@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { enqueueCapture } from "./capture-workflow.js";
+import { dispatchDueCaptures, enqueueCapture } from "./capture-workflow.js";
 import { fetchHandler, queueHandler, scheduledHandler } from "./index.js";
 import { handleAdminRequest } from "./admin.js";
 
@@ -102,8 +102,87 @@ async function freshDatabase() {
   sqlite.exec("PRAGMA foreign_keys = ON");
   sqlite.exec(await readFile(new URL("../schema.sql", import.meta.url), "utf8"));
   sqlite.exec(await readFile(new URL("../migrations/0005_webpage_capture.sql", import.meta.url), "utf8"));
+  sqlite.exec(await readFile(new URL("../migrations/0009_capture_skip_approvals.sql", import.meta.url), "utf8"));
   return sqlite;
 }
+
+test("a confirmed screenshot skip is bound to one due time and consumed once", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const captureID = created.body.captures[0].capture_id;
+    const initialJob = messages.shift();
+    sqlite.prepare("UPDATE capture_jobs SET status = 'succeeded' WHERE job_id = ?").run(initialJob.job_id);
+    const dueAt = Date.now() + 5_000;
+    const interval = sqlite.prepare("SELECT capture_interval_seconds FROM capture_targets WHERE capture_id = ?")
+      .get(captureID).capture_interval_seconds;
+    sqlite.prepare(
+      "UPDATE capture_targets SET current_sha256 = ?, current_size = 1, last_success_at = ?, next_due_at = ?, failure_count = 0, last_error = NULL WHERE capture_id = ?",
+    ).run("a".repeat(64), Date.now(), dueAt, captureID);
+    env.ASSETS.put(`assets/${"a".repeat(64)}`, new Uint8Array([1]));
+    for (let index = 0; index < 3; index++) {
+      const jobID = crypto.randomUUID();
+      const capturedAt = Date.now() - index * 1000;
+      sqlite.prepare("INSERT INTO capture_jobs (job_id, capture_id, status, attempts, created_at) VALUES (?, ?, 'succeeded', 0, ?)")
+        .run(jobID, captureID, capturedAt);
+      sqlite.prepare("INSERT INTO capture_history (capture_id, job_id, sha256, size, captured_at, browser_ms) VALUES (?, ?, ?, 1, ?, 100)")
+        .run(captureID, jobID, "a".repeat(64), capturedAt);
+    }
+    sqlite.prepare("INSERT OR IGNORE INTO active_playlist (singleton, playlist_id, revision) VALUES (1, 'operations', ?)")
+      .run(created.body.revision);
+
+    const confirmed = await handleAdminRequest(await request(`/admin/api/captures/${captureID}/skip-once`, {
+      method: "POST", body: { due_at: dueAt },
+    }), env);
+    assert.equal(confirmed.status, 202, await confirmed.clone().text());
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_skip_approvals WHERE capture_id = ?")
+      .get(captureID).count, 1);
+
+    const dispatch = await dispatchDueCaptures(env, dueAt + 1);
+    assert.equal(dispatch.enqueued, 0);
+    assert.equal(messages.length, 0, "confirmed skip avoids Browser Run queue use");
+    assert.equal(sqlite.prepare("SELECT next_due_at FROM capture_targets WHERE capture_id = ?")
+      .get(captureID).next_due_at, dueAt + interval * 1000);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_skip_approvals WHERE capture_id = ?")
+      .get(captureID).count, 0);
+    const skipEvents = sqlite.prepare("SELECT event_type FROM audit_events WHERE subject_id = ? ORDER BY occurred_at").all(captureID);
+    assert.deepEqual(skipEvents.map((row) => row.event_type), ["capture.skip_once_confirmed", "capture.skip_once_applied"]);
+
+    await dispatchDueCaptures(env, dueAt + interval * 1000 + 1);
+    assert.equal(messages.length, 1, "the following scheduled capture is not skipped");
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("a skip approval for a stale due time cannot suppress a screenshot", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const captureID = created.body.captures[0].capture_id;
+    sqlite.prepare("UPDATE capture_jobs SET status = 'succeeded' WHERE capture_id = ?").run(captureID);
+    messages.length = 0;
+    const dueAt = Date.now() + 5_000;
+    sqlite.prepare("UPDATE capture_targets SET current_sha256 = ?, current_size = 1, last_success_at = ?, next_due_at = ? WHERE capture_id = ?")
+      .run("a".repeat(64), Date.now(), dueAt, captureID);
+    env.ASSETS.put(`assets/${"a".repeat(64)}`, new Uint8Array([1]));
+    const unconfirmed = await handleAdminRequest(await request(`/admin/api/captures/${captureID}/skip-once`, {
+      method: "POST", body: { due_at: dueAt },
+    }), env);
+    assert.equal(unconfirmed.status, 409, "unstable or insufficient screenshot history cannot be approved");
+    sqlite.prepare("INSERT INTO capture_skip_approvals (capture_id, due_at, expires_at, actor_id, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(captureID, dueAt - 1, dueAt + 60_000, "admin@example.com", Date.now());
+    sqlite.prepare("INSERT OR IGNORE INTO active_playlist (singleton, playlist_id, revision) VALUES (1, 'operations', ?)")
+      .run(created.body.revision);
+
+    await dispatchDueCaptures(env, dueAt + 1);
+    assert.equal(messages.length, 1, "mismatched due-time approval falls through to normal capture");
+  } finally {
+    sqlite.close();
+  }
+});
 
 async function createCapturePlaylist(env, url = "https://example.com/status", ctx) {
   const response = await handleAdminRequest(await request("/admin/api/playlists", {
