@@ -1,32 +1,44 @@
 # Ribbonfish Agent Skills
 
-Focused guidance for working in the Ribbonfish repository. The Go agent, authenticated device sync, and Cloudflare Access-protected production management UI/API are implemented. Capture scheduling and rendering code is present in the management Worker but has not been deployed; follow the rollout prerequisites in the Worker guide. DRM/KMS output is experimental and has been physically validated on one Pi 3 A Plus.
+These focused instructions describe current repository workflows and implementation boundaries. The Go agent, authenticated device sync, and Access-protected management Worker/UI are implemented. Screenshot capture code is implemented but has not been deployed to production. DRM/KMS support is experimental: Pi 3 A+ single-display output has passed visible-frame acceptance; Pi 3B and Pi 4 dual-output acceptance remain open.
 
 ## Skills by domain
 
 | Skill | Use it for |
 | --- | --- |
-| [go-agent-development](go-agent-development/SKILL.md) | Changes to the Go agent, including configuration, synchronization, and display backends |
-| [offline-playback-cache](offline-playback-cache/SKILL.md) | Cache, playlist scheduling, simulator, and offline playback behavior |
-| [container-smoke-testing](container-smoke-testing/SKILL.md) | Go CI, ARM container smoke checks, and interpreting what those checks prove |
-| [raspberry-pi-deployment](raspberry-pi-deployment/SKILL.md) | Simulator use, Compose deployment, DRM/KMS setup, and hardware acceptance |
-| [cloudflare-device-sync-enrollment](cloudflare-device-sync-enrollment/SKILL.md) | Device authentication, enrollment, playlist sync, and health telemetry |
-| [cloudflare-management-console](cloudflare-management-console/SKILL.md) | Access-protected operator API/UI, playlist management, and local console development |
-| [cloudflare-worker-operations](cloudflare-worker-operations/SKILL.md) | Wrangler environments, D1 migrations, secrets, deployment, and production rollout |
+| [go-agent-development](go-agent-development/SKILL.md) | Go agent behavior, package boundaries, configuration, sync, telemetry, and display output |
+| [offline-playback-cache](offline-playback-cache/SKILL.md) | Persistent cache, playlist scheduling, simulator output, and offline behavior |
+| [container-smoke-testing](container-smoke-testing/SKILL.md) | Go CI, ARM container smoke checks, and interpreting their evidence |
+| [raspberry-pi-deployment](raspberry-pi-deployment/SKILL.md) | Simulator Compose, DRM/KMS setup, and physical hardware acceptance |
+| [cloudflare-device-sync-enrollment](cloudflare-device-sync-enrollment/SKILL.md) | Device identity, enrollment approval, authenticated playlist sync, and health telemetry |
+| [cloudflare-management-console](cloudflare-management-console/SKILL.md) | Access-protected management API/UI, operator authorization, and auditability |
+| [cloudflare-worker-operations](cloudflare-worker-operations/SKILL.md) | Wrangler environments, D1 migrations, secrets, and Worker rollout |
 | [cloudflare-asset-lifecycle](cloudflare-asset-lifecycle/SKILL.md) | Private R2 assets, D1 references, retention, and reconciliation |
-| [cloudflare-capture-design](cloudflare-capture-design/SKILL.md) | Capture workflow implementation, constraints, and production-readiness review |
+| [cloudflare-capture-design](cloudflare-capture-design/SKILL.md) | Capture scheduling, publication constraints, implementation review, and future design |
+| [device-contract-changes](device-contract-changes/SKILL.md) | Changes crossing the Go agent and Worker API/data boundary |
+| [device-fleet-operations](device-fleet-operations/SKILL.md) | Enrollment approval, health triage, credential lifecycle, and device recovery |
+| [github-actions-release](github-actions-release/SKILL.md) | CI workflows, protected deployment, and multi-architecture image publishing |
 
 ## Where to start
 
-- A Go behavior change: start with **go-agent-development**; use **offline-playback-cache** when cache or scheduling is involved.
-- A CI or container failure: start with **container-smoke-testing**.
-- A Pi setup or DRM question: start with **raspberry-pi-deployment** and keep simulator, emulation, and physical-device evidence distinct.
-- Device identity, enrollment, or sync: start with **cloudflare-device-sync-enrollment**.
-- Operator UI/API behavior: start with **cloudflare-management-console**.
-- Worker configuration, migrations, or release sequencing: start with **cloudflare-worker-operations**.
-- D1/R2 consistency or object deletion: start with **cloudflare-asset-lifecycle**.
-- Browser capture or scheduling: start with **cloudflare-capture-design** and consult Worker operations before production enablement.
+- Go-only behavior: start with **go-agent-development**; add **offline-playback-cache** for cache or playback changes.
+- Agent/Worker protocol or schema changes: use **device-contract-changes** and the relevant implementation guides.
+- Device identity, enrollment, and health endpoints: use **cloudflare-device-sync-enrollment**. For operator triage, use **device-fleet-operations**.
+- Management UI/API changes: use **cloudflare-management-console**. For Worker configuration, migrations, and rollout, use **cloudflare-worker-operations**.
+- Asset publication, deletion, or reconciliation: use **cloudflare-asset-lifecycle**.
+- Capture implementation: use **cloudflare-capture-design** and the relevant Worker guides. Capture code exists but is not production-deployed.
+- CI, image publishing, or workflow changes: use **github-actions-release**; use **container-smoke-testing** for simulator/ARM evidence.
+- Pi deployment and physical display questions: use **raspberry-pi-deployment**. Keep QEMU/simulator results separate from hardware acceptance.
 
-## Skill metadata
+## Skill metadata and validation
 
-Each `SKILL.md` has YAML frontmatter with `name`, `description`, `tags`, and `relatedSkills`. Skill names match their directory names; related skill names link to sibling `SKILL.md` files.
+Each skill has YAML frontmatter containing `name`, `description`, `tags`, and `relatedSkills`. The `name` matches its directory; related skill names refer to sibling skills. Local Markdown links should resolve within the checkout.
+
+Run the repository check with:
+
+```sh
+node --test .github/scripts/tests/validate-skills.test.mjs
+node .github/scripts/validate-skills.mjs
+```
+
+The validator checks required metadata, directory/name agreement, related-skill targets, and local links. See [Copilot repository instructions](../copilot-instructions.md) for shared project constraints.

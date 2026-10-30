@@ -16,7 +16,7 @@ Use this skill when work touches `agent/internal/cache`, `agent/internal/playlis
 - PNG, JPEG, and GIF are supported by the current standard-library decoders. Decoding rejects images above the cache package's 32-megapixel limit.
 - Active playlist content is protected from eviction. The cache evicts least-recently-used unprotected assets; if the configured assets cannot fit, the agent skips unavailable items and keeps other verified assets playable.
 - Cache recovery discards interrupted temporary files, validates indexed content, and re-indexes valid orphaned image files.
-- Each display has its own ordered playlist and rotation interval. The scheduler calculates the current item from an explicit instant and an epoch anchor, so a restart can recover the same schedule position without saved timers.
+- Playback maintains schedule state per output, while the current configuration supplies the same playlist and rotation interval to all outputs. The scheduler calculates the current item from an explicit instant and an epoch anchor, so a restart can recover the same schedule position without saved timers.
 - The simulator writes one atomically replaced PNG per display ID. A failed write leaves the prior frame intact. If no playlist asset is available, the agent leaves the last output frame untouched.
 - Playlist rotation is a local device concern. Do not apply the 60-second minimum screenshot capture interval to local rotation or device sync.
 
@@ -45,6 +45,8 @@ The example rotates `display-left` every 15 seconds and `display-right` every 9 
 - For cache mutations, check that an interrupted or invalid write cannot replace a known-good asset and that protected playlist assets survive pruning.
 - For simulator changes, verify that a failed frame write preserves the previous PNG and that display IDs remain isolated.
 - Avoid changing the separate capture retention rules (10 captures or 30 days) when tuning the device cache.
+
+The focused regression tests are in `agent/internal/cache/filesystem_test.go`, `agent/internal/playlist/scheduler_test.go`, `agent/internal/agent/agent_test.go`, and `agent/internal/display/simulator/simulator_test.go`.
 
 See [Go Agent Development](../go-agent-development/SKILL.md) for package ownership and [Container Smoke Testing](../container-smoke-testing/SKILL.md) for the persistent-cache restart check.
 
