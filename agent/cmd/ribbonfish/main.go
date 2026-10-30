@@ -264,7 +264,7 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 	if err != nil {
 		healthTracker.SetStartupFailure(startupErrorCode(err))
 		if healthClient != nil && legacySynchronizer != nil {
-			bestEffortHealthReport(healthClient, healthTracker)
+			reportStartupHealth(ctx, healthClient, healthTracker, logger)
 		}
 		_ = imageCache.Close()
 		return fmt.Errorf("start %s: %w", cfg.Output.EffectiveBackend(), err)
@@ -277,7 +277,7 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 	if err != nil {
 		healthTracker.SetStartupFailure("configuration_invalid")
 		if healthClient != nil && legacySynchronizer != nil {
-			bestEffortHealthReport(healthClient, healthTracker)
+			reportStartupHealth(ctx, healthClient, healthTracker, logger)
 		}
 		_ = outputBackend.Close()
 		_ = imageCache.Close()
@@ -349,6 +349,54 @@ func startupErrorCode(err error) string {
 }
 
 type healthWarningLogger interface{ Warn(string, ...any) }
+
+func reportStartupHealth(ctx context.Context, client *syncer.HealthClient, tracker *health.Tracker, logger healthWarningLogger) {
+	err := retryHealthReport(ctx, func(attemptCtx context.Context) error {
+		return client.Report(attemptCtx, tracker.Snapshot(time.Now()))
+	}, logger, 3, time.Second)
+	if err != nil && (ctx == nil || ctx.Err() == nil) {
+		logger.Warn("startup health report could not be delivered after retries", "error", err)
+	}
+}
+
+func retryHealthReport(parent context.Context, report func(context.Context) error, logger healthWarningLogger, attempts int, retryDelay time.Duration) error {
+	if parent == nil {
+		return errors.New("health report context is required")
+	}
+	if attempts < 1 {
+		return errors.New("health report attempts must be positive")
+	}
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := parent.Err(); err != nil {
+			return err
+		}
+		attemptCtx, cancel := context.WithTimeout(parent, 2*time.Second)
+		err := report(attemptCtx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		if err := parent.Err(); err != nil {
+			return err
+		}
+		lastErr = err
+		if attempt == attempts {
+			break
+		}
+		logger.Warn("startup health report failed; retrying", "attempt", attempt, "error", err)
+		if retryDelay > 0 {
+			timer := time.NewTimer(retryDelay)
+			select {
+			case <-parent.Done():
+				timer.Stop()
+				return parent.Err()
+			case <-timer.C:
+			}
+		}
+	}
+	return lastErr
+}
 
 func bestEffortHealthReport(client *syncer.HealthClient, tracker *health.Tracker) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

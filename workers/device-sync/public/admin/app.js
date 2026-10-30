@@ -7,6 +7,7 @@ import {
   compactIdentifier,
   confirmAction,
   confirmBeforeAction,
+  createRetryableLoadOnce,
   formatActorLabel,
   formatCaptureInterval,
   formatAuditDetails,
@@ -621,17 +622,21 @@ function healthDetails(device) {
   const content = node("div", undefined, "device-health-details__content");
   content.append(node("p", "Open to load device health and recent history.", "muted"));
   details.append(content);
-  let loaded = false;
+  const healthDetailsLoader = createRetryableLoadOnce();
   details.addEventListener("toggle", async () => {
-    if (!details.open || loaded) return;
-    loaded = true;
+    if (!details.open || healthDetailsLoader.loaded) return;
     content.replaceChildren(node("p", "Loading health details…", "muted"));
     try {
       const devicePath = `/admin/api/devices/${encodeURIComponent(device.device_id)}`;
-      const [result, history] = await Promise.all([
-        api(`${devicePath}/health`),
-        api(`${devicePath}/health-history?limit=10`),
-      ]);
+      const loadedData = await healthDetailsLoader.load(async () => {
+        const [result, history] = await Promise.all([
+          api(`${devicePath}/health`),
+          api(`${devicePath}/health-history?limit=10`),
+        ]);
+        return { result, history };
+      });
+      if (!loadedData) return;
+      const { result, history } = loadedData;
       const report = result.latest;
       content.replaceChildren();
       if (!report) {
