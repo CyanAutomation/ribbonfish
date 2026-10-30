@@ -29,6 +29,7 @@ import (
 	"github.com/CyanAutomation/ribbonfish/agent/internal/display"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/display/drm"
 	displaySimulator "github.com/CyanAutomation/ribbonfish/agent/internal/display/simulator"
+	"github.com/CyanAutomation/ribbonfish/agent/internal/health"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/syncer"
 )
 
@@ -221,12 +222,39 @@ func TestCheckDRMDisplaysMatchesConnectedConfiguredConnector(t *testing.T) {
 		t.Fatal(err)
 	}
 	output.Reset()
-	if err := checkDRMDisplays(configPath, sysfsRoot, devRoot, &output); err == nil || !strings.Contains(err.Error(), "disconnected") {
-		t.Fatalf("checkDRMDisplays() error = %v, want disconnected connector diagnostic", err)
+	if err := checkDRMDisplays(configPath, sysfsRoot, devRoot, &output); err != nil {
+		t.Fatalf("checkDRMDisplays() error = %v, want disconnected connector warning", err)
 	}
-	if output.Len() != 0 {
-		t.Fatalf("checkDRMDisplays() wrote success output before failure: %q", output.String())
+	if !strings.Contains(output.String(), "warning") || !strings.Contains(output.String(), "status=disconnected") {
+		t.Fatalf("checkDRMDisplays() output = %q, want a warning and disconnected status", output.String())
 	}
+}
+
+func TestReportUnavailableDisplaysWarnsAndMarksHealthDegraded(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	tracker := health.NewTracker("test", t.TempDir(), []health.OutputSpec{{DisplayID: "display-right", Connector: "HDMI-A-2"}}, time.Now)
+	tracker.SetState("ready")
+	output := &diagnosticDisplayOutput{unavailable: []drm.DisplayTarget{{ID: "display-right", Connector: "HDMI-A-2"}}}
+
+	reportUnavailableDisplays(output, tracker, logger)
+
+	if !strings.Contains(logs.String(), "connector is disconnected") || !strings.Contains(logs.String(), "HDMI-A-2") {
+		t.Fatalf("startup logs = %q, want disconnected connector warning", logs.String())
+	}
+	report := tracker.Snapshot(time.Now())
+	if report.State != "degraded" || len(report.Outputs) != 1 || report.Outputs[0].Status != "failed" ||
+		report.Outputs[0].ErrorCode == nil || *report.Outputs[0].ErrorCode != "connector_disconnected" {
+		t.Fatalf("health report = %#v, want degraded state and connector_disconnected", report)
+	}
+}
+
+type diagnosticDisplayOutput struct{ unavailable []drm.DisplayTarget }
+
+func (*diagnosticDisplayOutput) Present(context.Context, string, image.Image) error { return nil }
+func (*diagnosticDisplayOutput) Close() error                                       { return nil }
+func (output *diagnosticDisplayOutput) UnavailableDisplays() []drm.DisplayTarget {
+	return output.unavailable
 }
 
 func TestCheckDRMDisplaysAcceptsStableByPathAlias(t *testing.T) {

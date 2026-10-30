@@ -31,10 +31,11 @@ type outputDevice interface {
 
 // Output presents independent logical displays through DRM/KMS connectors.
 type Output struct {
-	mu       sync.RWMutex
-	device   outputDevice
-	surfaces map[string]scanoutSurface
-	closed   bool
+	mu                  sync.RWMutex
+	device              outputDevice
+	surfaces            map[string]scanoutSurface
+	unavailableDisplays []DisplayTarget
+	closed              bool
 }
 
 var _ display.Output = (*Output)(nil)
@@ -93,6 +94,13 @@ func newOutputWithDevice(device outputDevice, targets []DisplayTarget, fit displ
 		if err != nil {
 			return cleanup(fmt.Errorf("display %q mode: %w", id, err))
 		}
+		if connectorIsDisconnected(connectors, connectorName) {
+			disconnected := target
+			disconnected.ID = id
+			disconnected.Connector = connectorName
+			output.unavailableDisplays = append(output.unavailableDisplays, disconnected)
+			continue
+		}
 		connector, mode, err := SelectConnectorMode(connectors, connectorName, request)
 		if err != nil {
 			return cleanup(err)
@@ -112,6 +120,33 @@ func newOutputWithDevice(device outputDevice, targets []DisplayTarget, fit displ
 	return output, nil
 }
 
+func connectorIsDisconnected(connectors []ConnectorInfo, name string) bool {
+	for _, connector := range connectors {
+		if connector.Name == name {
+			return !connector.Connected
+		}
+	}
+	return false
+}
+
+// UnavailableDisplays reports configured connectors that were disconnected
+// when the output was initialized. Connected outputs remain usable.
+func (output *Output) UnavailableDisplays() []DisplayTarget {
+	return append([]DisplayTarget(nil), output.unavailableDisplays...)
+}
+
+// DisplayAvailable reports whether initialization created a scanout surface
+// for the configured display.
+func (output *Output) DisplayAvailable(displayID string) bool {
+	output.mu.RLock()
+	defer output.mu.RUnlock()
+	if output.closed {
+		return false
+	}
+	_, ok := output.surfaces[displayID]
+	return ok
+}
+
 // Present writes a frame to the configured connector for displayID.
 func (output *Output) Present(ctx context.Context, displayID string, frame image.Image) error {
 	output.mu.RLock()
@@ -121,6 +156,11 @@ func (output *Output) Present(ctx context.Context, displayID string, frame image
 	}
 	surface, ok := output.surfaces[displayID]
 	if !ok {
+		for _, unavailable := range output.unavailableDisplays {
+			if unavailable.ID == displayID {
+				return fmt.Errorf("DRM connector %q is disconnected", unavailable.Connector)
+			}
+		}
 		return fmt.Errorf("unknown DRM display %q", displayID)
 	}
 	return surface.Present(ctx, frame)

@@ -46,7 +46,21 @@ func TestPairingOutputShowsFingerprintUntilCleared(t *testing.T) {
 	}
 }
 
+func TestPairingOutputPreservesBackendAvailability(t *testing.T) {
+	backend := &availabilityPairingTestOutput{pairingTestOutput: &pairingTestOutput{}}
+	output := NewPairingOutput(backend, NewPairingState("ribbonfish-01", "fingerprint"))
+	if !output.DisplayAvailable("main") || output.DisplayAvailable("missing") {
+		t.Fatalf("availability main=%v missing=%v, want true / false", output.DisplayAvailable("main"), output.DisplayAvailable("missing"))
+	}
+}
+
 type pairingTestOutput struct{ lastFrame *image.RGBA }
+
+type availabilityPairingTestOutput struct{ *pairingTestOutput }
+
+func (*availabilityPairingTestOutput) DisplayAvailable(displayID string) bool {
+	return displayID == "main"
+}
 
 func (output *pairingTestOutput) Present(_ context.Context, _ string, frame image.Image) error {
 	output.lastFrame = image.NewRGBA(frame.Bounds())
