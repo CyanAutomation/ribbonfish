@@ -31,6 +31,7 @@
 
       <nav class="section-nav" aria-label="Management sections">
         <a href="#overview-section">Overview</a>
+        <a href="#analysis-section">JEV analysis</a>
         <a href="#playlist-section">Playlists</a>
         <a href="#capture-targets">Page screenshots</a>
         <a href="#device-section">Devices</a>
@@ -44,6 +45,15 @@
         <div id="fleet-summary" role="region" aria-label="Fleet snapshot" aria-live="polite"></div>
       </section>
 
+      <section id="analysis-section" class="panel" aria-labelledby="analysis-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">Advisory analysis</p><h2 id="analysis-title">Fleet signals</h2></div>
+          <button id="run-fleet-analysis" class="button button--secondary" type="button">Analyze current signals</button>
+        </div>
+        <p class="muted">JEV reviews a limited summary of current device, playlist, asset, and screenshot signals. Recommendations are advisory and do not change fleet state.</p>
+        <div id="fleet-analysis-result" class="jev-result-slot" role="region" aria-label="Fleet signal analysis" aria-live="polite"></div>
+      </section>
+
       <section id="playlist-section" class="panel" aria-labelledby="playlist-title">
         <div class="section-heading">
           <div><p class="eyebrow">Playlists</p><h2 id="playlist-title">Playlist versions</h2></div>
@@ -52,7 +62,7 @@
         <div id="playlists-mobile" class="mobile-card-list" role="region" aria-label="Playlist versions"></div>
         <section id="capture-targets" class="capture-targets" aria-labelledby="capture-targets-title">
           <div class="section-heading"><div><p class="eyebrow">Screenshots</p><h3 id="capture-targets-title">Page screenshots</h3></div></div>
-          <p class="muted">Each page URL is a reusable playlist item. A placeholder image appears until its first screenshot is ready.</p>
+          <p class="muted">Each page URL is a reusable playlist item. A placeholder image appears until its first screenshot is ready. JEV screenshot skip assessments are advisory and never change the capture schedule.</p>
           <div id="capture-target-list" class="capture-target-list" role="region" aria-label="Scheduled page screenshots" aria-live="polite"></div>
         </section>
         <form id="playlist-form" class="form-grid">

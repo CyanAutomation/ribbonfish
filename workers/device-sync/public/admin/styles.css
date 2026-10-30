@@ -227,6 +227,16 @@ main > section[id], main > section[id] > section[id] { scroll-margin-top: 6rem; 
 .capture-target__heading { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .capture-target__heading h4 { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--color-heading); }
 .capture-target__content > p { margin: var(--space-2) 0 0; overflow-wrap: anywhere; }
+.jev-result-slot { margin-top: var(--space-3); }
+.jev-result { border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: var(--color-surface-soft); padding: var(--space-3); }
+.jev-result h3 { margin: 0 0 var(--space-2); color: var(--color-heading); }
+.jev-result__answers { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: var(--space-3); }
+.jev-result__answer { min-width: 0; padding: var(--space-2); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-control); background: var(--color-surface); }
+.jev-result__answer h4 { margin: 0 0 var(--space-1); color: var(--color-heading); }
+.jev-result__answer p { margin: var(--space-1) 0; }
+.jev-result__probabilities { display: grid; gap: var(--space-1); margin: var(--space-2) 0 0; padding: 0; list-style: none; }
+.jev-result__probability { display: flex; justify-content: space-between; gap: var(--space-2); color: var(--color-muted); font-size: var(--font-size-compact); }
+.jev-advisory { margin-top: var(--space-2); color: var(--color-muted); font-size: var(--font-size-compact); }
 .viewport-inputs { display: flex; align-items: center; gap: var(--space-2); }
 .viewport-inputs .field-control { flex: 1; }
 label { display: grid; gap: var(--space-1); color: var(--color-text-label); font-size: var(--font-size-body); font-weight: 550; }

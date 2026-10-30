@@ -45,6 +45,19 @@ test("management page exposes accessible fleet and playlist sections", async () 
   assert.match(html, /aria-labelledby="playlist-title"/);
 });
 
+test("management page exposes advisory fleet analysis and screenshot skip assessment controls", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
+  assert.match(html, /href="#analysis-section"/);
+  assert.match(html, /id="analysis-section"/);
+  assert.match(html, /id="run-fleet-analysis"/);
+  assert.match(html, /advisory and never change the capture schedule/i);
+  assert.match(app, /\/admin\/api\/jev\/fleet-analysis/);
+  assert.match(app, /\/admin\/api\/jev\/capture-assessment/);
+  assert.match(app, /Assess screenshot skip/);
+  assert.match(app, /Advisory only/);
+});
+
 test("management records switch to cards on narrow screens", async () => {
   const styles = await readFile(new URL("../public/admin/styles.css", import.meta.url), "utf8");
   assert.match(
