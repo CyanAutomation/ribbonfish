@@ -12,6 +12,8 @@ import {
   formatAuditDetails,
   formatAuditEventType,
   formatDeviceEnabledMessage,
+  formatDeviceHealthDetails,
+  formatEnrollmentApprovalPrompt,
   formatEnvironmentNotice,
   formatPlaylistState,
   playlistDeleteActionStates,
@@ -612,72 +614,32 @@ function healthDetails(device) {
       const report = result.latest;
       content.replaceChildren();
       if (!report) {
-        content.append(node("p", "This device has not reported health yet.", "muted"));
+        content.append(node("p", formatDeviceHealthDetails(result, history).message, "muted"));
         return;
       }
-      content.append(node("p", `Fleet health ${result.health_status}.`));
-      content.append(node("p", `Last report ${formatTimestamp(result.received_at)} · Agent ${report.agent_version} · Uptime ${formatAge(report.agent_uptime_seconds)}`));
-      const lastSync = report.sync.last_success_age_seconds === null ? "never" : `${formatAge(report.sync.last_success_age_seconds)} ago`;
-      content.append(node("p", `Sync ${report.sync.status} · last success ${lastSync}${report.sync.applied_playlist_id ? ` · ${report.sync.applied_playlist_id} / ${report.sync.applied_revision ?? "revision unknown"}` : ""}`));
-      if (report.startup_error_code) content.append(node("p", `Startup issue: ${report.startup_error_code}`, "health-error"));
-      if (report.outputs.length) {
+      const details = formatDeviceHealthDetails(result, history);
+      details.summary.forEach((line, index) => {
+        content.append(node("p", line, index === details.summary.length - 1 && report.startup_error_code ? "health-error" : undefined));
+      });
+      if (details.outputs.length) {
         const outputList = node("ul");
-        for (const output of report.outputs) {
-          const connector = output.connector ? ` (${output.connector})` : "";
-          const issue = output.error_code ? ` · ${output.error_code}` : "";
-          const lastFrame = output.last_frame_age_seconds === null ? "no successful frame yet" : `last frame ${formatAge(output.last_frame_age_seconds)} ago`;
-          outputList.append(node("li", `${output.display_id}${connector}: ${output.status} · ${lastFrame}${issue}`));
-        }
+        details.outputs.forEach((line) => outputList.append(node("li", line)));
         content.append(outputList);
       }
-      if (report.host) {
-        const readings = [];
-        if (Number.isFinite(report.host.uptime_seconds)) readings.push(`Host uptime ${formatAge(report.host.uptime_seconds)}`);
-        if (Number.isFinite(report.host.temperature_millicelsius)) readings.push(`Temperature ${(report.host.temperature_millicelsius / 1000).toFixed(1)}°C`);
-        if (Number.isFinite(report.host.memory_available_bytes)) readings.push(`Memory ${formatBytes(report.host.memory_available_bytes)} available`);
-        if (Number.isFinite(report.host.state_disk_free_bytes)) readings.push(`State disk ${formatBytes(report.host.state_disk_free_bytes)} free`);
-        if (Number.isFinite(report.host.load_1m)) readings.push(`1m load ${report.host.load_1m.toFixed(2)}`);
-        if (readings.length) content.append(node("p", readings.join(" · ")));
-      }
-      const events = history.events ?? [];
+      if (details.host.length) content.append(node("p", details.host.join(" · ")));
       content.append(node("h4", "Recent health changes"));
-      if (!events.length) content.append(node("p", "No health changes recorded.", "muted"));
+      if (!details.events.length) content.append(node("p", "No health changes recorded.", "muted"));
       else {
         const eventList = node("ul");
-        events.forEach((event) => {
-          const healthState = event.metadata?.health_status ? ` · ${event.metadata.health_status}` : "";
-          const transition = event.metadata?.previous_health_status
-            ? ` (${event.metadata.previous_health_status} → ${event.metadata.health_status})` : "";
-          eventList.append(node("li", `${formatTimestamp(event.received_at)} · ${event.event_type}${healthState}${transition}${event.error_code ? ` · ${event.error_code}` : ""}`));
-        });
+        details.events.forEach((line) => eventList.append(node("li", line)));
         content.append(eventList);
       }
-      content.append(node("p", `${history.samples?.length ?? 0} health samples in the last 30 days.`, "muted"));
+      content.append(node("p", `${details.sampleCount} health samples in the last 30 days.`, "muted"));
     } catch (error) {
       content.replaceChildren(node("p", error.message, "health-error"));
     }
   });
   return details;
-}
-
-function formatBytes(bytes) {
-  if (!Number.isFinite(bytes) || bytes < 0) return "—";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let amount = bytes;
-  let unit = 0;
-  while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
-  return `${amount.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
-}
-
-function formatAge(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) return "unknown";
-  if (seconds < 60) return `${Math.floor(seconds)}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ${minutes % 60}m`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ${hours % 24}h`;
 }
 
 function renderDevices(devices) {
@@ -718,9 +680,6 @@ function pendingRequestActions(request, layout) {
   const actions = node("div", undefined, layout === "card" ? "card-actions" : "table-actions");
   const approve = button("Approve", "primary");
   approve.addEventListener("click", async () => {
-    const replacement = request.replaces_existing
-      ? ` This will replace the existing credentials for ${request.device_id}.`
-      : "";
     try {
       const confirmed = await confirmBeforeAction(
         (text) => showConfirmDialog({
@@ -728,7 +687,7 @@ function pendingRequestActions(request, layout) {
           description: text,
           confirmLabel: "Approve device",
         }),
-        `Only approve ${request.device_id} if its physical display shows the full fingerprint ${request.fingerprint}.${replacement}`,
+        formatEnrollmentApprovalPrompt(request),
         () => api(`/admin/api/enrollment-requests/${request.request_id}/approve`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },

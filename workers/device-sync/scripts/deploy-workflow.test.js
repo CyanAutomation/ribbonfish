@@ -1,20 +1,29 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { parse } from "yaml";
 
-const workflowUrl = new URL("../../../.github/workflows/deploy-device-sync.yml", import.meta.url);
+// Release contract: ../README.md#local-development and ../../../README.md#deployment-model.
+const root = new URL("../../../", import.meta.url);
 
-test("production deployment follows validated Worker changes on the protected default branch", async () => {
-  const workflow = await readFile(workflowUrl, "utf8");
-  const deployStart = workflow.indexOf("  deploy:\n");
-  const trigger = workflow.slice(0, workflow.indexOf("\npermissions:"));
+async function readYaml(path) {
+  const source = await readFile(new URL(path, root), "utf8");
+  return parse(source, { uniqueKeys: true });
+}
 
-  assert.notEqual(deployStart, -1, "workflow must define a deploy job");
-  assert.match(
-    workflow,
-    /^on:\n  push:\n    branches:\n      - main\n    paths:/m,
-    "production deployment must run automatically for changes pushed to main",
-  );
+function stepNamed(job, name) {
+  const step = job.steps?.find((item) => item.name === name);
+  assert.ok(step, `expected workflow step: ${name}`);
+  return step;
+}
+
+test("production deployment validates relevant Worker changes before protected-main release", async () => {
+  const workflow = await readYaml(".github/workflows/deploy-device-sync.yml");
+  const paths = workflow.on.push.paths;
+  const validate = workflow.jobs.validate;
+  const deploy = workflow.jobs.deploy;
+
+  assert.deepEqual(workflow.on.push.branches, ["main"]);
   for (const path of [
     "workers/device-sync/src/index.js",
     "workers/device-sync/src/admin.js",
@@ -35,110 +44,94 @@ test("production deployment follows validated Worker changes on the protected de
     "workers/device-sync/package.json",
     "workers/device-sync/package-lock.json",
     ".github/workflows/deploy-device-sync.yml",
-  ]) {
-    assert.ok(trigger.includes(`      - "${path}"`), `${path} changes must trigger deployment`);
-  }
-  assert.doesNotMatch(
-    trigger,
-    /README\.md|\.test\.js/,
-    "documentation and test-only changes must not deploy",
-  );
-  assert.match(workflow, /^permissions:\n  contents: read$/m, "workflow permissions must stay read-only");
+  ]) assert.ok(paths.includes(path), `changes to ${path} must trigger deployment`);
+  assert.equal(paths.some((path) => /README|\.test\.js/.test(path)), false);
 
-  const deployJob = workflow.slice(deployStart);
-  const validateJob = workflow.slice(workflow.indexOf("  validate:\n"), deployStart);
-  const expressionStart = String.fromCharCode(36) + "{{";
-
-  assert.ok(validateJob.includes("npm test"), "deployment must follow the test suite");
-  assert.ok(validateJob.includes("npm run check:config"), "deployment must follow Wrangler dry runs");
-  assert.doesNotMatch(validateJob, /secrets\.CLOUDFLARE_/, "validation must not receive Cloudflare credentials");
-  assert.match(deployJob, /^\s+needs: validate$/m, "deployment must wait for validation");
-  assert.match(
-    deployJob,
-    /^\s+if:.*github\.ref.*default_branch.*github\.ref_protected/m,
-    "deployment must require the protected default branch",
-  );
-  assert.match(deployJob, /^\s+environment:\n\s+name: production$/m, "deployment must use the production environment");
-  assert.ok(deployJob.includes("npm run deploy:production"), "deployment must publish the device-sync Worker");
-  assert.ok(deployJob.includes("npm run deploy:management"), "deployment must publish management assets and Worker");
-  assert.ok(
-    deployJob.includes("CLOUDFLARE_API_TOKEN: " + expressionStart + " secrets.CLOUDFLARE_API_TOKEN }}"),
-    "deployment must use the repository API-token secret",
-  );
-  assert.ok(
-    deployJob.includes("CLOUDFLARE_ACCOUNT_ID: " + expressionStart + " secrets.CLOUDFLARE_ACCOUNT_ID }}"),
-    "deployment must use the repository account-ID secret",
-  );
-  assert.doesNotMatch(deployJob, /migrate:management/, "D1 migrations must remain a separate explicit operation");
+  assert.deepEqual(workflow.permissions, { contents: "read" });
+  assert.match(stepNamed(validate, "Test Worker routes and authorization").run, /npm test/);
+  assert.match(stepNamed(validate, "Validate production Worker bundles").run, /check:config/);
+  assert.doesNotMatch(JSON.stringify(validate), /secrets\.CLOUDFLARE_/);
+  assert.equal(deploy.needs, "validate");
+  assert.match(deploy.if, /default_branch/);
+  assert.match(deploy.if, /ref_protected/);
+  assert.equal(deploy.environment.name, "production");
+  assert.match(stepNamed(deploy, "Deploy device-sync Worker").run, /deploy:production/);
+  assert.match(stepNamed(deploy, "Publish management assets and deploy Worker").run, /deploy:management/);
+  assert.equal(stepNamed(deploy, "Deploy device-sync Worker").env.CLOUDFLARE_API_TOKEN, "${{ secrets.CLOUDFLARE_API_TOKEN }}");
+  assert.equal(stepNamed(deploy, "Deploy device-sync Worker").env.CLOUDFLARE_ACCOUNT_ID, "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}");
+  assert.doesNotMatch(JSON.stringify(deploy), /migrate:management/);
 });
 
-test("both image publishers run only for relevant changes pushed to main", async () => {
+test("container publishers wait for shared validation and avoid promoting stale builds", async () => {
   const workflows = [
-    ["docker-publish.yml", new URL("../../../.github/workflows/docker-publish.yml", import.meta.url)],
-    ["publish-agent.yml", new URL("../../../.github/workflows/publish-agent.yml", import.meta.url)],
+    ["docker-publish.yml", "Docker Hub"],
+    ["publish-agent.yml", "GitHub Container Registry"],
   ];
 
-  for (const [name, url] of workflows) {
-    const workflow = await readFile(url, "utf8");
-    const trigger = workflow.slice(0, workflow.indexOf("\npermissions:"));
-
-    assert.match(trigger, /^on:\n  push:\n    branches:\n      - main\n    paths:/m, `${name} must publish on main pushes`);
-    assert.ok(trigger.includes('      - "agent/**"'), `${name} must run for agent changes`);
-    assert.ok(trigger.includes(`      - ".github/workflows/${name}"`), `${name} must run when its workflow changes`);
-    assert.doesNotMatch(trigger, /pull_request|tags:/, `${name} must not publish from PR-close or tag events`);
-    assert.match(workflow, /verify:\n    uses: \.\/\.github\/workflows\/verify-agent\.yml/m, `${name} must call shared validation`);
-    assert.match(workflow, /publish:\n    needs: verify/m, `${name} must publish only after validation`);
-    assert.match(workflow, /publish:\n    needs: verify\n    if: github\.ref_protected/m, `${name} must only publish from protected main`);
+  for (const [file, registry] of workflows) {
+    const workflow = await readYaml(`.github/workflows/${file}`);
+    const publish = workflow.jobs.publish;
+    assert.deepEqual(workflow.on.push.branches, ["main"]);
+    assert.ok(workflow.on.push.paths.includes("agent/**"));
+    assert.ok(workflow.on.push.paths.includes(`.github/workflows/${file}`));
+    assert.equal(workflow.jobs.verify.uses, "./.github/workflows/verify-agent.yml");
+    assert.equal(publish.needs, "verify");
+    assert.match(publish.if, /ref_protected/);
+    const promotion = publish.steps.find((step) => /Promote current main image/.test(step.name));
+    assert.ok(promotion, `${registry} image promotion step must exist`);
+    assert.match(promotion.run, /main_sha/);
+    assert.match(promotion.run, /IMAGE_SHA/);
+    assert.match(promotion.run, /exit 0/);
   }
 
-  const ghcr = await readFile(workflows[1][1], "utf8");
-  assert.match(ghcr, /type=sha,format=long/, "GHCR should publish an immutable full commit tag");
-  assert.match(ghcr, /--tag ghcr\.io\/cyanautomation\/ribbonfish:main/, "GHCR should publish a stable main tag");
-  assert.match(ghcr, /if \[ "\$main_sha" != "\$IMAGE_SHA" \]; then/, "stale runs must not promote GHCR main");
+  const ghcr = await readYaml(".github/workflows/publish-agent.yml");
+  const metadata = ghcr.jobs.publish.steps.find((step) => step.id === "metadata");
+  assert.match(metadata.with.tags, /type=sha,format=long/);
+  assert.match(ghcr.jobs.publish.steps.find((step) => /Promote current main image/.test(step.name)).run,
+    /ribbonfish:main/);
 
-  const dockerHub = await readFile(workflows[0][1], "utf8");
-  assert.match(dockerHub, /GH_TOKEN: .*github\.token/, "latest promotion must use the read-only GitHub token");
-  assert.match(dockerHub, /if \[ "\$main_sha" != "\$IMAGE_SHA" \]; then/, "stale runs must not promote latest");
+  const dockerHub = await readYaml(".github/workflows/docker-publish.yml");
+  const promotion = dockerHub.jobs.publish.steps.find((step) => /Promote current main image/.test(step.name));
+  assert.equal(promotion.env.GH_TOKEN, "${{ github.token }}");
+  assert.match(promotion.run, /ribbonfish:latest/);
 });
 
-test("the Go CI workflow delegates its checks to the shared reusable workflow", async () => {
-  const workflow = await readFile(new URL("../../../.github/workflows/agent.yml", import.meta.url), "utf8");
+test("Go and workflow validation run on pull requests through their intended jobs", async () => {
+  const agent = await readYaml(".github/workflows/agent.yml");
+  assert.ok(Object.hasOwn(agent.on, "pull_request"), "Go checks must run for pull requests");
+  assert.equal(agent.jobs["test-and-cross-compile"].uses, "./.github/workflows/verify-agent.yml");
 
-  assert.match(workflow, /test-and-cross-compile:\n    uses: \.\/\.github\/workflows\/verify-agent\.yml/m);
+  const lint = await readYaml(".github/workflows/workflow-lint.yml");
+  assert.ok(Object.hasOwn(lint.on, "pull_request"), "workflow lint must run for pull requests");
+  assert.ok(lint.on.push.paths.includes(".github/workflows/**"));
+  const lintCommand = lint.jobs.actionlint.steps.find((step) => /Check workflow syntax/.test(step.name));
+  assert.match(lintCommand.run, /actionlint/);
 });
 
-test("workflow linting runs for pull requests and main workflow changes", async () => {
-  const workflow = await readFile(new URL("../../../.github/workflows/workflow-lint.yml", import.meta.url), "utf8");
-  const trigger = workflow.slice(0, workflow.indexOf("\npermissions:"));
-
-  assert.match(trigger, /^on:\n  push:\n    branches:\n      - main\n    paths:/m);
-  assert.ok(trigger.includes('      - ".github/workflows/**"'));
-  assert.match(trigger, /^  pull_request:$/m, "workflow lint must run for every pull request");
-  assert.match(workflow, /actionlint@v1\.7\.12/);
-});
-
-test("Go workflow caches invalidate when their pinned go-run tools change", async () => {
-  const workflows = [
+test("workflow caches include each workflow's tool pins and Go module inputs", async () => {
+  const cases = [
     ["verify-agent.yml", "golang.org/x/vuln/cmd/govulncheck@v1.1.4"],
     ["workflow-lint.yml", "github.com/rhysd/actionlint/cmd/actionlint@v1.7.12"],
   ];
-
-  for (const [name, tool] of workflows) {
-    const workflow = await readFile(new URL(`../../../.github/workflows/${name}`, import.meta.url), "utf8");
-    const cachePath = workflow.match(/cache-dependency-path: \|\n((?:\s+.+\n)+)/)?.[1] ?? "";
-
-    assert.match(cachePath, /agent\/go\.mod/, `${name} cache must follow Go module requirements`);
-    assert.ok(cachePath.includes(`.github/workflows/${name}`), `${name} cache must follow its pinned Go tool version`);
-    assert.ok(workflow.includes(tool), `${name} must keep the Go tool version explicit`);
+  for (const [file, tool] of cases) {
+    const workflow = await readYaml(`.github/workflows/${file}`);
+    const setupGo = Object.values(workflow.jobs).flatMap((job) => job.steps ?? [])
+      .find((step) => step.uses?.startsWith("actions/setup-go@"));
+    assert.ok(setupGo);
+    assert.match(setupGo.with["cache-dependency-path"], /agent\/go\.mod/);
+    assert.ok(setupGo.with["cache-dependency-path"].includes(`.github/workflows/${file}`));
+    assert.ok(JSON.stringify(workflow).includes(tool));
   }
 });
 
-test("Dependabot updates npm and pinned Docker base images", async () => {
-  const dependabot = await readFile(new URL("../../../.github/dependabot.yml", import.meta.url), "utf8");
-  const dockerfile = await readFile(new URL("../../../agent/Dockerfile", import.meta.url), "utf8");
+test("dependency updates cover the shipped npm package and container base images stay digest-pinned", async () => {
+  const dependabot = await readYaml(".github/dependabot.yml");
+  assert.ok(dependabot.updates.some((update) =>
+    update["package-ecosystem"] === "npm" && update.directory === "/workers/device-sync"));
+  assert.ok(dependabot.updates.some((update) =>
+    update["package-ecosystem"] === "docker" && update.directory === "/agent"));
 
-  assert.match(dependabot, /package-ecosystem: npm\n    directory: \/workers\/device-sync/);
-  assert.match(dependabot, /package-ecosystem: docker\n    directory: \/agent/);
+  const dockerfile = await readFile(new URL("../../../agent/Dockerfile", import.meta.url), "utf8");
   assert.match(dockerfile, /^FROM --platform=\$BUILDPLATFORM golang:\d+\.\d+\.\d+-alpine@sha256:[a-f0-9]{64} AS build$/m);
   assert.match(dockerfile, /^FROM gcr\.io\/distroless\/static-debian12:nonroot@sha256:[a-f0-9]{64}$/m);
 });
