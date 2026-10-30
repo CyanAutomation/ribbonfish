@@ -22,11 +22,13 @@ import {
   formatTimestamp,
   hasPageURLs,
   parsePageURLs,
+  summarizeFleetAttention,
 } from "./ui-utils.js";
 
 const message = document.querySelector("#message");
 const messageText = document.querySelector("#message-text");
 const fleetSummary = document.querySelector("#fleet-summary");
+const fleetAttention = document.querySelector("#fleet-attention");
 const confirmDialog = document.querySelector("#confirm-dialog");
 const confirmTitle = document.querySelector("#confirm-title");
 const confirmDescription = document.querySelector("#confirm-description");
@@ -36,6 +38,8 @@ const environmentTag = document.querySelector("#environment-tag");
 const environmentNotice = document.querySelector("#environment-notice");
 let latestOverview = null;
 let fleetSummaryInitialized = false;
+let pendingEnrollmentsLoaded = false;
+let pendingEnrollmentIDs = new Set();
 let playlistEditSource = null;
 const fleetViewRuntime = createFleetOpenUI({ getOverview: async () => latestOverview });
 
@@ -116,6 +120,11 @@ function renderEmptyState(messageTextValue, actionLabel, href, compact = false) 
   if (actionLabel && href) {
     const action = node("a", actionLabel, `button button--secondary${compact ? " button--small" : ""}`);
     action.href = href;
+    if (href === "#playlist-editor") {
+      action.addEventListener("click", () => {
+        document.querySelector("#playlist-editor").open = true;
+      });
+    }
     card.append(action);
   }
   return card;
@@ -250,8 +259,10 @@ function syncScreenshotSettings() {
 
 function resetPlaylistEditor() {
   const form = playlistForm();
+  const editor = document.querySelector("#playlist-editor");
   playlistEditSource = null;
-  form.querySelector("h3").textContent = "Create a playlist version";
+  editor.querySelector("summary").textContent = "Create playlist version";
+  editor.open = false;
   form.querySelector("#playlist-form-help").textContent =
     "Add PNG images or page URLs. Images and screenshots can be reused across playlists. Saved versions stay available until you delete the playlist.";
   form.querySelector("[name=assets]").required = false;
@@ -274,9 +285,10 @@ async function startPlaylistEdit(playlist) {
     form.reset();
     resetPlaylistEditor();
     playlistEditSource = { playlist_id: detail.playlist_id, revision: detail.revision };
+    document.querySelector("#playlist-editor").open = true;
+    document.querySelector("#playlist-editor-summary").textContent = `Edit ${detail.playlist_id} playlist version`;
     form.elements.namedItem("id").value = detail.playlist_id;
     form.elements.namedItem("rotation_interval").value = detail.rotation_interval;
-    form.querySelector("h3").textContent = "Edit playlist as a new version";
     form.querySelector("#playlist-form-help").textContent =
       `Editing ${detail.playlist_id}, version ${compactIdentifier(detail.revision)}. Keep the images and page URLs you want, then save a new version. Saved versions do not change.`;
     form.querySelector("[name=assets]").required = false;
@@ -463,7 +475,7 @@ function renderPlaylists(playlists) {
     emptyState: {
       message: "No playlists yet. Add images or page URLs to create your first playlist version.",
       actionLabel: "Create playlist version",
-      href: "#playlist-form",
+      href: "#playlist-editor",
     },
     cardTitleField: "Playlist",
     cardStatusField: "Status",
@@ -492,9 +504,14 @@ function renderCaptureTargets(targets) {
     const screenshotStatus = formatScreenshotStatus(target.job_status, target.last_error, target.last_success_at);
     heading.append(statusBadge(screenshotStatus.label, screenshotStatus.tone));
     content.append(heading);
-    content.append(node("p", `${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`, "muted"));
     content.append(node("p", target.last_success_at ? `Last screenshot ${formatTimestamp(target.last_success_at)}` : "No screenshot is ready yet.", "muted"));
-    if (target.last_error) content.append(node("p", target.last_error, "error-title"));
+    if (target.last_error) content.append(node("p", `Screenshot error: ${target.last_error}`, "capture-target__error error-title"));
+
+    const metadata = node("details", undefined, "capture-target__details");
+    metadata.append(node("summary", "Schedule and screenshot details"));
+    metadata.append(node("p", `${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`, "muted"));
+    if (target.last_error) metadata.append(node("p", `Full error: ${target.last_error}`, "error-title"));
+    content.append(metadata);
 
     const actions = node("div", undefined, "action-row");
     const capture = button("Take screenshot now", "secondary");
@@ -513,7 +530,9 @@ function renderCaptureTargets(targets) {
       finally { capture.disabled = false; }
     });
     actions.append(capture);
-    const assess = button("Assess screenshot skip", "secondary");
+    const assessmentDisclosure = node("details", undefined, "capture-target__assessment");
+    assessmentDisclosure.append(node("summary", "Assess screenshot schedule"));
+    const assess = button("Run advisory assessment", "secondary");
     const assessment = node("div", undefined, "jev-result-slot");
     assess.addEventListener("click", async () => {
       assess.disabled = true;
@@ -532,9 +551,9 @@ function renderCaptureTargets(targets) {
         assessment.replaceChildren(node("p", error.message, "error-title"));
       } finally { assess.disabled = false; }
     });
-    actions.append(assess);
     content.append(actions);
-    content.append(assessment);
+    assessmentDisclosure.append(assess, assessment);
+    content.append(assessmentDisclosure);
     card.append(preview, content);
     container.append(card);
   });
@@ -668,6 +687,26 @@ function healthDetails(device) {
   return details;
 }
 
+function deviceDetails(device) {
+  const details = node("details", undefined, "device-details");
+  details.append(node("summary", "Device details"));
+  const list = node("dl", undefined, "device-details__list");
+  const fields = [
+    ["Authentication", device.auth_type === "key" ? "Key-based" : "Legacy token"],
+    ["Last report", formatTimestamp(device.health?.received_at)],
+    ["Playlist", device.health?.applied_playlist_id
+      ? `${device.health.applied_playlist_id} / ${compactIdentifier(device.health.applied_revision)}`
+      : "Not reported"],
+  ];
+  fields.forEach(([label, value]) => {
+    const item = node("div");
+    item.append(node("dt", label), node("dd", value));
+    list.append(item);
+  });
+  details.append(list, healthDetails(device));
+  return details;
+}
+
 function renderDevices(devices) {
   renderResponsiveRecords({
     tableSelector: "#devices",
@@ -681,17 +720,13 @@ function renderDevices(devices) {
         render: (device) => statusBadge(device.enabled ? "Enabled" : "Disabled", device.enabled ? "success" : "neutral"),
       },
       { label: "Health", render: (device) => healthBadge(device.health) },
-      { label: "Authentication", render: (device) => device.auth_type === "key" ? "Key-based" : "Legacy token" },
-      { label: "Last report", render: (device) => formatTimestamp(device.health?.received_at) },
       { label: "Playback", render: (device) => {
         if (device.health?.last_error_code) return `Issue: ${device.health.last_error_code}`;
         const output = device.health?.outputs?.[0];
         if (!output) return "—";
         return output.error_code ? `${output.display_id}: ${output.error_code}` : `${output.display_id}: ${output.status}`;
       } },
-      { label: "Playlist", render: (device) => device.health?.applied_playlist_id
-        ? `${device.health.applied_playlist_id} / ${compactIdentifier(device.health.applied_revision)}` : "—" },
-      { label: "Details", render: (device) => healthDetails(device) },
+      { label: "Details", render: (device) => deviceDetails(device) },
       { label: "Actions", render: (device, layout) => deviceActionButtons(device, layout) },
     ],
     emptyState: {
@@ -753,6 +788,16 @@ function pendingRequestActions(request, layout) {
 }
 
 function renderPendingEnrollments(requests) {
+  const pendingDetails = document.querySelector("#pending-enrollments-details");
+  const requestIDs = new Set(requests.map((request) => request.request_id));
+  const hasNewRequest = requests.some((request) => !pendingEnrollmentIDs.has(request.request_id));
+  document.querySelector("#pending-enrollment-count").textContent = requests.length
+    ? `${requests.length} pending`
+    : "No pending requests";
+  if (!requests.length) pendingDetails.open = false;
+  else if (!pendingEnrollmentsLoaded || hasNewRequest) pendingDetails.open = true;
+  pendingEnrollmentIDs = requestIDs;
+  pendingEnrollmentsLoaded = true;
   renderResponsiveRecords({
     tableSelector: "#pending-enrollments",
     cardsSelector: "#pending-enrollments-mobile",
@@ -777,6 +822,40 @@ function renderPendingEnrollments(requests) {
     cardStatusField: "Status",
   });
 }
+
+function renderFleetAttention(overview, enrollmentRequests) {
+  const items = summarizeFleetAttention(overview, enrollmentRequests);
+  fleetAttention.replaceChildren();
+  if (!items.length) {
+    fleetAttention.classList.add("fleet-attention--clear");
+    fleetAttention.append(node("p", "No current issues need attention.", "fleet-attention__clear"));
+    return;
+  }
+
+  fleetAttention.classList.remove("fleet-attention--clear");
+  fleetAttention.append(node("h3", "Needs attention"));
+  const list = node("ul", undefined, "fleet-attention__list");
+  items.forEach((item) => {
+    const row = node("li");
+    const link = node("a", undefined, "fleet-attention__link");
+    link.href = item.href;
+    link.append(
+      node("strong", item.count),
+      document.createTextNode(` ${item.count === 1 ? item.singular : item.plural}`),
+    );
+    row.append(link);
+    list.append(row);
+  });
+  fleetAttention.append(list);
+}
+
+fleetAttention.addEventListener("click", (event) => {
+  const link = event.target.closest("a[href^='#']");
+  if (!link) return;
+  const target = document.querySelector(link.getAttribute("href"));
+  const disclosure = target?.closest("details");
+  if (disclosure) disclosure.open = true;
+});
 
 function renderSubject(subjectType, subjectID) {
   const subjectLabel = String(subjectType ?? "Unknown");
@@ -837,6 +916,7 @@ async function refresh() {
   latestOverview = overview;
   renderEnvironment(overview.environment);
   renderHealth(overview.asset_health);
+  renderFleetAttention(overview, enrollmentRequests);
   renderPlaylists(overview.playlists);
   renderCaptureTargets(overview.capture_targets ?? []);
   renderDevices(overview.devices);
@@ -982,6 +1062,15 @@ document.querySelector("#dismiss-message").addEventListener("click", () => { mes
 document.querySelector("#run-fleet-analysis").addEventListener("click", runFleetJevAnalysis);
 
 const sectionLinks = [...document.querySelectorAll(".section-nav a")];
+document.querySelector(".section-nav").addEventListener("click", (event) => {
+  const link = event.target.closest("a[href^='#']");
+  if (!link) return;
+  const target = document.querySelector(link.getAttribute("href"));
+  const disclosure = target?.closest("details");
+  if (disclosure) disclosure.open = true;
+  const more = link.closest(".section-nav__more");
+  if (more) more.open = false;
+});
 const observedSections = sectionLinks
   .map((link) => document.querySelector(link.getAttribute("href")))
   .filter(Boolean);
@@ -1080,7 +1169,7 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
     const captureNote = result.capture_count
       ? " Initial screenshots are queued after saving when capacity allows. Recent screenshots and active jobs may be reused."
       : "";
-    showInlineMessage(feedback, `New version ${compactIdentifier(result.revision)} is ready to activate.${captureNote}`);
+    showMessage(`New version ${compactIdentifier(result.revision)} is ready to activate.${captureNote}`);
     formElement.reset();
     resetPlaylistEditor();
     await refresh();
@@ -1091,7 +1180,7 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
 document.querySelector("#cancel-playlist-edit").addEventListener("click", () => {
   playlistForm().reset();
   resetPlaylistEditor();
-  showInlineMessage(document.querySelector("#playlist-feedback"), "Editing cancelled. Your saved versions are unchanged.");
+  showMessage("Editing cancelled. Your saved versions are unchanged.");
 });
 
 document.querySelector("#copy-secret").addEventListener("click", async () => {
