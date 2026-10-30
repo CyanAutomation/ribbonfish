@@ -660,6 +660,24 @@ func TestBundledProfilesLoadWithVerifiedSharedOfflinePlaylist(t *testing.T) {
 			if err != nil {
 				t.Fatalf("config.Load() = %v", err)
 			}
+			if name == "simulator-pi4.json" {
+				wantIDs := []string{"display-left", "display-right"}
+				wantConnectors := []string{"HDMI-A-1", "HDMI-A-2"}
+				if len(cfg.Displays) != len(wantIDs) {
+					t.Fatalf("Pi 4 simulator has %d displays, want %d", len(cfg.Displays), len(wantIDs))
+				}
+				for i := range wantIDs {
+					if got := cfg.Displays[i].ID; got != wantIDs[i] {
+						t.Errorf("Pi 4 simulator display %d ID = %q, want %q", i, got, wantIDs[i])
+					}
+					if got := cfg.Displays[i].Connector; got != wantConnectors[i] {
+						t.Errorf("Pi 4 simulator display %d connector = %q, want %q", i, got, wantConnectors[i])
+					}
+					if got := cfg.Displays[i].Mode; got != "1920x1080@60" {
+						t.Errorf("Pi 4 simulator display %d mode = %q, want 1920x1080@60", i, got)
+					}
+				}
+			}
 			if name == "pi4.json" && cfg.Output.Device != "/dev/dri/by-path/platform-gpu-card" {
 				t.Errorf("Pi 4 default DRM device = %q, want stable KMS alias", cfg.Output.Device)
 			}
