@@ -22,10 +22,15 @@ const Metric = defineComponent({
   component: ({ props }) => {
     const card = document.createElement("article");
     card.className = "fleet-metric";
+    const details = document.createElement("details");
+    details.className = "fleet-metric__details";
+    const summary = document.createElement("summary");
+    summary.textContent = `More about ${props.label.toLowerCase()}`;
+    details.append(summary, textElement("p", props.detail, "fleet-metric-detail"));
     card.append(
       textElement("p", props.label, "fleet-metric-label"),
       textElement("strong", props.value, "fleet-metric-value"),
-      textElement("p", props.detail, "fleet-metric-detail"),
+      details,
     );
     return card;
   },
@@ -149,14 +154,25 @@ const functions = [
   }),
   defineFunction({
     name: "ImageHealth",
-    description: "Summarizes missing images in the active playlist.",
+    description: "Shows a short image availability value for the active playlist.",
     params: z.object({ assets: z.array(z.any()).optional().default([]), active: z.any().optional() }),
     returns: z.string(),
     fn: ({ assets, active }) => !active
       ? "No active playlist"
       : assets.length
-        ? `${assets.length} image${assets.length === 1 ? "" : "s"} missing from the active playlist`
-        : "All active playlist images are available",
+        ? `${assets.length} missing`
+        : "All available",
+  }),
+  defineFunction({
+    name: "ImageHealthDetail",
+    description: "Explains whether active playlist images need attention.",
+    params: z.object({ assets: z.array(z.any()).optional().default([]), active: z.any().optional() }),
+    returns: z.string(),
+    fn: ({ assets, active }) => !active
+      ? "No images can be checked until a playlist is active"
+      : assets.length
+        ? `${assets.length} image${assets.length === 1 ? " is" : "s are"} missing from the active playlist`
+        : "All images in the active playlist are available",
   }),
 ];
 
@@ -187,7 +203,7 @@ export const OPENUI_STARTER_SOURCE = [
   'healthMetric = Metric("Device health", @DeviceHealthSummary(overview.devices), @DeviceHealthDetail(overview.devices))',
   'activeMetric = Metric("Active playlist", @PlaylistLabel(overview.active_playlist), @PlaylistDetail(overview.active_playlist))',
   'readyMetric = Metric("Versions to activate", @ReadyCount(overview.playlists), @ReadyDetail(overview.playlists))',
-  'imageHealth = Notice(@ImageTone(overview.asset_health.missing), "Image availability", @ImageHealth(overview.asset_health.missing, overview.active_playlist))',
+  'imageHealth = Metric("Image availability", @ImageHealth(overview.asset_health.missing, overview.active_playlist), @ImageHealthDetail(overview.asset_health.missing, overview.active_playlist))',
 ].join("\n");
 
 const librarySpec = openUILibrary.toSpec();
