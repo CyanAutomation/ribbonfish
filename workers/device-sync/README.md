@@ -71,11 +71,21 @@ playlist, then activate the revision. These commands use local D1 and R2 only.
 
 The fleet summary uses an internal, read-only OpenUI program backed by the
 framework-independent `@openuidev/lang-core` package. The management panel does
-not expose the editor or generation prompt. The Worker has no AI model binding
-configured yet; model-backed view generation should remain server-side and
-limited to the read-only fleet overview query. Mutations and actions are not
-enabled. The native DOM adapter is bundled with esbuild; no OpenUI framework
-renderer is installed.
+not expose the editor or generation prompt. JEV decisions use a separate
+server-side adapter and do not generate or parse OpenUI Lang. The management UI
+offers an advisory fleet analysis based on summarized device health, playlist,
+asset, and screenshot signals, plus a per-target screenshot skip assessment
+based on bounded operational metadata. Both use fixed typed questions, validate
+JEV's answer types, choices, probabilities, confidence, and score ranges, and
+render the results as ordinary UI data. Neither can change fleet state or
+capture scheduling. Screenshot pixels, raw error details, device identifiers,
+playlist identifiers, and URL query or fragment values are not sent to JEV.
+
+Configure `OPENROUTER_API_KEY` as a secret on the management Worker before using
+JEV. The key is read only by the Worker. The OpenUI fleet snapshot remains
+read-only and deterministic; no OpenUI generation provider is configured. The
+native DOM adapter is bundled with esbuild; no OpenUI framework renderer is
+installed.
 
 `init:local` is only for a fresh local database. It applies `schema.sql` and
 records the migrations already represented by that schema. Production schema

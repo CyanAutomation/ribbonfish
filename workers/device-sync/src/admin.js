@@ -4,10 +4,18 @@ import { isPNG, MAX_ASSET_BYTES, storePngAsset } from "./asset-store.js";
 import { validateCaptureSettings, validateCaptureTargetURL } from "./capture.js";
 import { CaptureTargetNotAllowedError, dispatchDueCaptures, enqueueCapture } from "./capture-workflow.js";
 import { AssetDeletionInProgressError, markAssetLiveStatement } from "./asset-registry.js";
+import { callJevDecision, JEVRequestError } from "./jev.js";
+import {
+  buildCaptureAssessmentState,
+  buildFleetAnalysisState,
+  captureAssessmentQuestions,
+  fleetAnalysisQuestions,
+} from "./jev-use-cases.js";
 
 const MAX_JSON_BYTES = 64 << 10;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ADMIN_FILES = new Map([
   ["/admin/index.html", { key: "admin/index.html", contentType: "text/html; charset=utf-8", maxAge: 60 }],
   ["/admin/app.js", { key: "admin/app.js", contentType: "text/javascript; charset=utf-8", maxAge: 300 }],
@@ -59,6 +67,32 @@ export async function handleAdminRequest(request, env, ctx) {
     if (url.pathname === "/admin/api/overview") {
       if (request.method !== "GET") return methodNotAllowed("GET");
       return jsonResponse(await readOverview(env));
+    }
+
+    if (url.pathname === "/admin/api/jev/fleet-analysis") {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      const data = await readJSON(request);
+      if (!hasExactKeys(data, [])) throw new HTTPError(400, "request body must be an empty JSON object");
+      await enforceJevRateLimit(env, actorID);
+      return jsonResponse(await callJevDecision(env, {
+        state: buildFleetAnalysisState(await readOverview(env)),
+        questions: fleetAnalysisQuestions,
+      }));
+    }
+
+    if (url.pathname === "/admin/api/jev/capture-assessment") {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      const data = await readJSON(request);
+      if (!hasExactKeys(data, ["capture_id"]) || typeof data.capture_id !== "string" || !UUID_PATTERN.test(data.capture_id)) {
+        throw new HTTPError(400, "request body must contain a valid capture_id");
+      }
+      const target = await readCaptureAssessmentTarget(data.capture_id, env);
+      if (!target) throw new HTTPError(404, "that page screenshot is not available for assessment");
+      await enforceJevRateLimit(env, actorID);
+      return jsonResponse(await callJevDecision(env, {
+        state: buildCaptureAssessmentState(target),
+        questions: captureAssessmentQuestions,
+      }));
     }
 
     const deviceHistory = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/health-history$/);
@@ -154,9 +188,37 @@ export async function handleAdminRequest(request, env, ctx) {
 
     return jsonResponse({ error: "not found" }, 404);
   } catch (error) {
+    if (error instanceof JEVRequestError) return jsonResponse({ error: error.message }, error.status);
     if (error instanceof HTTPError) return jsonResponse({ error: error.message }, error.status);
     return jsonResponse({ error: "internal error" }, 500);
   }
+}
+
+async function readCaptureAssessmentTarget(captureID, env) {
+  const target = await env.DB.prepare(
+    "SELECT t.url, t.capture_interval_seconds, t.last_success_at, t.next_due_at, t.failure_count, t.last_error, " +
+    "(SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued', 'running') " +
+    "ORDER BY j.created_at DESC LIMIT 1) AS job_status " +
+    "FROM capture_targets t WHERE t.capture_id = ? AND t.enabled = 1 " +
+    "AND EXISTS (SELECT 1 FROM playlist_capture_items p WHERE p.capture_id = t.capture_id) LIMIT 1",
+  ).bind(captureID).first();
+  if (!target) return null;
+  const history = await env.DB.prepare(
+    "SELECT browser_ms FROM capture_history WHERE capture_id = ? ORDER BY captured_at DESC LIMIT 5",
+  ).bind(captureID).all();
+  return { ...target, history: history.results ?? [] };
+}
+
+async function enforceJevRateLimit(env, actorID) {
+  if (typeof env.ENROLLMENT_RATE_LIMITER?.limit !== "function") {
+    throw new HTTPError(503, "JEV rate limiting is unavailable.");
+  }
+  const key = `jev:${actorID.trim().toLowerCase() || "anonymous"}`;
+  let result;
+  try { result = await env.ENROLLMENT_RATE_LIMITER.limit({ key }); } catch {
+    throw new HTTPError(503, "JEV rate limiting is unavailable.");
+  }
+  if (!result?.success) throw new HTTPError(429, "JEV analysis rate limit reached. Try again shortly.");
 }
 
 function isAllowedAdminEmail(email, configuredEmails) {
