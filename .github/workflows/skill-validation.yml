@@ -1,0 +1,32 @@
+name: Validate repository skills
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/skills/**"
+      - ".github/scripts/validate-skills.mjs"
+      - ".github/scripts/tests/validate-skills.test.mjs"
+      - ".github/workflows/skill-validation.yml"
+  # Keep this unfiltered so required checks are reported for every PR.
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Test the skill validator
+        run: node --test .github/scripts/tests/validate-skills.test.mjs
+      - name: Validate skill metadata and links
+        run: node .github/scripts/validate-skills.mjs

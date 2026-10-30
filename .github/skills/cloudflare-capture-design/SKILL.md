@@ -16,9 +16,9 @@ Use this skill when implementing, reviewing, or planning the management Worker's
 - Allow at most one Ribbonfish capture to execute at a time across the deployment. Route scheduled, manual, and retry work through one Queue consumer with batch size and concurrency set to one; await the complete capture and publication flow before acknowledging.
 - Do not rely on Queue configuration alone. Use deduplication, idempotency, D1-backed leases/ownership checks, and safe handling of duplicate delivery or lease expiry to prevent overlapping browser work.
 - Durable Objects are out of scope for scheduling, presence, push commands, or display coordination. Do not introduce sub-minute timers or delayed-message loops.
-- Coalesce due work so that each render variant has at most one queued or running capture. Bound pending age, queue depth, retries, and backoff; do not let a failed variant block all others indefinitely.
-- Keep Browser Sessions creation limits, Quick Actions request limits, and daily browser-time budgets as distinct controls. Serial concurrency does not bypass account-wide rate or usage limits. Defer or skip work when exhausted; do not retry quota failures in a tight loop.
-- Publish immutable versioned screenshots, update metadata/pointers only after the new object is verified, then enforce retention at no more than 10 captures per variant and no older than 30 days, whichever limit is reached first.
+- Coalesce due work so that each current capture target has at most one queued or running capture. Bound pending age, queue depth, retries, and backoff; do not let a failed target block all others indefinitely.
+- The current implementation uses Quick Actions. Keep its request spacing/rate limits and daily browser-time budget distinct; serial concurrency does not bypass account-wide usage limits. If persistent Browser Sessions are introduced later, model their quotas separately. Defer or skip work when exhausted; do not retry quota failures in a tight loop.
+- Publish immutable content-addressed PNGs, update playlist capture state only after the new object is verified, then enforce retention at no more than 10 images per target and no older than 30 days, whichever limit is reached first.
 - Scope render-variant reuse to matching rendering inputs and authorization scope. Protect private screenshots and credentials; allow-list render targets and block private-network and metadata-service SSRF paths.
 
 ## Workflow shape
@@ -33,7 +33,7 @@ Record operational signals for queue depth, capture duration, last successful ca
 
 ## Current implementation and checks
 
-Capture target validation, interval validation, scheduling state, queue processing, publication, retention, and reconciliation live under `workers/device-sync/src/` and are covered by the Worker test suite. From `workers/device-sync/`, run:
+The application models reusable URL/viewport capture targets; it does not implement the broader authenticated render-variant model described in some architecture notes. Capture target validation, interval validation, scheduling state, queue processing, publication, retention, and reconciliation live under `workers/device-sync/src/` and are covered by the Worker test suite. From `workers/device-sync/`, run:
 
 ```sh
 npm test
