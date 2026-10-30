@@ -1,13 +1,13 @@
 ---
 name: cloudflare-capture-design
-description: Design Ribbonfish Cloudflare screenshot capture and scheduling services while preserving serial execution, quota, retention, and security constraints.
-tags: [ribbonfish, cloudflare, architecture, scheduling, capture]
-relatedSkills: [raspberry-pi-deployment, go-agent-development]
+description: Implement, review, or plan Ribbonfish Cloudflare screenshot capture and scheduling while preserving serial execution, quota, retention, and security constraints.
+tags: [ribbonfish, cloudflare, workers, architecture, scheduling, capture]
+relatedSkills: [cloudflare-worker-operations, cloudflare-management-console, cloudflare-asset-lifecycle]
 ---
 
 # Cloudflare Capture Design
 
-Use this skill when planning or implementing the proposed screenshot scheduler, renderer, queues, or capture publication flow. Device sync and a development-only playlist/device management API are implemented separately. Confirm current Cloudflare product limits and API behavior before treating proposal details as provider guarantees.
+Use this skill when implementing, reviewing, or planning the management Worker's screenshot scheduler, Browser Run Quick Actions, queues, or capture publication flow. Capture code is implemented but has not been deployed to production; production activation requires prerequisites documented in the Worker guide. Device sync and the Access-protected management UI/API are implemented separately. Confirm current Cloudflare product limits and API behavior before treating configured limits as provider guarantees.
 
 ## Non-negotiable architecture constraints
 
@@ -31,8 +31,20 @@ Use this skill when planning or implementing the proposed screenshot scheduler, 
 
 Record operational signals for queue depth, capture duration, last successful capture age, deferred/skipped work, budget remaining, and provider rate-limit responses. Size capacity from aggregate render time and budget; a one-slot queue can make nominal 60-second schedules late.
 
+## Current implementation and checks
+
+Capture target validation, interval validation, scheduling state, queue processing, publication, retention, and reconciliation live under `workers/device-sync/src/` and are covered by the Worker test suite. From `workers/device-sync/`, run:
+
+```sh
+npm test
+npm run check:config
+```
+
+Review `capture.test.js`, `capture-workflow.test.js`, and the asset maintenance tests when changing those paths. Local Wrangler development uses local D1/R2 but may invoke the remote Browser binding, which consumes the configured account's usage. Do not enable production capture until the required queues, migrations, host allowlist, Browser binding, and quota checks are in place.
+
 ## References
 
 - [Repository architecture and capture policy](../../../README.md)
 - [Copilot project constraints](../../copilot-instructions.md)
-- [Current implementation status](../../../docs/agent-foundation.md)
+- [Worker implementation and production prerequisites](../../../workers/device-sync/README.md)
+- [Current implementation status](../../../README.md)
