@@ -91,8 +91,13 @@ hardware profile, maps one DRM card, and mounts one persistent state volume for
 the cache, last-good playlist, frames, and device identity. It runs non-root
 with a read-only root filesystem and no added capabilities. The network stays
 disabled unless `RIBBONFISH_NETWORK_MODE=bridge` is selected for initial device
-approval or sync. `.env.example` matches the Ribbonfish Pi 3 A Plus: profile `pi3a-plus`,
-`/dev/dri/card0`, and video GID 44. Verify those values on each host. Protected
+approval or sync. `.env.example` keeps the validated Ribbonfish Pi 3 A Plus
+values (`pi3a-plus`, `/dev/dri/card0`, and video GID 44) and documents the Pi 4
+override. Pi 4 deployments should use
+`/dev/dri/by-path/platform-gpu-card` rather than assuming a `cardN` number,
+because DRM card numbering varies with driver probe order. The deployment
+helper follows the alias when reading its device group. Verify the alias and
+group on each host. Protected
 `main` pushes that change `agent/**` publish ARMv7/ARM64 images to GHCR and
 multi-architecture images to Docker Hub.
 

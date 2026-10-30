@@ -7,7 +7,7 @@
   },
   "output": {
     "backend": "drm",
-    "device": "/dev/dri/card1",
+    "device": "/dev/dri/by-path/platform-gpu-card",
     "fit": "contain"
   },
   "displays": [

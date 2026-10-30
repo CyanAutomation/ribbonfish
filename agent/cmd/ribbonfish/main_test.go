@@ -228,6 +228,64 @@ func TestCheckDRMDisplaysMatchesConnectedConfiguredConnector(t *testing.T) {
 	}
 }
 
+func TestCheckDRMDisplaysAcceptsStableByPathAlias(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("DRM device identity matching is Linux-specific")
+	}
+	t.Setenv("RIBBONFISH_CACHE_DIR", "")
+	t.Setenv("RIBBONFISH_DRM_DEVICE", "")
+	dir := t.TempDir()
+	devRoot := filepath.Join(dir, "dev", "dri")
+	aliasDir := filepath.Join(devRoot, "by-path")
+	if err := os.MkdirAll(aliasDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	devicePath := filepath.Join(aliasDir, "platform-gpu-card")
+	if err := os.Symlink(os.DevNull, devicePath); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "config.json")
+	configBody := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"backend":"drm","device":"DEVICE_PATH","fit":"contain"},"playlist":{"id":"default","rotation_interval":"15s","assets":[{"path":"asset.png"}]},"displays":[{"id":"display-main","connector":"HDMI-A-1","mode":"preferred"}]}`
+	configBody = strings.Replace(configBody, "DEVICE_PATH", devicePath, 1)
+	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sysfsRoot := filepath.Join(dir, "sysfs", "drm")
+	cardDevice := filepath.Join(sysfsRoot, "card0", "device")
+	if err := os.MkdirAll(cardDevice, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sysfsRoot, "card0", "dev"), []byte("1:3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	driver := filepath.Join(sysfsRoot, "drivers", "vc4-drm")
+	if err := os.MkdirAll(driver, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(driver, filepath.Join(cardDevice, "driver")); err != nil {
+		t.Fatal(err)
+	}
+	connector := filepath.Join(sysfsRoot, "card0-HDMI-A-1")
+	if err := os.MkdirAll(connector, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(connector, "status"), []byte("connected\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(connector, "modes"), []byte("1920x1080\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := checkDRMDisplays(configPath, sysfsRoot, devRoot, &output); err != nil {
+		t.Fatalf("checkDRMDisplays() rejected the stable device alias: %v", err)
+	}
+	if !strings.Contains(output.String(), "device="+devicePath) {
+		t.Fatalf("checkDRMDisplays() output = %q, want configured device alias", output.String())
+	}
+}
+
 func TestRunSyncLoopPersistsAndActivatesVerifiedContent(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := filepath.Join(dir, "old.png")
@@ -550,7 +608,7 @@ func TestExampleConfigsLoadAndValidate(t *testing.T) {
 		{path: "examples/raspberry-pi/simulator-config.pi3a-plus.json", backend: "simulator", displayIDs: []string{"display-main"}, firstConnector: "HDMI-A-1", firstMode: "1920x1080@60"},
 		{path: "examples/raspberry-pi/hardware-config.pi3a-plus.json", backend: "drm", displayIDs: []string{"display-main"}, firstConnector: "HDMI-A-1", device: "/dev/dri/card0", firstMode: "preferred"},
 		{path: "examples/raspberry-pi/hardware-config.pi3b.json", backend: "drm", displayIDs: []string{"display-main"}, firstConnector: "HDMI-A-1", device: "/dev/dri/card0", firstMode: "preferred"},
-		{path: "examples/raspberry-pi/hardware-config.pi4.json", backend: "drm", displayIDs: []string{"display-left", "display-right"}, firstConnector: "HDMI-A-1", device: "/dev/dri/card1", firstMode: "preferred"},
+		{path: "examples/raspberry-pi/hardware-config.pi4.json", backend: "drm", displayIDs: []string{"display-left", "display-right"}, firstConnector: "HDMI-A-1", device: "/dev/dri/by-path/platform-gpu-card", firstMode: "preferred"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
@@ -596,6 +654,9 @@ func TestBundledProfilesLoadWithVerifiedSharedOfflinePlaylist(t *testing.T) {
 			cfg, err := config.Load(filepath.Join(defaults, name))
 			if err != nil {
 				t.Fatalf("config.Load() = %v", err)
+			}
+			if name == "pi4.json" && cfg.Output.Device != "/dev/dri/by-path/platform-gpu-card" {
+				t.Errorf("Pi 4 default DRM device = %q, want stable KMS alias", cfg.Output.Device)
 			}
 			if sharedPlaylist == nil {
 				playlistCopy := cfg.Playlist
