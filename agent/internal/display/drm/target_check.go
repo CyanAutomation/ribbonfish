@@ -44,7 +44,7 @@ func ValidateTargets(devicePath string, targets []DisplayTarget, connectors []Co
 			return fmt.Errorf("DRM connector %q for display %q not found", name, id)
 		}
 		sameDevice := filepath.Clean(found.Device) == devicePath
-		configuredDeviceNumber, configuredDevicePresent := deviceNodeNumber(devicePath)
+		configuredDeviceNumber, configuredDevicePresent := DeviceNodeNumber(devicePath)
 		if !sameDevice && configuredDevicePresent && found.deviceNumber != "" && configuredDeviceNumber == found.deviceNumber {
 			sameDevice = true
 		}

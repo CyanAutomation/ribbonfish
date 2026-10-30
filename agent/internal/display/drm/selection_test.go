@@ -76,7 +76,7 @@ func TestValidateTargetsMatchesConfiguredHardware(t *testing.T) {
 }
 
 func TestValidateTargetsAcceptsStableByPathDeviceAlias(t *testing.T) {
-	deviceNumber, ok := deviceNodeNumber(os.DevNull)
+	deviceNumber, ok := DeviceNodeNumber(os.DevNull)
 	if !ok {
 		t.Skip("character-device identity is available only on Linux")
 	}
