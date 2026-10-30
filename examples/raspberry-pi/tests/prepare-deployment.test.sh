@@ -38,6 +38,9 @@ if grep -Eq '^(RIBBONFISH_VERSION|RIBBONFISH_CACHE_DIR|RIBBONFISH_SYNC_INTERVAL)
 	echo '.env.example contains a fixed tag or redundant defaults' >&2
 	exit 1
 fi
+grep -F '# RIBBONFISH_PROFILE=pi4' "$target_dir/.env.example"
+grep -F '# RIBBONFISH_DRM_DEVICE=/dev/dri/by-path/platform-gpu-card' "$target_dir/.env.example"
+grep -F 'pi4) default_device=/dev/dri/by-path/platform-gpu-card ;;' "$script_dir/prepare-deployment.sh"
 
 mkdir -p "$temp_dir/bin"
 cat > "$temp_dir/bin/stat" <<'EOF'
@@ -141,6 +144,35 @@ echo 'installer unexpectedly invoked git' >&2
 exit 99
 EOF
 chmod +x "$temp_dir/bin/sleep" "$temp_dir/bin/git"
+
+# A by-path DRM selector is a symlink. Preparation and verification must read
+# the target device group, not the symlink's group.
+symlink_gid=$(stat -c '%g' "$temp_dir" 2>/dev/null || stat -f '%g' "$temp_dir")
+drm_target=
+drm_target_gid=
+for candidate in /dev/null /dev/zero /dev/tty /dev/full /dev/random /dev/urandom; do
+	[ -c "$candidate" ] || continue
+	candidate_gid=$(stat -L -c '%g' "$candidate" 2>/dev/null || stat -L -f '%g' "$candidate" 2>/dev/null || true)
+	if [ -n "$candidate_gid" ] && [ "$candidate_gid" != "$symlink_gid" ]; then
+		drm_target=$candidate
+		drm_target_gid=$candidate_gid
+		break
+	fi
+done
+if [ -n "$drm_target" ]; then
+	pi4_drm_link="$temp_dir/platform-gpu-card"
+	ln -s "$drm_target" "$pi4_drm_link"
+	pi4_target="$HOME/containers/pi4-by-path"
+	sh "$script_dir/prepare-deployment.sh" --target "$pi4_target" \
+		--profile pi4 --drm-device "$pi4_drm_link"
+	grep -Fx 'RIBBONFISH_PROFILE=pi4' "$pi4_target/.env"
+	grep -Fx "RIBBONFISH_DRM_DEVICE=$pi4_drm_link" "$pi4_target/.env"
+	grep -Fx "RIBBONFISH_DRM_GID=$drm_target_gid" "$pi4_target/.env"
+	RIBBONFISH_DEPLOYMENT_DIR="$pi4_target" PATH="$temp_dir/bin:$PATH" \
+		sh "$script_dir/verify-deployment.sh" --preflight
+else
+	printf '%s\n' 'skipping symlink group assertions: no character device with a distinct group was found'
+fi
 owner_repair_target="$HOME/containers/root-owned-empty"
 mkdir -p "$owner_repair_target"
 chmod 0555 "$owner_repair_target"

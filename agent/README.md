@@ -35,6 +35,15 @@ DRM card, connectors, and requested resolutions with that sysfs information.
 It is also read-only and does not acquire DRM master or change display state;
 the actual DRM backend must still be tested on hardware.
 
+On Raspberry Pi 4, card numbering can differ between devices because the V3D
+render driver and VC4 KMS display driver may probe in a different order. The
+Pi deployment guide uses `/dev/dri/by-path/platform-gpu-card` to select the KMS
+device and explains how to inspect its target and group. The preflight check
+matches that alias to the connector's sysfs card by Linux device number, so it
+does not depend on the host and container using the same `/dev/dri/cardN`
+spelling. Physical dual-HDMI scanout still requires acceptance on the target
+hardware.
+
 Build and test the module with:
 
 ```sh

@@ -81,6 +81,31 @@ func TestDiscoverDoesNotTreatRegularFileAsDRMCardNode(t *testing.T) {
 	}
 }
 
+func TestDiscoverCapturesCardDeviceNumber(t *testing.T) {
+	sysfsRoot := t.TempDir()
+	devRoot := filepath.Join(t.TempDir(), "dri")
+	fixture := newDRMFixture(t, sysfsRoot, devRoot)
+	fixture.addCard(0, "vc4-drm")
+	fixture.addConnector(0, "HDMI-A-1", "connected", []string{"1920x1080"})
+	if err := os.WriteFile(filepath.Join(sysfsRoot, "card0", "dev"), []byte("226:0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(devRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(os.DevNull, filepath.Join(devRoot, "card0")); err != nil {
+		t.Fatal(err)
+	}
+
+	connectors, err := Discover(sysfsRoot, devRoot)
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	if len(connectors) != 1 || connectors[0].deviceNumber != "226:0" {
+		t.Fatalf("Discover() device number = %#v, want 226:0", connectors)
+	}
+}
+
 func TestDiscoverIgnoresDRMNodesWithoutConnectorStatus(t *testing.T) {
 	sysfsRoot := t.TempDir()
 	devRoot := filepath.Join(t.TempDir(), "dri")
