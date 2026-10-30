@@ -58,6 +58,13 @@ func (output *PairingOutput) Present(ctx context.Context, displayID string, fram
 
 func (output *PairingOutput) Close() error { return output.backend.Close() }
 
+// DisplayAvailable preserves backend availability information through the
+// pairing overlay.
+func (output *PairingOutput) DisplayAvailable(displayID string) bool {
+	availability, ok := output.backend.(Availability)
+	return !ok || availability.DisplayAvailable(displayID)
+}
+
 // RenderPairingCard creates a self-contained bitmap so the agent can show a
 // device identity without adding a font or graphics dependency.
 func RenderPairingCard(bounds image.Rectangle, status, deviceID, fingerprint string) *image.RGBA {

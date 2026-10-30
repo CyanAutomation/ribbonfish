@@ -110,11 +110,16 @@ manually.
 `verify-deployment.sh --preflight` requires the image to be present locally, so
 pull it first. Preflight validates the resolved image and Compose configuration,
 then starts a temporary non-networked container to check the configured DRM
-connector and requested resolution through sysfs. It does not change scanout.
+connector and requested resolution through sysfs. A disconnected configured
+connector is reported as a warning and does not prevent startup; other device,
+connector, or mode configuration errors still fail preflight. The running agent
+marks disconnected outputs as `connector_disconnected` and reports degraded
+health while continuing to render on available displays. Preflight does not
+change scanout.
 After `up -d`, the full verifier repeats that check, confirms that the running
 container uses the configured image ID, and waits up to 30 seconds for the
-agent to log a successful frame update. Set `RIBBONFISH_VERIFY_TIMEOUT` to
-change that startup wait. Use these commands to
+agent to log a successful frame update on an available display. Set
+`RIBBONFISH_VERIFY_TIMEOUT` to change that startup wait. Use these commands to
 inspect connector metadata, validate configured targets in the running image,
 or follow the agent logs:
 

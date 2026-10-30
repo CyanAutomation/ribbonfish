@@ -75,6 +75,28 @@ func TestValidateTargetsMatchesConfiguredHardware(t *testing.T) {
 	}
 }
 
+func TestValidateTargetsAllowDisconnectedReportsUnavailableDisplay(t *testing.T) {
+	connector := Connector{
+		Card:              0,
+		Name:              "HDMI-A-2",
+		Device:            "/dev/dri/card0",
+		DeviceNodePresent: true,
+		Status:            "disconnected",
+	}
+	target := DisplayTarget{ID: "display-right", Connector: "HDMI-A-2", Mode: "preferred"}
+
+	unavailable, err := ValidateTargetsAllowDisconnected("/dev/dri/card0", []DisplayTarget{target}, []Connector{connector})
+	if err != nil {
+		t.Fatalf("ValidateTargetsAllowDisconnected() error = %v", err)
+	}
+	if len(unavailable) != 1 || unavailable[0] != target {
+		t.Fatalf("unavailable targets = %#v, want %#v", unavailable, []DisplayTarget{target})
+	}
+	if err := ValidateTargets("/dev/dri/card0", []DisplayTarget{target}, []Connector{connector}); err == nil || !strings.Contains(err.Error(), "disconnected") {
+		t.Fatalf("ValidateTargets() error = %v, want strict disconnected diagnostic", err)
+	}
+}
+
 func TestValidateTargetsAcceptsStableByPathDeviceAlias(t *testing.T) {
 	deviceNumber, ok := DeviceNodeNumber(os.DevNull)
 	if !ok {
@@ -184,6 +206,61 @@ func TestOutputMapsLogicalDisplaysToConfiguredConnectors(t *testing.T) {
 	}
 	if err := output.Present(context.Background(), "right", frame); err == nil {
 		t.Fatal("Present() succeeded after Close()")
+	}
+}
+
+func TestOutputKeepsConnectedDisplaysWhenAnotherConnectorIsDisconnected(t *testing.T) {
+	device := &fakeKMSDevice{connectors: []ConnectorInfo{
+		{Name: "HDMI-A-1", ID: 1, Connected: true, Modes: []ModeInfo{{Name: "1920x1080", Width: 1920, Height: 1080, Refresh: 60, Preferred: true}}},
+		{Name: "HDMI-A-2", ID: 2, Connected: false},
+	}}
+	output, err := newOutputWithDevice(device, []DisplayTarget{
+		{ID: "left", Connector: "HDMI-A-1", Mode: "preferred"},
+		{ID: "right", Connector: "HDMI-A-2", Mode: "preferred"},
+	}, display.FitContain)
+	if err != nil {
+		t.Fatalf("newOutputWithDevice() error = %v, want disconnected output to be skipped", err)
+	}
+	defer output.Close()
+	if len(device.opened) != 1 || device.opened[0].connector.Name != "HDMI-A-1" {
+		t.Fatalf("opened surfaces = %#v, want only HDMI-A-1", device.opened)
+	}
+	if !output.DisplayAvailable("left") || output.DisplayAvailable("right") {
+		t.Fatalf("display availability: left=%v right=%v", output.DisplayAvailable("left"), output.DisplayAvailable("right"))
+	}
+	unavailable := output.UnavailableDisplays()
+	if len(unavailable) != 1 || unavailable[0].ID != "right" || unavailable[0].Connector != "HDMI-A-2" {
+		t.Fatalf("UnavailableDisplays() = %#v, want right on HDMI-A-2", unavailable)
+	}
+	frame := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	if err := output.Present(context.Background(), "left", frame); err != nil {
+		t.Fatalf("Present() on connected display error = %v", err)
+	}
+	if err := output.Present(context.Background(), "right", frame); err == nil || !strings.Contains(err.Error(), "disconnected") {
+		t.Fatalf("Present() on disconnected display error = %v, want disconnected diagnostic", err)
+	}
+}
+
+func TestOutputStartsWhenAllConfiguredConnectorsAreDisconnected(t *testing.T) {
+	device := &fakeKMSDevice{connectors: []ConnectorInfo{
+		{Name: "HDMI-A-1", ID: 1, Connected: false},
+		{Name: "HDMI-A-2", ID: 2, Connected: false},
+	}}
+	output, err := newOutputWithDevice(device, []DisplayTarget{
+		{ID: "left", Connector: "HDMI-A-1", Mode: "preferred"},
+		{ID: "right", Connector: "HDMI-A-2", Mode: "preferred"},
+	}, display.FitContain)
+	if err != nil {
+		t.Fatalf("newOutputWithDevice() error = %v, want output to start without connected displays", err)
+	}
+	if len(device.opened) != 0 || len(output.UnavailableDisplays()) != 2 {
+		t.Fatalf("opened=%d unavailable=%#v, want no surfaces and two unavailable displays", len(device.opened), output.UnavailableDisplays())
+	}
+	if err := output.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if !device.closed {
+		t.Fatal("Close() did not close the DRM device")
 	}
 }
 
