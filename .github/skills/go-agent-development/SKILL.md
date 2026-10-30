@@ -17,7 +17,7 @@ Useful package boundaries:
 
 | Package | Responsibility |
 | --- | --- |
-| `internal/config` | Version 1 JSON contract, validation, and config-relative path resolution |
+| `internal/config` | Version 2 JSON contract, validation, and config-relative path resolution |
 | `internal/agent` | Compose cache, schedules, output, and cancellation-aware playback loops |
 | `internal/cache` | Content-addressed image storage and recovery |
 | `internal/playlist` | Deterministic per-display schedule calculations |
