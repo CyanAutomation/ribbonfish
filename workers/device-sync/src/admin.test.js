@@ -26,6 +26,7 @@ class FakeDatabase {
     this.activePlaylist = { playlist_id: "welcome", revision: "revision-1" };
     this.auditEvents = [];
     this.assetIntegrityIssues = [];
+    this.mutationCalls = 0;
   }
 
   prepare(sql) {
@@ -91,6 +92,7 @@ class FakeDatabase {
         return { results: [] };
       },
       async run() {
+        database.mutationCalls++;
         await database.apply(sql, values);
         return { meta: { changes: 1 } };
       },
@@ -98,6 +100,7 @@ class FakeDatabase {
   }
 
   async batch(statements) {
+    this.mutationCalls++;
     let previousChanges = 1;
     const results = [];
     for (const statement of statements) {
@@ -253,7 +256,7 @@ test("JEV decision routes stop before provider calls when the per-admin limit is
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("JEV screenshot assessment uses only sanitized capture metadata and never schedules a skip", async () => {
+test("JEV screenshot skip recommendations are advisory and cause no capture writes or queue sends", async () => {
   const env = testEnvironment();
   env.OPENROUTER_API_KEY = "test-secret";
   env.DB.captureTarget = {
@@ -266,6 +269,10 @@ test("JEV screenshot assessment uses only sanitized capture metadata and never s
     job_status: null,
   };
   env.DB.captureHistory = [{ browser_ms: 1000 }];
+  let queueSends = 0;
+  env.CAPTURE_QUEUE = { async send() { queueSends++; } };
+  const dueAtBefore = env.DB.captureTarget.next_due_at;
+  const mutationsBefore = env.DB.mutationCalls;
   let sentState;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, options) => {
@@ -285,7 +292,19 @@ test("JEV screenshot assessment uses only sanitized capture metadata and never s
     assert.equal((await response.json()).answers.recommendation.choice, "skip_once");
     assert.doesNotMatch(sentState, /user|pass|private|token|secret/);
     assert.equal(env.DB.auditEvents.length, 0);
+    assert.equal(env.DB.captureTarget.next_due_at, dueAtBefore);
+    assert.equal(env.DB.mutationCalls, mutationsBefore);
+    assert.equal(queueSends, 0);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("JEV screenshot assessment rejects malformed UUIDs before reading capture state", async () => {
+  const env = testEnvironment();
+  const response = await handleAdminRequest(request("/admin/api/jev/capture-assessment", {
+    method: "POST", body: { capture_id: "------------------------------------" },
+  }), env);
+  assert.equal(response.status, 400);
+  assert.equal(env.DB.mutationCalls, 0);
 });
 
 test("Access-protected management routes reject requests without an identity", async () => {

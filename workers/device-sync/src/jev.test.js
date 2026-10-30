@@ -33,7 +33,11 @@ test("JEV decision primitive sends a typed decision request and returns validate
       requested = { url: String(url), options, body: JSON.parse(options.body) };
       return Response.json({
         model: "typesafe/jev-1.13",
-        answers: sampleAnswers,
+        answers: {
+          ...sampleAnswers,
+          recommendation: { ...sampleAnswers.recommendation, provider_debug: "must not reach the caller" },
+          risk: { ...sampleAnswers.risk, private_context: "must not reach the caller" },
+        },
         usage: { cost: 0.00001 },
         id: "decision-1",
       });
@@ -45,6 +49,7 @@ test("JEV decision primitive sends a typed decision request and returns validate
   assert.equal(requested.body.model, "~typesafe/jev-latest");
   assert.equal(requested.body.state, "compact state");
   assert.deepEqual(result.answers, sampleAnswers);
+  assert.doesNotMatch(JSON.stringify(result.answers), /provider_debug|private_context/);
   assert.equal(result.id, "decision-1");
 });
 
