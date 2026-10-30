@@ -15,6 +15,7 @@ import {
 const MAX_JSON_BYTES = 64 << 10;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ADMIN_FILES = new Map([
   ["/admin/index.html", { key: "admin/index.html", contentType: "text/html; charset=utf-8", maxAge: 60 }],
   ["/admin/app.js", { key: "admin/app.js", contentType: "text/javascript; charset=utf-8", maxAge: 300 }],
@@ -82,7 +83,7 @@ export async function handleAdminRequest(request, env, ctx) {
     if (url.pathname === "/admin/api/jev/capture-assessment") {
       if (request.method !== "POST") return methodNotAllowed("POST");
       const data = await readJSON(request);
-      if (!hasExactKeys(data, ["capture_id"]) || typeof data.capture_id !== "string" || !/^[a-f0-9-]{36}$/i.test(data.capture_id)) {
+      if (!hasExactKeys(data, ["capture_id"]) || typeof data.capture_id !== "string" || !UUID_PATTERN.test(data.capture_id)) {
         throw new HTTPError(400, "request body must contain a valid capture_id");
       }
       const target = await readCaptureAssessmentTarget(data.capture_id, env);

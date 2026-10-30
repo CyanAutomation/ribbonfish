@@ -49,7 +49,7 @@ export async function callJevDecision(env, {
     return {
       model: typeof payload.model === "string" ? payload.model.slice(0, 120) : null,
       id: typeof payload.id === "string" ? payload.id.slice(0, 160) : null,
-      answers: payload.answers,
+      answers: normalizeAnswers(payload.answers, questions),
       usage: normalizeUsage(payload.usage),
     };
   } catch (error) {
@@ -66,6 +66,30 @@ export function validateAnswers(answers, questions) {
   const expected = Object.keys(questions).sort();
   if (Object.keys(answers).sort().join("\0") !== expected.join("\0")) return false;
   return expected.every((key) => validateAnswer(answers[key], questions[key]));
+}
+
+function normalizeAnswers(answers, questions) {
+  return Object.fromEntries(Object.entries(questions).map(([key, question]) => {
+    const answer = answers[key];
+    if (question.type === "noul") {
+      return [key, {
+        type: "noul",
+        noul: answer.noul,
+        ...(answer.confidence === undefined ? {} : { confidence: answer.confidence }),
+      }];
+    }
+    const probabilities = Object.fromEntries(Object.entries(answer.probabilities));
+    if (question.type === "choice") {
+      return [key, { type: "choice", choice: answer.choice, probabilities, confidence: answer.confidence }];
+    }
+    return [key, {
+      type: "score",
+      score: answer.score,
+      legend: Object.fromEntries(Object.entries(answer.legend)),
+      probabilities,
+      confidence: answer.confidence,
+    }];
+  }));
 }
 
 function validateAnswer(answer, question) {
