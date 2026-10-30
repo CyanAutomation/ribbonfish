@@ -4,7 +4,7 @@
 
 **Ribbonfish** is a Cloudflare-native platform for centrally managing information-only screens on lightweight Linux devices (primarily Raspberry Pi 3B/4). It renders websites remotely, distributes versioned screenshots, and displays them through Linux DRM/KMS without requiring a browser or desktop environment on the device.
 
-**Status:** The repository includes the Go agent, authenticated Cloudflare device sync, and a production playlist/device management UI and API protected by Cloudflare Access. The device-sync Worker keeps management routes disabled. Local console work uses Wrangler's local D1/R2 emulation; no public development Worker is deployed. Screenshot capture remains proposed; physical Raspberry Pi DRM/KMS support is only partially validated.
+**Status:** The repository includes the Go agent, authenticated Cloudflare device sync and enrollment, and a production playlist/device management UI and API protected by Cloudflare Access. The device-sync Worker keeps management routes disabled. Local console work uses Wrangler's local D1/R2 emulation; no public development Worker is deployed. Capture scheduling and rendering code is implemented in the management Worker but has not been deployed; production queues and D1 migrations must be prepared first. DRM/KMS is experimental and physically validated on one Pi 3 A Plus; Pi 3B and Pi 4 dual-output remain unverified.
 
 ## Key Architectural Principles
 
@@ -46,16 +46,16 @@ This is a **proposed monorepo layout** for the full implementation (not yet in p
 └── README.md
 ```
 
-Current state: the Go agent and device-sync Worker are implemented. The production management API supports playlist revisions, enrollment codes, device controls, token rotation, audit events, and asset health behind Cloudflare Access. Browser rendering/scheduling remains design-stage, and the DRM/KMS backend still needs Pi 3B and Pi 4 dual-output acceptance.
+Current state: the Go agent and device-sync Worker are implemented. The production management API supports playlist revisions, key-based enrollment approval, device controls, legacy token rotation, audit events, and asset health behind Cloudflare Access. Capture scheduling and rendering code is present but not deployed. The DRM/KMS backend still needs Pi 3B and Pi 4 dual-output acceptance.
 
 ## Cloudflare Services and Responsibilities
 
 | Service | Role |
 |---------|------|
-| **Workers** | Authenticated device endpoints and an Access-protected production management API/UI; capture services remain proposed |
-| **D1** | Playlists, devices, enrollment codes, last-poll time, and management audit events; site/variant/capture state remains proposed |
-| **Browser Run** | Proposed headless page rendering and screenshot capture |
-| **R2** | Private content-addressed playlist assets; screenshot publication and retention remain proposed |
+| **Workers** | Authenticated device endpoints and an Access-protected production management API/UI; capture code is implemented but not deployed |
+| **D1** | Playlists, devices, enrollment, telemetry, audit events, capture state, and asset reconciliation metadata |
+| **Browser Run** | Quick Action capture integration in the management Worker; production use awaits operational prerequisites |
+| **R2** | Private content-addressed PNG assets for uploads and captures; capture retention and reconciliation are implemented in code |
 | **Queues** | Single-consumer, single-message capture execution with bounded retries |
 | **Cron (Scheduled Worker)** | Runs every minute; enqueues deduplicated due-variant captures from D1 |
 
@@ -137,7 +137,7 @@ Variants are **keyed by rendering inputs + access permissions**; reuse across di
 ## Security Principles
 
 - Per-device identities, TLS transport, credential rotation and revocation
-- Per-device authorization is implemented. Administrator authentication is deferred for pre-production and required before production; the default Worker config disables the development admin API.
+- Per-device authorization is implemented. Production administration is protected by Cloudflare Access plus a Worker-side email allowlist; the device-sync Worker keeps admin routes disabled.
 - No secrets in screenshots, configs, logs, or repository history
 - Allow-listed render targets; SSRF protection (private networks, metadata endpoints)
 - Isolate credentials for protected pages; no credential reuse across unrelated scopes
@@ -192,6 +192,10 @@ it does not satisfy physical hardware acceptance criteria.
 - Don't send protected screenshot pixels to JEV without explicit opt-in
 - Don't delete current manifest pointers before verifying replacement writes to R2
 - Don't commit secrets, device tokens, or screenshot content to the repository
+
+## Repository skills
+
+Use the focused guides under [`.github/skills`](skills/README.md) for agent development, device sync and enrollment, management, worker operations, asset lifecycle, capture workflows, and Pi deployment.
 
 ## Links
 

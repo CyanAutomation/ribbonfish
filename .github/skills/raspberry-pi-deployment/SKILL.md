@@ -1,6 +1,6 @@
 ---
 name: raspberry-pi-deployment
-description: Use Ribbonfish's simulator and experimental Linux DRM/KMS Raspberry Pi deployment without overstating unvalidated HDMI support.
+description: Deploy Ribbonfish's simulator or experimental Linux DRM/KMS Raspberry Pi agent while distinguishing verified hardware from untested profiles.
 tags: [ribbonfish, raspberry-pi, docker-compose, drm, deployment]
 relatedSkills: [container-smoke-testing, offline-playback-cache, go-agent-development]
 ---
@@ -14,7 +14,7 @@ Use this skill for `examples/raspberry-pi/`, Pi host diagnostics, or questions a
 - `docker-compose.simulator.yaml` is a software simulator for a native ARM64 Docker host. It has no network or DRM device access and writes PNGs to Docker volumes.
 - `docker-compose.yaml` runs the bundled profile and sample assets through the experimental DRM/KMS backend. It maps one selected `/dev/dri/cardN`, runs non-root with a read-only root filesystem and no added capabilities, and defaults to `network_mode: none`. Set `RIBBONFISH_NETWORK_MODE=bridge` only when configuring optional authenticated Worker sync; the named state volume retains cached assets, the last-good playlist, and the device credential.
 - `prepare-deployment.sh` stages the Compose file, hardware profiles, and assets together under `~/containers/ribbonfish`, creating `.env` on first setup and preserving local files on later runs.
-- The agent supports connector/mode selection, image fitting, and XRGB8888 dumb-buffer scanout. Single-display 1920x1080 KMS state, frame updates, and visible sample slides have been confirmed on a Pi 3 Model A Plus; Pi 3B and Pi 4 dual-output scanout remain unverified.
+- The agent supports connector/mode selection, image fitting, and XRGB8888 dumb-buffer scanout. Single-display KMS mode-setting, frame updates, and visible sample slides have been confirmed on a Pi 3 Model A Plus; Pi 3B and Pi 4 dual-output scanout remain unverified.
 - Protected `main` pushes that change `agent/**` publish `cyanautomation/ribbonfish` to Docker Hub for AMD64, ARM64, and ARMv7 with an immutable commit-SHA tag; `latest` moves only when that commit is still the `main` tip. The same changes publish ARMv7 and ARM64 images to `ghcr.io/cyanautomation/ribbonfish` with `main` and immutable commit-SHA tags. Use `latest` for convenience or a SHA tag to pin a deployment. Verify example image versions and Pi device/group values on the target.
 
 Run the simulator from the repository root:
