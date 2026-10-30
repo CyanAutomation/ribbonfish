@@ -152,13 +152,14 @@ export function formatDeviceHealthDetails(result, history = {}) {
   const report = result?.latest;
   if (!report) return { message: "This device has not reported health yet." };
 
-  const lastSync = report.sync.last_success_age_seconds === null
+  const sync = report.sync ?? {};
+  const lastSync = sync.last_success_age_seconds == null
     ? "never"
-    : `${formatAge(report.sync.last_success_age_seconds)} ago`;
+    : `${formatAge(sync.last_success_age_seconds)} ago`;
   const summary = [
     `Fleet health ${result.health_status}.`,
     `Last report ${formatTimestamp(result.received_at)} · Agent ${report.agent_version} · Uptime ${formatAge(report.agent_uptime_seconds)}`,
-    `Sync ${report.sync.status} · last success ${lastSync}${report.sync.applied_playlist_id ? ` · ${report.sync.applied_playlist_id} / ${report.sync.applied_revision ?? "revision unknown"}` : ""}`,
+    `Sync ${sync.status ?? "unknown"} · last success ${lastSync}${sync.applied_playlist_id ? ` · ${sync.applied_playlist_id} / ${sync.applied_revision ?? "revision unknown"}` : ""}`,
   ];
   if (report.startup_error_code) summary.push(`Startup issue: ${report.startup_error_code}`);
 

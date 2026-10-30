@@ -138,6 +138,27 @@ test("device health details explain when no report or history is available", () 
   assert.equal(details.sampleCount, 0);
 });
 
+test("device health details tolerate missing sync data in stored reports", () => {
+  const latest = {
+    agent_version: "1",
+    agent_uptime_seconds: 0,
+    outputs: [],
+  };
+  const missingSync = formatDeviceHealthDetails({
+    health_status: "starting",
+    received_at: 0,
+    latest,
+  });
+  assert.equal(missingSync.summary[2], "Sync unknown · last success never");
+
+  const missingAge = formatDeviceHealthDetails({
+    health_status: "healthy",
+    received_at: 0,
+    latest: { ...latest, sync: { status: "ok" } },
+  });
+  assert.equal(missingAge.summary[2], "Sync ok · last success never");
+});
+
 test("OpenUI Core parses and evaluates a read-only fleet view", async () => {
   let overviewReads = 0;
   const runtime = createFleetOpenUI({
