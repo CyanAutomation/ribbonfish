@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,4 +45,33 @@ test('reports missing required frontmatter fields', async (t) => {
     'example/SKILL.md: missing required frontmatter field "tags"',
     'example/SKILL.md: missing required frontmatter field "relatedSkills"',
   ]);
+});
+
+test('checks each local link with a single filesystem stat', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ribbonfish-skills-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, 'example'), { recursive: true });
+  await writeFile(path.join(root, 'example/SKILL.md'), [
+    '---',
+    'name: example',
+    'description: Example skill',
+    'tags: [demo]',
+    'relatedSkills: []',
+    '---',
+    '',
+    '[Reference](../reference.md)',
+  ].join('\n'));
+  await writeFile(path.join(root, 'reference.md'), 'Reference');
+
+  const target = path.join(root, 'reference.md');
+  let statCalls = 0;
+  const errors = await validateSkills(root, {
+    statFn: async (filename) => {
+      if (filename === target) statCalls += 1;
+      return stat(filename);
+    },
+  });
+
+  assert.deepEqual(errors, []);
+  assert.equal(statCalls, 1);
 });

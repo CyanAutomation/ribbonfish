@@ -23,7 +23,7 @@ function parseInlineList(value) {
     .map((item) => item.replace(/^(?:"([^"]*)"|'([^']*)')$/, (_, doubleQuoted, singleQuoted) => doubleQuoted ?? singleQuoted));
 }
 
-export async function validateSkills(skillsRoot) {
+export async function validateSkills(skillsRoot, { statFn = stat } = {}) {
   const errors = [];
   const entries = await readdir(skillsRoot, { withFileTypes: true });
   const skills = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
@@ -69,7 +69,8 @@ export async function validateSkills(skillsRoot) {
       if (!destination || /^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(destination)) continue;
       const target = path.resolve(path.dirname(file), decodeURIComponent(destination.split('#')[0]));
       try {
-        if (!(await stat(target)).isFile() && !(await stat(target)).isDirectory()) {
+        const targetInfo = await statFn(target);
+        if (!targetInfo.isFile() && !targetInfo.isDirectory()) {
           errors.push(`${relativeFile}: local link "${destination}" does not exist`);
         }
       } catch {
