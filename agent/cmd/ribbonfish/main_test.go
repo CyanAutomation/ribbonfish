@@ -27,6 +27,7 @@ import (
 	"github.com/CyanAutomation/ribbonfish/agent/internal/cache"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/config"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/display"
+	"github.com/CyanAutomation/ribbonfish/agent/internal/display/drm"
 	displaySimulator "github.com/CyanAutomation/ribbonfish/agent/internal/display/simulator"
 	"github.com/CyanAutomation/ribbonfish/agent/internal/syncer"
 )
@@ -232,6 +233,10 @@ func TestCheckDRMDisplaysAcceptsStableByPathAlias(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("DRM device identity matching is Linux-specific")
 	}
+	deviceNumber, ok := drm.DeviceNodeNumber(os.DevNull)
+	if !ok {
+		t.Skip("Linux /dev/null character-device number is unavailable")
+	}
 	t.Setenv("RIBBONFISH_CACHE_DIR", "")
 	t.Setenv("RIBBONFISH_DRM_DEVICE", "")
 	dir := t.TempDir()
@@ -256,7 +261,7 @@ func TestCheckDRMDisplaysAcceptsStableByPathAlias(t *testing.T) {
 	if err := os.MkdirAll(cardDevice, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(sysfsRoot, "card0", "dev"), []byte("1:3\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(sysfsRoot, "card0", "dev"), []byte(deviceNumber+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	driver := filepath.Join(sysfsRoot, "drivers", "vc4-drm")

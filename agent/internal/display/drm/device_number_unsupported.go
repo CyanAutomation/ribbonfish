@@ -2,6 +2,6 @@
 
 package drm
 
-func deviceNodeNumber(string) (string, bool) {
+func DeviceNodeNumber(string) (string, bool) {
 	return "", false
 }

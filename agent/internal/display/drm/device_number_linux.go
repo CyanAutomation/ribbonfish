@@ -8,7 +8,10 @@ import (
 	"syscall"
 )
 
-func deviceNodeNumber(path string) (string, bool) {
+// DeviceNodeNumber returns the Linux major:minor number of a character device.
+// It follows symlinks and returns false when path is missing or is not a
+// character device.
+func DeviceNodeNumber(path string) (string, bool) {
 	info, err := os.Stat(path)
 	if err != nil || info.Mode()&os.ModeDevice == 0 || info.Mode()&os.ModeCharDevice == 0 {
 		return "", false
