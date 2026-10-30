@@ -12,3 +12,9 @@ type Output interface {
 	Present(ctx context.Context, displayID string, frame image.Image) error
 	Close() error
 }
+
+// Availability is optionally implemented by outputs that can identify
+// configured displays that are currently unavailable.
+type Availability interface {
+	DisplayAvailable(displayID string) bool
+}

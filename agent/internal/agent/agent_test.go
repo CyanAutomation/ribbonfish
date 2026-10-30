@@ -165,6 +165,65 @@ func TestAgentUsesCachedAssetWhenSourceIsUnavailable(t *testing.T) {
 	_ = restarted.Close()
 }
 
+func TestRunSkipsUnavailableDisplaysAndReportsDegradedHealth(t *testing.T) {
+	dir := t.TempDir()
+	assetPath := filepath.Join(dir, "display.png")
+	writePNG(t, assetPath, color.RGBA{G: 200, A: 255})
+	cfg := testConfig(dir, config.PlaylistConfig{ID: "default", RotationInterval: "1h", Assets: []config.AssetConfig{{Path: assetPath}}})
+	cfg.Displays = []config.DisplayConfig{{ID: "connected"}, {ID: "disconnected", Connector: "HDMI-A-2"}}
+	store, err := cache.NewFileStore(cfg.Cache.Directory, cfg.Cache.MaxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	output := &availabilityRecordingOutput{
+		recordingOutput: &recordingOutput{frames: make(chan frameEvent, 4)},
+		unavailable:     map[string]bool{"disconnected": true},
+	}
+	app, err := New(context.Background(), cfg, store, output, slog.New(slog.NewTextHandler(io.Discard, nil)), newTestClock(time.Unix(0, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker := health.NewTracker("test", cfg.Cache.Directory, []health.OutputSpec{
+		{DisplayID: "connected"}, {DisplayID: "disconnected", Connector: "HDMI-A-2"},
+	}, time.Now)
+	tracker.SetState("ready")
+	app.SetHealthTracker(tracker)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- app.Run(ctx) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("Run() after cancellation = %v", err)
+		}
+	}()
+
+	frame := receiveFrame(t, output.frames)
+	if frame.displayID != "connected" {
+		t.Fatalf("frame display = %q, want connected display", frame.displayID)
+	}
+	deadline := time.After(time.Second)
+	for {
+		report := tracker.Snapshot(time.Now())
+		if report.State == "degraded" && len(report.Outputs) == 2 && report.Outputs[1].DisplayID == "disconnected" &&
+			report.Outputs[1].Status == "failed" && report.Outputs[1].ErrorCode != nil && *report.Outputs[1].ErrorCode == "connector_disconnected" {
+			break
+		}
+		select {
+		case <-tracker.Changes():
+		case <-deadline:
+			t.Fatalf("health did not report the disconnected output: %#v", report)
+		}
+	}
+	select {
+	case frame := <-output.frames:
+		t.Fatalf("unavailable display was rendered: %#v", frame)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestDynamicDisplayRecoversFromNoPlayableAssetsAndReportsHealth(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testConfig(dir, config.PlaylistConfig{ID: "offline", RotationInterval: "1m", Assets: []config.AssetConfig{{Path: filepath.Join(dir, "missing.png")}}})
@@ -559,6 +618,15 @@ func (clock *sequenceClock) Wait(ctx context.Context, duration time.Duration) er
 }
 
 type recordingOutput struct{ frames chan frameEvent }
+
+type availabilityRecordingOutput struct {
+	*recordingOutput
+	unavailable map[string]bool
+}
+
+func (output *availabilityRecordingOutput) DisplayAvailable(displayID string) bool {
+	return !output.unavailable[displayID]
+}
 
 func (o *recordingOutput) Present(ctx context.Context, displayID string, frame image.Image) error {
 	if err := ctx.Err(); err != nil {

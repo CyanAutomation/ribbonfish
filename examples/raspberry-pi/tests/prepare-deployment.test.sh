@@ -85,11 +85,13 @@ case "\$1" in
       'run --rm')
         [ "\${1:-}" = --rm ] && [ "\${2:-}" = --no-deps ] && [ "\${3:-}" = -T ] && [ "\${4:-}" = agent ] && [ "\${5:-}" = -check-displays ] || { echo "unexpected docker compose run command: \$*" >&2; exit 2; }
         if [ "\${FAKE_DOCKER_DISPLAY_CHECK_FAIL:-0}" = 1 ]; then
-          printf '%s\\n' 'DRM connector HDMI-A-1 is disconnected' >&2
-          exit 1
+          printf '%s\\n' 'DRM display preflight found disconnected outputs: device=/dev/dri/card0 displays=1'
+          printf '%s\\n' 'warning: display_id=display-main connector=HDMI-A-1 is disconnected; agent will continue without it'
+          printf '%s\\n' 'display_id=display-main connector=HDMI-A-1 status=disconnected requested_mode=preferred advertised_modes=0'
+        else
+          printf '%s\\n' 'DRM display preflight passed: device=/dev/dri/card0 displays=1'
+          printf '%s\\n' 'display_id=display-main connector=HDMI-A-1 status=connected requested_mode=preferred advertised_modes=32'
         fi
-        printf '%s\\n' 'DRM display preflight passed: device=/dev/dri/card0 displays=1'
-        printf '%s\\n' 'display_id=display-main connector=HDMI-A-1 status=connected requested_mode=preferred advertised_modes=32'
         ;;
       'exec -T')
         echo "unexpected legacy docker compose exec command: \$*" >&2; exit 2 ;;
@@ -275,19 +277,26 @@ case "$output" in
 	*'timed out after 2s waiting for a successful display frame update'*) ;;
 	*) echo "frame timeout returned unclear output: $output" >&2; exit 1 ;;
 esac
-if FAKE_DOCKER_DISPLAY_CHECK_FAIL=1 PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" >/dev/null 2>&1; then
-	echo 'disconnected DRM connector unexpectedly passed deployment verification' >&2
+if output=$(FAKE_DOCKER_DISPLAY_CHECK_FAIL=1 PATH="$temp_dir/bin:$PATH" \
+	sh "$script_dir/verify-deployment.sh" 2>&1); then
+	case "$output" in
+		*'warning:'*'HDMI-A-1 is disconnected'*'Deployment verified:'*) ;;
+		*) echo "disconnected HDMI deployment returned unclear output: $output" >&2; exit 1 ;;
+	esac
+else
+	echo "disconnected DRM connector failed deployment verification: $output" >&2
 	exit 1
 fi
 if output=$(FAKE_DOCKER_DISPLAY_CHECK_FAIL=1 PATH="$temp_dir/bin:$PATH" \
 	sh "$script_dir/verify-deployment.sh" --preflight 2>&1); then
-	echo 'disconnected DRM connector unexpectedly passed preflight' >&2
+	case "$output" in
+		*'warning:'*'HDMI-A-1 is disconnected'*'Preflight passed:'*) ;;
+		*) echo "disconnected HDMI preflight returned unclear output: $output" >&2; exit 1 ;;
+	esac
+else
+	echo "disconnected DRM connector failed preflight: $output" >&2
 	exit 1
 fi
-case "$output" in
-	*'configured DRM connectors are unavailable'*'HDMI-A-1 is disconnected'*) ;;
-	*) echo "disconnected HDMI returned an unclear preflight error: $output" >&2; exit 1 ;;
-esac
 if output=$(FAKE_DOCKER_IMAGE_INSPECT_FAIL=1 PATH="$temp_dir/bin:$PATH" \
 	sh "$script_dir/verify-deployment.sh" --preflight 2>&1); then
 	echo 'preflight unexpectedly passed without the configured image present locally' >&2
