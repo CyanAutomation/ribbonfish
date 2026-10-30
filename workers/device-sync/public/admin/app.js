@@ -525,7 +525,7 @@ function renderCaptureTargets(targets) {
           body: JSON.stringify({ capture_id: target.capture_id }),
         });
         assessment.removeAttribute("aria-busy");
-        assessment.replaceChildren(renderJevDecision(decision, "Screenshot skip assessment"));
+        assessment.replaceChildren(renderJevDecision(decision, "Screenshot skip assessment", { captureID: target.capture_id }));
       } catch (error) {
         assessment.removeAttribute("aria-busy");
         assessment.replaceChildren(node("p", error.message, "error-title"));
@@ -876,7 +876,7 @@ function renderFleetSummary(view) {
   }
 }
 
-function renderJevDecision(result, title) {
+function renderJevDecision(result, title, { captureID } = {}) {
   const card = node("article", undefined, "jev-result");
   card.append(node("h3", title));
   const answers = node("div", undefined, "jev-result__answers");
@@ -906,6 +906,38 @@ function renderJevDecision(result, title) {
   if (Number.isFinite(result.usage?.cost)) metadata.push(`reported cost $${result.usage.cost.toFixed(6)}`);
   if (Number.isSafeInteger(result.usage?.input_tokens)) metadata.push(`${result.usage.input_tokens} input tokens`);
   card.append(answers, node("p", metadata.join(" · "), "jev-advisory"));
+  if (captureID && result.answers?.recommendation?.choice === "skip_once") {
+    const eligibility = result.skip_eligibility;
+    if (eligibility?.eligible && Number.isSafeInteger(eligibility.due_at)) {
+      const confirmSkip = button("Confirm skip this screenshot once", "secondary");
+      confirmSkip.addEventListener("click", async () => {
+        const dueAt = eligibility.due_at;
+        const confirmed = await showConfirmDialog({
+          title: "Skip one scheduled screenshot?",
+          description: `This skips the screenshot due ${formatTimestamp(dueAt)} once. The current image stays in use, and the next scheduled screenshot remains due as normal.`,
+          confirmLabel: "Skip once",
+        });
+        if (!confirmed) return;
+        confirmSkip.disabled = true;
+        try {
+          await api(`/admin/api/captures/${encodeURIComponent(captureID)}/skip-once`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ due_at: dueAt }),
+          });
+          confirmSkip.textContent = "Skip confirmed";
+          showMessage("One scheduled screenshot skip is confirmed.");
+          await refresh();
+        } catch (error) {
+          confirmSkip.disabled = false;
+          showMessage(error.message, true);
+        }
+      });
+      card.append(confirmSkip);
+    } else {
+      card.append(node("p", `This suggestion cannot be confirmed safely: ${eligibility?.reason || "the screenshot schedule changed"}`, "muted"));
+    }
+  }
   return card;
 }
 

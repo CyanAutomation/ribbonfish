@@ -240,7 +240,7 @@ test("JEV fleet analysis is Access protected, validates its request, and sends o
     const data = await response.json();
     assert.equal(data.answers.focus.choice, "none");
     assert.equal(rateLimitKey, "jev:anonymous");
-    assert.doesNotMatch(sentState, /pi-office|do-not-return-this|welcome|revision-1/);
+    assert.doesNotMatch(JSON.stringify(sentState), /pi-office|do-not-return-this|welcome|revision-1/);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -289,8 +289,11 @@ test("JEV screenshot skip recommendations are advisory and cause no capture writ
       method: "POST", body: { capture_id: "123e4567-e89b-12d3-a456-426614174000" },
     }), env);
     assert.equal(response.status, 200);
-    assert.equal((await response.json()).answers.recommendation.choice, "skip_once");
-    assert.doesNotMatch(sentState, /user|pass|private|token|secret/);
+    const result = await response.json();
+    assert.equal(result.answers.recommendation.choice, "skip_once");
+    assert.equal(result.skip_eligibility.eligible, false);
+    assert.match(result.skip_eligibility.reason, /successful screenshot/i);
+    assert.doesNotMatch(JSON.stringify(sentState), /user|pass|private|token|secret/);
     assert.equal(env.DB.auditEvents.length, 0);
     assert.equal(env.DB.captureTarget.next_due_at, dueAtBefore);
     assert.equal(env.DB.mutationCalls, mutationsBefore);

@@ -72,7 +72,7 @@ export async function dispatchDueCaptures(env, now = Date.now()) {
   if (capacity === 0) return { enqueued: 0, skipped: false };
   // Staged targets receive a first or stale-image warmup; recurring captures stay active-playlist only.
   const due = await env.DB.prepare(
-    "SELECT t.capture_id FROM capture_targets t " +
+    "SELECT t.capture_id, t.next_due_at FROM capture_targets t " +
     "WHERE t.enabled = 1 AND t.next_due_at <= ? " +
     "AND (EXISTS (SELECT 1 FROM playlist_capture_items p JOIN active_playlist a " +
     "ON a.playlist_id = p.playlist_id AND a.revision = p.revision WHERE p.capture_id = t.capture_id) " +
@@ -83,6 +83,11 @@ export async function dispatchDueCaptures(env, now = Date.now()) {
   ).bind(now, now - CAPTURE_RETENTION_MS, capacity).all();
   let enqueued = 0;
   for (const target of due.results ?? []) {
+    if (await consumeApprovedCaptureSkip(target, env, now)) continue;
+    const stillDue = await env.DB.prepare(
+      "SELECT 1 AS due FROM capture_targets WHERE capture_id = ? AND enabled = 1 AND next_due_at <= ?",
+    ).bind(target.capture_id, now).first();
+    if (!stillDue) continue;
     try {
       const result = await enqueueCapture(target.capture_id, env, { now, scheduled: true });
       if (result?.queued) enqueued += 1;
@@ -91,6 +96,56 @@ export async function dispatchDueCaptures(env, now = Date.now()) {
     }
   }
   return { enqueued, skipped: false };
+}
+
+async function consumeApprovedCaptureSkip(target, env, now) {
+  const approval = await env.DB.prepare(
+    "SELECT due_at, expires_at FROM capture_skip_approvals WHERE capture_id = ?",
+  ).bind(target.capture_id).first();
+  if (!approval) return false;
+  if (approval.due_at !== target.next_due_at || approval.expires_at < now || approval.due_at > now) {
+    await env.DB.prepare("DELETE FROM capture_skip_approvals WHERE capture_id = ?").bind(target.capture_id).run();
+    return false;
+  }
+  const targetRow = await env.DB.prepare(
+    "SELECT capture_interval_seconds, current_sha256, current_size, last_success_at FROM capture_targets " +
+    "WHERE capture_id = ? AND enabled = 1 AND next_due_at = ? " +
+    "AND current_sha256 IS NOT NULL AND failure_count = 0 AND last_error IS NULL " +
+    "AND NOT EXISTS (SELECT 1 FROM capture_jobs j WHERE j.capture_id = capture_targets.capture_id AND j.status IN ('queued', 'running'))",
+  ).bind(target.capture_id, approval.due_at).first();
+  if (!targetRow) {
+    await env.DB.prepare("DELETE FROM capture_skip_approvals WHERE capture_id = ?").bind(target.capture_id).run();
+    return false;
+  }
+  const currentAsset = await env.ASSETS.head(`assets/${targetRow.current_sha256}`);
+  if (!currentAsset || currentAsset.size !== targetRow.current_size || !targetRow.last_success_at ||
+      targetRow.last_success_at > now || approval.due_at - targetRow.last_success_at > targetRow.capture_interval_seconds * 2000) {
+    await env.DB.prepare("DELETE FROM capture_skip_approvals WHERE capture_id = ?").bind(target.capture_id).run();
+    return false;
+  }
+  const recentHistory = await env.DB.prepare(
+    "SELECT sha256 FROM capture_history WHERE capture_id = ? ORDER BY captured_at DESC LIMIT 3",
+  ).bind(target.capture_id).all();
+  if (recentHistory.results?.length !== 3 ||
+      recentHistory.results.some((item) => item.sha256 !== targetRow.current_sha256)) {
+    await env.DB.prepare("DELETE FROM capture_skip_approvals WHERE capture_id = ?").bind(target.capture_id).run();
+    return false;
+  }
+  const nextDueAt = approval.due_at + targetRow.capture_interval_seconds * 1000;
+  const result = await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE capture_targets SET next_due_at = ? WHERE capture_id = ? AND next_due_at = ? " +
+      "AND NOT EXISTS (SELECT 1 FROM capture_jobs j WHERE j.capture_id = capture_targets.capture_id AND j.status IN ('queued', 'running'))",
+    ).bind(nextDueAt, target.capture_id, approval.due_at),
+    env.DB.prepare(
+      "INSERT INTO audit_events (event_id, actor_id, event_type, subject_type, subject_id, occurred_at, metadata_json) " +
+      "SELECT ?, actor_id, 'capture.skip_once_applied', 'capture', capture_id, ?, ? FROM capture_skip_approvals " +
+      "WHERE capture_id = ? AND due_at = ? AND changes() > 0",
+    ).bind(crypto.randomUUID(), now, JSON.stringify({ due_at: approval.due_at, next_due_at: nextDueAt }), target.capture_id, approval.due_at),
+    env.DB.prepare("DELETE FROM capture_skip_approvals WHERE capture_id = ? AND due_at = ?")
+      .bind(target.capture_id, approval.due_at),
+  ]);
+  return result[0]?.meta?.changes === 1;
 }
 
 export async function handleCaptureQueue(batch, env, now = Date.now()) {
