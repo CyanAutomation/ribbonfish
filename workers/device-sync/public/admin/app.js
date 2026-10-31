@@ -26,7 +26,6 @@ import {
   summarizeFleetAttention,
 } from "./ui-utils.js";
 
-const message = document.querySelector("#message");
 const fleetSummary = document.querySelector("#fleet-summary");
 const fleetAttention = document.querySelector("#fleet-attention");
 const confirmDialog = document.querySelector("#confirm-dialog");
@@ -1094,7 +1093,6 @@ function showConfirmDialog({ title, description, confirmLabel, destructive = fal
   });
 }
 
-document.querySelector("#dismiss-message").addEventListener("click", () => { message.hidden = true; });
 document.querySelector("#run-fleet-analysis").addEventListener("click", runFleetJevAnalysis);
 
 const sectionLinks = [...document.querySelectorAll(".section-nav a")];
