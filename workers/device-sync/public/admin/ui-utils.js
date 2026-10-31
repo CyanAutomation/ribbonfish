@@ -17,27 +17,49 @@ export function createTransientNotice({
   setTimeoutFn = setTimeout,
   clearTimeoutFn = clearTimeout,
   onExpire = () => {},
+  nowFn = Date.now,
 } = {}) {
   let timer = null;
+  let remaining = duration;
+  let startedAt = null;
+  let active = false;
+  const schedule = () => {
+    startedAt = nowFn();
+    timer = setTimeoutFn(() => {
+      timer = null;
+      remaining = 0;
+      active = false;
+      onExpire();
+    }, remaining);
+  };
   return {
     start() {
       if (timer !== null) clearTimeoutFn(timer);
-      timer = setTimeoutFn(() => {
-        timer = null;
-        onExpire();
-      }, duration);
+      remaining = duration;
+      active = true;
+      schedule();
     },
     pause() {
-      if (timer === null) return;
+      if (!active || timer === null) return;
       clearTimeoutFn(timer);
       timer = null;
+      remaining = Math.max(0, remaining - Math.max(0, nowFn() - startedAt));
     },
     resume() {
-      if (timer === null) this.start();
+      if (!active || timer !== null) return;
+      if (remaining === 0) {
+        active = false;
+        onExpire();
+        return;
+      }
+      schedule();
     },
     clear() {
       if (timer !== null) clearTimeoutFn(timer);
       timer = null;
+      remaining = duration;
+      startedAt = null;
+      active = false;
     },
   };
 }

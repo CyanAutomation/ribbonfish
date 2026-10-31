@@ -52,8 +52,10 @@ test("transient notices replace, pause, resume, and clear their expiry", () => {
   let nextID = 0;
   const timers = new Map();
   const expired = [];
+  let now = 0;
   const notice = createTransientNotice({
     duration: 5000,
+    nowFn: () => now,
     setTimeoutFn(callback, delay) {
       const id = ++nextID;
       timers.set(id, { callback, delay });
@@ -67,12 +69,19 @@ test("transient notices replace, pause, resume, and clear their expiry", () => {
   assert.equal(timers.size, 1);
   notice.start();
   assert.equal(timers.size, 1, "starting a new notice clears the previous timer");
+  now = 4500;
   notice.pause();
   assert.equal(timers.size, 0);
   notice.resume();
   assert.equal(timers.size, 1);
-  const [[timerID, timer]] = timers.entries();
-  assert.equal(timer.delay, 5000);
+  let [[timerID, timer]] = timers.entries();
+  assert.equal(timer.delay, 500, "resume uses only the unelapsed duration");
+  now = 4750;
+  notice.pause();
+  notice.resume();
+  [[timerID, timer]] = timers.entries();
+  assert.equal(timer.delay, 250, "repeated pauses continue to preserve the remaining duration");
+  now = 5000;
   timers.delete(timerID);
   timer.callback();
   assert.deepEqual(expired, ["expired"]);
@@ -81,6 +90,8 @@ test("transient notices replace, pause, resume, and clear their expiry", () => {
   notice.start();
   notice.clear();
   assert.equal(timers.size, 0, "manual dismissal clears the timer");
+  notice.resume();
+  assert.equal(timers.size, 0, "a cleared notice cannot be resumed");
 });
 
 test("feedback slots stay contextual, dismissible, and in document flow", async () => {
