@@ -12,6 +12,36 @@ const AUDIT_EVENT_LABELS = {
   "development.bootstrap": "Created initial playlist",
 };
 
+export function createTransientNotice({
+  duration = 5000,
+  setTimeoutFn = setTimeout,
+  clearTimeoutFn = clearTimeout,
+  onExpire = () => {},
+} = {}) {
+  let timer = null;
+  return {
+    start() {
+      if (timer !== null) clearTimeoutFn(timer);
+      timer = setTimeoutFn(() => {
+        timer = null;
+        onExpire();
+      }, duration);
+    },
+    pause() {
+      if (timer === null) return;
+      clearTimeoutFn(timer);
+      timer = null;
+    },
+    resume() {
+      if (timer === null) this.start();
+    },
+    clear() {
+      if (timer !== null) clearTimeoutFn(timer);
+      timer = null;
+    },
+  };
+}
+
 export function formatPlaylistState(active) {
   return active ? "Active" : "Ready to activate";
 }

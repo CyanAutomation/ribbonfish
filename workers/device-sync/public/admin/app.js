@@ -7,6 +7,7 @@ import {
   compactIdentifier,
   confirmAction,
   confirmBeforeAction,
+  createTransientNotice,
   createRetryableLoadOnce,
   formatActorLabel,
   formatCaptureInterval,
@@ -26,7 +27,6 @@ import {
 } from "./ui-utils.js";
 
 const message = document.querySelector("#message");
-const messageText = document.querySelector("#message-text");
 const fleetSummary = document.querySelector("#fleet-summary");
 const fleetAttention = document.querySelector("#fleet-attention");
 const confirmDialog = document.querySelector("#confirm-dialog");
@@ -65,13 +65,49 @@ async function api(path, options = {}) {
   return result;
 }
 
-function showMessage(text, isError = false) {
-  messageText.textContent = text;
-  message.classList.toggle("alert--success", !isError);
-  message.classList.toggle("alert--error", isError);
-  message.setAttribute("role", isError ? "alert" : "status");
-  message.setAttribute("aria-live", isError ? "assertive" : "polite");
-  message.hidden = false;
+const feedbackSlots = new Map([...document.querySelectorAll("[data-feedback-slot]")].map((element) => {
+  const slot = {
+    element,
+    text: element.querySelector("[data-feedback-text]"),
+    hovered: false,
+    focused: false,
+    transient: false,
+    timer: null,
+  };
+  slot.timer = createTransientNotice({ onExpire: () => { slot.transient = false; element.hidden = true; } });
+  element.addEventListener("mouseenter", () => { slot.hovered = true; slot.timer.pause(); });
+  element.addEventListener("mouseleave", () => {
+    slot.hovered = false;
+    if (!slot.focused && slot.transient) slot.timer.resume();
+  });
+  element.addEventListener("focusin", () => { slot.focused = true; slot.timer.pause(); });
+  element.addEventListener("focusout", (event) => {
+    if (element.contains(event.relatedTarget)) return;
+    slot.focused = false;
+    if (!slot.hovered && slot.transient) slot.timer.resume();
+  });
+  element.querySelector("[data-dismiss-feedback]").addEventListener("click", () => {
+    slot.timer.clear();
+    slot.transient = false;
+    element.hidden = true;
+  });
+  return [element.dataset.feedbackSlot, slot];
+}));
+
+function showMessage(text, isError = false, context = "global") {
+  const slot = feedbackSlots.get(context) ?? feedbackSlots.get("global");
+  slot.timer.clear();
+  slot.transient = !isError;
+  slot.text.textContent = text;
+  slot.element.classList.toggle("alert--success", !isError);
+  slot.element.classList.toggle("alert--error", isError);
+  slot.element.setAttribute("role", isError ? "alert" : "status");
+  slot.element.setAttribute("aria-live", isError ? "assertive" : "polite");
+  slot.element.hidden = false;
+  if (!isError) {
+    if (slot.hovered || slot.focused) slot.timer.pause();
+    else slot.timer.start();
+  }
 }
 
 function showInlineMessage(target, text, isError = false) {
@@ -199,7 +235,7 @@ function renderResponsiveRecords({
   });
 }
 
-function identifier(value, label) {
+function identifier(value, label, context = "global") {
   const fullValue = value === null || value === undefined || value === "" ? "—" : String(value);
   const wrapper = node("span", undefined, "identifier");
   const code = node("code", compactIdentifier(fullValue), "identifier__value");
@@ -210,7 +246,7 @@ function identifier(value, label) {
     const copy = button("Copy", "quiet");
     copy.classList.add("button--small", "identifier__copy");
     copy.setAttribute("aria-label", `Copy full ${label}`);
-    copy.addEventListener("click", () => copyValue(fullValue, `${label} copied.`));
+    copy.addEventListener("click", () => copyValue(fullValue, `${label} copied.`, context));
     wrapper.append(copy);
   }
   return wrapper;
@@ -223,17 +259,17 @@ function fingerprintDisplay(value) {
   const copy = button("Copy", "quiet");
   copy.classList.add("button--small");
   copy.setAttribute("aria-label", "Copy full device fingerprint");
-  copy.addEventListener("click", () => copyValue(value, "Device fingerprint copied."));
+  copy.addEventListener("click", () => copyValue(value, "Device fingerprint copied.", "device"));
   wrapper.append(copy);
   return wrapper;
 }
 
-async function copyValue(value, successMessage) {
+async function copyValue(value, successMessage, context = "global") {
   try {
     await navigator.clipboard.writeText(value);
-    showMessage(successMessage);
+    showMessage(successMessage, false, context);
   } catch {
-    showMessage("Clipboard access failed. Select and copy the value manually.", true);
+    showMessage("Clipboard access failed. Select and copy the value manually.", true, context);
   }
 }
 
@@ -339,7 +375,7 @@ async function startPlaylistEdit(playlist) {
     form.scrollIntoView({ behavior: "smooth", block: "start" });
     form.elements.namedItem("id").focus({ preventScroll: true });
   } catch (error) {
-    showMessage(error.message, true);
+    showMessage(error.message, true, "playlist");
   }
 }
 
@@ -369,9 +405,9 @@ function playlistActionButtons(playlist, deleteAction, layout) {
           }),
         );
         if (!confirmed) return;
-        showMessage(`Playlist ${playlist.playlist_id} is active. Devices will receive it on their next sync.`);
+        showMessage(`Playlist ${playlist.playlist_id} is active. Devices will receive it on their next sync.`, false, "playlist");
         await refresh();
-      } catch (error) { showMessage(error.message, true); }
+      } catch (error) { showMessage(error.message, true, "playlist"); }
     });
     actions.append(activate);
   }
@@ -397,9 +433,9 @@ function playlistActionButtons(playlist, deleteAction, layout) {
             () => api(`/admin/api/playlists/${encodeURIComponent(playlist.playlist_id)}`, { method: "DELETE" }),
           );
           if (!confirmed) return;
-          showMessage(`Playlist ${playlist.playlist_id} was deleted. Uploaded images remain available for reuse.`);
+          showMessage(`Playlist ${playlist.playlist_id} was deleted. Uploaded images remain available for reuse.`, false, "playlist");
           await refresh();
-        } catch (error) { showMessage(error.message, true); }
+        } catch (error) { showMessage(error.message, true, "playlist"); }
       });
       actions.append(remove);
     }
@@ -422,7 +458,7 @@ function renderHealth(health) {
     const list = node("ul");
     health.missing.forEach((asset) => {
       const item = node("li");
-      item.append(identifier(asset.sha256, "image SHA-256"), document.createTextNode(` (expected ${asset.expected_size} bytes)`));
+      item.append(identifier(asset.sha256, "image SHA-256", "overview"), document.createTextNode(` (expected ${asset.expected_size} bytes)`));
       list.append(item);
     });
     panel.append(list);
@@ -434,7 +470,7 @@ function renderHealth(health) {
     issues.forEach((issue) => {
       const item = node("li");
       const label = issue.issue_type === "missing_playlist_asset" ? "Missing playlist image" : "Missing placeholder image";
-      item.append(document.createTextNode(`${label}: `), identifier(issue.sha256, "image SHA-256"));
+      item.append(document.createTextNode(`${label}: `), identifier(issue.sha256, "image SHA-256", "overview"));
       list.append(item);
     });
     panel.append(list);
@@ -449,7 +485,7 @@ function renderPlaylists(playlists) {
   ]));
   const fields = [
     { label: "Playlist", render: (playlist) => playlist.playlist_id },
-    { label: "Version", render: (playlist) => identifier(playlist.revision, "version ID") },
+    { label: "Version", render: (playlist) => identifier(playlist.revision, "version ID", "playlist") },
     { label: "Show each item for", render: (playlist) => playlist.rotation_interval },
     { label: "Items", render: (playlist) => playlist.asset_count },
     { label: "Created", render: (playlist) => formatTimestamp(playlist.created_at) },
@@ -524,9 +560,9 @@ function renderCaptureTargets(targets) {
           body: "{}",
         });
         const status = result.status === "running" ? "has started" : "is queued";
-        showMessage(`Screenshot job ${compactIdentifier(result.job_id)} ${status}.`);
+        showMessage(`Screenshot job ${compactIdentifier(result.job_id)} ${status}.`, false, "playlist");
         await refresh();
-      } catch (error) { showMessage(error.message, true); }
+      } catch (error) { showMessage(error.message, true, "playlist"); }
       finally { capture.disabled = false; }
     });
     actions.append(capture);
@@ -583,9 +619,9 @@ function deviceActionButtons(device, layout) {
         }),
       );
       if (!confirmed) return;
-      showMessage(formatDeviceEnabledMessage(device.device_id, nextEnabled));
+      showMessage(formatDeviceEnabledMessage(device.device_id, nextEnabled), false, "device");
       await refresh();
-    } catch (error) { showMessage(error.message, true); }
+    } catch (error) { showMessage(error.message, true, "device"); }
   });
 
   const buttons = [toggle];
@@ -610,7 +646,7 @@ function deviceActionButtons(device, layout) {
         if (!confirmed) return;
         displaySecret(`New token for ${device.device_id}`, result.device_token);
         await refresh();
-      } catch (error) { showMessage(error.message, true); }
+      } catch (error) { showMessage(error.message, true, "device"); }
     });
     buttons.push(rotate);
   }
@@ -714,7 +750,7 @@ function renderDevices(devices) {
     caption: "Enrolled devices",
     records: devices,
     fields: [
-      { label: "Device", render: (device) => identifier(device.device_id, "device ID") },
+      { label: "Device", render: (device) => identifier(device.device_id, "device ID", "device") },
       {
         label: "Status",
         render: (device) => statusBadge(device.enabled ? "Enabled" : "Disabled", device.enabled ? "success" : "neutral"),
@@ -756,9 +792,9 @@ function pendingRequestActions(request, layout) {
         }),
       );
       if (!confirmed) return;
-      showMessage(`Device ${request.device_id} was approved.`);
+      showMessage(`Device ${request.device_id} was approved.`, false, "device");
       await refresh();
-    } catch (error) { showMessage(error.message, true); }
+    } catch (error) { showMessage(error.message, true, "device"); }
   });
 
   const reject = button("Reject", "danger");
@@ -779,9 +815,9 @@ function pendingRequestActions(request, layout) {
         }),
       );
       if (!confirmed) return;
-      showMessage(`Device request for ${request.device_id} was rejected.`);
+      showMessage(`Device request for ${request.device_id} was rejected.`, false, "device");
       await refresh();
-    } catch (error) { showMessage(error.message, true); }
+    } catch (error) { showMessage(error.message, true, "device"); }
   });
   actions.append(approve, reject);
   return actions;
@@ -804,7 +840,7 @@ function renderPendingEnrollments(requests) {
     caption: "Devices awaiting approval",
     records: requests,
     fields: [
-      { label: "Device", render: (request) => identifier(request.device_id, "device ID") },
+      { label: "Device", render: (request) => identifier(request.device_id, "device ID", "device") },
       { label: "Status", render: () => statusBadge("Awaiting approval", "warning") },
       { label: "Fingerprint", render: (request) => fingerprintDisplay(request.fingerprint) },
       { label: "First seen", render: (request) => formatTimestamp(request.created_at) },
@@ -862,7 +898,7 @@ function renderSubject(subjectType, subjectID) {
   const displayType = subjectLabel.charAt(0).toUpperCase() + subjectLabel.slice(1);
   const value = node("div", undefined, "subject");
   value.append(node("span", displayType));
-  value.append(identifier(subjectID, `${displayType} ID`));
+  value.append(identifier(subjectID, `${displayType} ID`, "activity"));
   return value;
 }
 
@@ -875,7 +911,7 @@ function renderAuditDetails(metadata) {
   details.forEach(({ label, value }) => {
     const item = node("div");
     const description = node("dd");
-    if (/^[A-Za-z0-9._:-]{25,}$/.test(value)) description.append(identifier(value, label));
+    if (/^[A-Za-z0-9._:-]{25,}$/.test(value)) description.append(identifier(value, label, "activity"));
     else description.textContent = value;
     item.append(node("dt", label), description);
     list.append(item);
@@ -1011,11 +1047,11 @@ function renderJevDecision(result, title, { captureID } = {}) {
             body: JSON.stringify({ due_at: dueAt }),
           });
           confirmSkip.textContent = "Skip confirmed";
-          showMessage("One scheduled screenshot skip is confirmed.");
+          showMessage("One scheduled screenshot skip is confirmed.", false, "playlist");
           await refresh();
         } catch (error) {
           confirmSkip.disabled = false;
-          showMessage(error.message, true);
+          showMessage(error.message, true, "playlist");
         }
       });
       card.append(confirmSkip);
@@ -1101,7 +1137,7 @@ function displaySecret(title, value) {
   document.querySelector("#secret-value").textContent = value;
   document.querySelector("#secret-panel").hidden = false;
   document.querySelector("#secret-panel").scrollIntoView({ behavior: "smooth", block: "center" });
-  showMessage(`${title} created. Copy it before leaving this page.`);
+  showMessage(`${title} created. Copy it before leaving this page.`, false, "credential");
 }
 
 document.querySelector("#reload").addEventListener("click", async (event) => {
@@ -1109,7 +1145,6 @@ document.querySelector("#reload").addEventListener("click", async (event) => {
   refreshButton.disabled = true;
   try {
     await refresh();
-    showMessage("Management data refreshed.");
   } catch (error) { showMessage(error.message, true); }
   finally { refreshButton.disabled = false; }
 });
@@ -1169,7 +1204,7 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
     const captureNote = result.capture_count
       ? " Initial screenshots are queued after saving when capacity allows. Recent screenshots and active jobs may be reused."
       : "";
-    showMessage(`New version ${compactIdentifier(result.revision)} is ready to activate.${captureNote}`);
+    showMessage(`New version ${compactIdentifier(result.revision)} is ready to activate.${captureNote}`, false, "playlist");
     formElement.reset();
     resetPlaylistEditor();
     await refresh();
@@ -1180,11 +1215,11 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
 document.querySelector("#cancel-playlist-edit").addEventListener("click", () => {
   playlistForm().reset();
   resetPlaylistEditor();
-  showMessage("Editing cancelled. Your saved versions are unchanged.");
+  showMessage("Editing cancelled. Your saved versions are unchanged.", false, "playlist");
 });
 
 document.querySelector("#copy-secret").addEventListener("click", async () => {
-  await copyValue(document.querySelector("#secret-value").textContent, "Value copied. Store it securely on the device.");
+  await copyValue(document.querySelector("#secret-value").textContent, "Value copied. Store it securely on the device.", "credential");
 });
 
 document.querySelector("#hide-secret").addEventListener("click", () => {
