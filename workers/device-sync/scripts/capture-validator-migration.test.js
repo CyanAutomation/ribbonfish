@@ -32,6 +32,12 @@ test("capture validator migration adds nullable validator columns", () => {
       (capture_id, current_sha256, current_size, last_success_at, validator_etag, validator_last_modified)
       VALUES (?, ?, ?, ?, ?, ?)`)
       .run("without-validators", null, null, null, null, null);
+    const withoutValidators = database.prepare(`SELECT validator_etag, validator_last_modified
+      FROM capture_targets WHERE capture_id = ?`).get("without-validators");
+    assert.deepEqual({ ...withoutValidators }, {
+      validator_etag: null,
+      validator_last_modified: null,
+    }, "both validator columns accept null values");
 
     const columns = new Set(database.prepare("PRAGMA table_info(capture_targets)").all().map((row) => row.name));
     assert.ok(columns.has("validator_etag"));

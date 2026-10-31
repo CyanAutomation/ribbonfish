@@ -225,8 +225,12 @@ test("management records switch to cards on narrow screens", async () => {
   for (const id of ["playlists", "devices", "audit"]) {
     const desktop = byID(nodes, id);
     const mobile = byID(nodes, `${id}-mobile`);
-    assert.ok(attribute(desktop, "class").split(/\s+/).includes("desktop-data"));
-    assert.ok(attribute(mobile, "class").split(/\s+/).includes("mobile-card-list"));
+    assert.ok(desktop, `desktop ${id} view exists`);
+    assert.ok(mobile, `mobile ${id} view exists`);
+    const desktopClasses = new Set((attribute(desktop, "class") ?? "").split(/\s+/));
+    const mobileClasses = new Set((attribute(mobile, "class") ?? "").split(/\s+/));
+    assert.ok(desktopClasses.has("desktop-data"), `${id} has a desktop table view`);
+    assert.ok(mobileClasses.has("mobile-card-list"), `${id} has a mobile card view`);
   }
   const stylesheet = postcss.parse(styles);
   const responsiveRules = [];
@@ -517,7 +521,7 @@ test("OpenUI fleet view follows the documented read-only contract", () => {
   runtime.dispose();
 });
 
-test("OpenUI runtime recognizes incomplete programs and validates merged fleet views", () => {
+test("OpenUI runtime recognizes incomplete programs and preserves selected fleet metrics when merging", async () => {
   const runtime = createFleetOpenUI({ getOverview: async () => overview });
   const partial = runtime.inspectProgram('root = Dashboard([deviceMetric');
   assert.equal(partial.incomplete, true);
@@ -529,6 +533,12 @@ test("OpenUI runtime recognizes incomplete programs and validates merged fleet v
   const result = runtime.inspectProgram(merged);
   assert.equal(result.incomplete, false);
   assert.deepEqual(result.errors, []);
+  runtime.renderProgram(merged);
+  await runtime.waitForQueries();
+  const [devices, active] = runtime.getView().root.props.children;
+  assert.equal(devices.props.value, "2 enrolled");
+  assert.equal(active.props.value, "operations / r-test");
+  assert.equal(runtime.getView().root.props.children.length, 2, "the merged view excludes the replaced metrics");
   runtime.dispose();
 });
 
