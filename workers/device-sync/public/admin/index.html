@@ -23,9 +23,9 @@
 
     <main id="main-content">
       <p id="environment-notice" class="alert alert--warning" hidden></p>
-      <div id="message" class="alert alert--success status-banner" hidden role="status" aria-live="polite" aria-atomic="true">
-        <span id="message-text"></span>
-        <button id="dismiss-message" class="button button--quiet" type="button" aria-label="Dismiss message">Dismiss</button>
+      <div id="message" class="alert alert--success status-banner" data-feedback-slot="global" hidden role="status" aria-live="polite" aria-atomic="true">
+        <span data-feedback-text></span>
+        <button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss message">Dismiss</button>
       </div>
       <section id="asset-health" class="panel panel--alert" hidden role="alert" aria-live="assertive"></section>
 
@@ -47,6 +47,7 @@
         <div class="section-heading">
           <div><p class="eyebrow">Overview</p><h2 id="overview-title">Fleet snapshot</h2></div>
         </div>
+        <div id="overview-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="overview" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss overview message">Dismiss</button></div>
         <div id="fleet-summary" role="region" aria-label="Fleet snapshot" aria-live="polite"></div>
         <div id="fleet-attention" class="fleet-attention" role="region" aria-label="Needs attention"></div>
       </section>
@@ -55,6 +56,7 @@
         <div class="section-heading">
           <div><p class="eyebrow">Playlists</p><h2 id="playlist-title">Playlist versions</h2></div>
         </div>
+        <div id="playlist-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="playlist" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss playlist message">Dismiss</button></div>
         <div id="playlists" class="table-scroll desktop-data" role="region" aria-label="Playlist versions" tabindex="0"></div>
         <div id="playlists-mobile" class="mobile-card-list" role="region" aria-label="Playlist versions"></div>
         <section id="capture-targets" class="capture-targets" aria-labelledby="capture-targets-title">
@@ -98,6 +100,7 @@
         <div class="section-heading">
           <div><p class="eyebrow">Devices</p><h2 id="device-title">Device fleet</h2></div>
         </div>
+        <div id="device-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="device" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss device message">Dismiss</button></div>
         <details id="pending-enrollments-details" class="pending-enrollments">
           <summary><h3 id="pending-enrollments-title">Devices awaiting approval</h3><span id="pending-enrollment-count" class="disclosure-hint"></span></summary>
           <p class="muted">Compare the full fingerprint with the code shown on the device before approving it.</p>
@@ -112,6 +115,7 @@
         <div class="section-heading">
           <div><p class="eyebrow">Activity</p><h2 id="activity-title">Recent activity</h2></div>
         </div>
+        <div id="activity-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="activity" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss activity message">Dismiss</button></div>
         <div id="audit" class="table-scroll desktop-data" role="region" aria-label="Recent management activity" tabindex="0"></div>
         <div id="audit-mobile" class="mobile-card-list" role="region" aria-label="Recent management activity"></div>
       </section>
@@ -128,6 +132,7 @@
 
       <section id="secret-panel" class="panel secret-panel" hidden aria-labelledby="secret-title">
         <div class="section-heading"><div><p class="eyebrow">Shown once</p><h2 id="secret-title">Credential</h2></div></div>
+        <div id="credential-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="credential" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss credential message">Dismiss</button></div>
         <p>Copy this value to the device now. It will not be shown again.</p>
         <code id="secret-value"></code>
         <div class="action-row">
