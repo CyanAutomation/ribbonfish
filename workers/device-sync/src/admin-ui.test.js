@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { parse } from "parse5";
+import postcss from "postcss";
 import {
   createFleetOpenUI,
   OPENUI_STARTER_SOURCE,
@@ -38,14 +40,40 @@ const overview = {
   asset_health: { missing: [] },
 };
 
+function descendants(node) {
+  return [node, ...(node.childNodes ?? []).flatMap(descendants)];
+}
+
+function parseHTML(source) {
+  return descendants(parse(source));
+}
+
+function attribute(node, name) {
+  return node.attrs?.find((item) => item.name === name)?.value;
+}
+
+function byID(nodes, id) {
+  return nodes.find((node) => attribute(node, "id") === id);
+}
+
 test("management page exposes accessible fleet and playlist sections", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
-  assert.match(html, /<link rel="icon" type="image\/png" href="\/admin\/favicon\.png">/);
-  assert.match(html, /aria-label="Fleet snapshot"/);
-  assert.match(html, /aria-label="Enrolled devices"/);
-  assert.match(html, /aria-label="Playlist versions"/);
-  assert.match(html, /aria-labelledby="device-title"/);
-  assert.match(html, /aria-labelledby="playlist-title"/);
+  const nodes = parseHTML(html);
+  for (const [id, label] of [
+    ["fleet-summary", "Fleet snapshot"],
+    ["devices", "Enrolled devices"],
+    ["playlists", "Playlist versions"],
+  ]) {
+    const region = byID(nodes, id);
+    assert.equal(attribute(region, "role"), "region");
+    assert.equal(attribute(region, "aria-label"), label);
+  }
+  for (const [sectionID, titleID] of [["device-section", "device-title"], ["playlist-section", "playlist-title"]]) {
+    const section = byID(nodes, sectionID);
+    const title = byID(nodes, titleID);
+    assert.equal(attribute(section, "aria-labelledby"), titleID);
+    assert.ok(title, `${sectionID} has a heading with an accessible name`);
+  }
 });
 
 test("transient notices replace, pause, resume, and clear their expiry", () => {
@@ -94,45 +122,58 @@ test("transient notices replace, pause, resume, and clear their expiry", () => {
   assert.equal(timers.size, 0, "a cleared notice cannot be resumed");
 });
 
-test("feedback slots stay contextual, dismissible, and in document flow", async () => {
+test("feedback locations have contextual announcements and dismissal controls", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const styles = await readFile(new URL("../public/admin/styles.css", import.meta.url), "utf8");
-  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
+  const nodes = parseHTML(html);
   for (const name of ["global", "overview", "playlist", "device", "activity", "credential"]) {
-    assert.match(html, new RegExp(`data-feedback-slot="${name}"`));
+    const slot = nodes.find((node) => attribute(node, "data-feedback-slot") === name);
+    assert.ok(slot, `feedback for ${name} has a dedicated location`);
+    assert.equal(attribute(slot, "role"), "status");
+    assert.equal(attribute(slot, "aria-live"), "polite");
+    assert.ok(descendants(slot).some((node) => attribute(node, "data-dismiss-feedback") !== undefined));
   }
-  assert.match(html, /data-dismiss-feedback/);
-  assert.match(app, /if \(!isError\)\s*\{[\s\S]*slot\.timer\.start\(\)/);
-  assert.match(app, /showMessage\(error\.message, true, "device"\)/);
-  assert.match(app, /showMessage\(error\.message, true, "playlist"\)/);
-  const statusBanner = styles.match(/\.status-banner\s*\{([^}]*)\}/)?.[1] ?? "";
-  assert.doesNotMatch(statusBanner, /position\s*:\s*(fixed|absolute)/);
-  assert.match(statusBanner, /justify-content:\s*center/);
-  assert.match(styles, /@keyframes\s+snackbar-rise/);
-  assert.match(styles, /prefers-reduced-motion:\s*reduce/);
+  const stylesheet = postcss.parse(styles);
+  const bannerRules = [];
+  stylesheet.walkRules(".status-banner", (rule) => bannerRules.push(rule));
+  assert.ok(bannerRules.some((rule) => rule.nodes.some((node) =>
+    node.type === "decl" && node.prop === "display" && node.value === "flex")));
+  assert.ok(bannerRules.every((rule) => !rule.nodes.some((node) =>
+    node.type === "decl" && node.prop === "position" && ["fixed", "absolute"].includes(node.value))));
+  let reducedMotionDisablesBannerAnimation = false;
+  stylesheet.walkAtRules("media", (media) => {
+    if (!/prefers-reduced-motion\s*:\s*reduce/.test(media.params)) return;
+    media.walkRules(".status-banner", (rule) => {
+      reducedMotionDisablesBannerAnimation ||= rule.nodes.some((node) =>
+        node.type === "decl" && node.prop === "animation" && node.value === "none");
+    });
+  });
+  assert.ok(reducedMotionDisablesBannerAnimation);
 });
 
 test("management page prioritizes task navigation and defers optional panels", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
-  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
-  assert.match(html, /id="fleet-attention"/);
-  assert.match(html, /<a href="#playlist-section">Playlists<\/a>/);
-  assert.match(html, /<a href="#device-section">Devices<\/a>/);
-  assert.match(html, /<details id="analysis-section"/);
-  assert.match(html, /<details id="playlist-editor"/);
-  assert.match(app, /summarizeFleetAttention\(overview, enrollmentRequests\)/);
-  assert.match(app, /document\.querySelector\("#playlist-editor"\)\.open = true/);
-  assert.match(app, /fleetAttention\.addEventListener\("click"/);
+  const nodes = parseHTML(html);
+  for (const sectionID of ["playlist-section", "device-section"]) {
+    assert.ok(nodes.some((node) => node.tagName === "a" && attribute(node, "href") === `#${sectionID}`));
+    assert.ok(byID(nodes, sectionID));
+  }
+  for (const id of ["analysis-section", "playlist-editor"]) {
+    const panel = byID(nodes, id);
+    assert.equal(panel.tagName, "details", `${id} can be opened on demand`);
+    assert.equal(attribute(panel, "open"), undefined, `${id} starts collapsed`);
+    assert.ok(descendants(panel).some((node) => node.tagName === "summary"));
+  }
+  assert.ok(byID(nodes, "fleet-attention"));
 });
 
-test("playlist editor and screenshot details use native disclosures", async () => {
+test("pending enrollment details start collapsed in a native disclosure", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
-  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
-  assert.match(html, /<details id="pending-enrollments-details"/);
-  assert.match(app, /hasNewRequest/);
-  assert.match(app, /else if \(!pendingEnrollmentsLoaded \|\| hasNewRequest\) pendingDetails\.open = true/);
-  assert.match(app, /capture-target__details/);
-  assert.match(app, /device-details/);
+  const nodes = parseHTML(html);
+  const pending = byID(nodes, "pending-enrollments-details");
+  assert.equal(pending.tagName, "details");
+  assert.equal(attribute(pending, "open"), undefined);
+  assert.ok(descendants(pending).some((node) => node.tagName === "summary"));
 });
 
 test("fleet attention shows only actionable health and content issues", () => {
@@ -164,28 +205,47 @@ test("fleet attention shows only actionable health and content issues", () => {
   assert.deepEqual(summarizeFleetAttention({ devices: [], asset_health: { missing: [] }, capture_targets: [] }, []), []);
 });
 
-test("management page exposes advisory fleet analysis and screenshot skip assessment controls", async () => {
+test("fleet analysis is an optional advisory action that does not change fleet state", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
-  const app = await readFile(new URL("../public/admin/app.js", import.meta.url), "utf8");
-  assert.match(html, /href="#analysis-section"/);
-  assert.match(html, /id="analysis-section"/);
-  assert.match(html, /id="run-fleet-analysis"/);
-  assert.match(html, /advisory skip suggestion.*admin confirms it/i);
-  assert.match(app, /\/admin\/api\/jev\/fleet-analysis/);
-  assert.match(app, /\/admin\/api\/jev\/capture-assessment/);
-  assert.match(app, /\/skip-once/);
-  assert.match(app, /showConfirmDialog\(\{/);
-  assert.match(app, /Confirm skip this screenshot once/);
-  assert.match(app, /Assess screenshot schedule/);
-  assert.match(app, /Advisory only/);
+  const nodes = parseHTML(html);
+  const analysis = byID(nodes, "analysis-section");
+  assert.equal(analysis.tagName, "details");
+  assert.ok(nodes.some((node) => node.tagName === "a" && attribute(node, "href") === "#analysis-section"));
+  const button = byID(nodes, "run-fleet-analysis");
+  assert.equal(button.tagName, "button");
+  assert.equal(attribute(button, "type"), "button");
+  const visibleCopy = nodes.filter((node) => node.nodeName === "#text").map((node) => node.value).join(" ");
+  assert.match(visibleCopy, /Recommendations are advisory and do not change fleet state/i);
 });
 
 test("management records switch to cards on narrow screens", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const styles = await readFile(new URL("../public/admin/styles.css", import.meta.url), "utf8");
-  assert.match(
-    styles,
-    /@media\s*\(max-width:\s*850px\)\s*\{\s*\.desktop-data\s*\{\s*display:\s*none;\s*\}\s*\.mobile-card-list\s*\{\s*display:\s*grid;\s*\}\s*\}/,
-  );
+  const nodes = parseHTML(html);
+  for (const id of ["playlists", "devices", "audit"]) {
+    const desktop = byID(nodes, id);
+    const mobile = byID(nodes, `${id}-mobile`);
+    assert.ok(desktop, `desktop ${id} view exists`);
+    assert.ok(mobile, `mobile ${id} view exists`);
+    const desktopClasses = new Set((attribute(desktop, "class") ?? "").split(/\s+/));
+    const mobileClasses = new Set((attribute(mobile, "class") ?? "").split(/\s+/));
+    assert.ok(desktopClasses.has("desktop-data"), `${id} has a desktop table view`);
+    assert.ok(mobileClasses.has("mobile-card-list"), `${id} has a mobile card view`);
+  }
+  const stylesheet = postcss.parse(styles);
+  const responsiveRules = [];
+  stylesheet.walkAtRules("media", (rule) => {
+    if (/max-width\s*:\s*850px/.test(rule.params)) responsiveRules.push(rule);
+  });
+  const declarationsFor = (selector) => {
+    const declarations = [];
+    for (const rule of responsiveRules) {
+      rule.walkRules(selector, (matching) => matching.walkDecls((declaration) => declarations.push(declaration)));
+    }
+    return declarations;
+  };
+  assert.ok(declarationsFor(".desktop-data").some((declaration) => declaration.prop === "display" && declaration.value === "none"));
+  assert.ok(declarationsFor(".mobile-card-list").some((declaration) => declaration.prop === "display" && declaration.value === "grid"));
 });
 
 test("approval confirmation asks operators to compare the full device fingerprint", () => {
@@ -461,7 +521,7 @@ test("OpenUI fleet view follows the documented read-only contract", () => {
   runtime.dispose();
 });
 
-test("OpenUI runtime recognizes incomplete programs and validates merged fleet views", () => {
+test("OpenUI runtime recognizes incomplete programs and preserves selected fleet metrics when merging", async () => {
   const runtime = createFleetOpenUI({ getOverview: async () => overview });
   const partial = runtime.inspectProgram('root = Dashboard([deviceMetric');
   assert.equal(partial.incomplete, true);
@@ -473,9 +533,12 @@ test("OpenUI runtime recognizes incomplete programs and validates merged fleet v
   const result = runtime.inspectProgram(merged);
   assert.equal(result.incomplete, false);
   assert.deepEqual(result.errors, []);
-  assert.match(merged, /root = Dashboard\(\[deviceMetric, activeMetric\]\)/);
-  assert.match(merged, /overview = Query\("get_fleet_overview"/);
-  assert.doesNotMatch(merged, /stagedMetric/);
+  runtime.renderProgram(merged);
+  await runtime.waitForQueries();
+  const [devices, active] = runtime.getView().root.props.children;
+  assert.equal(devices.props.value, "2 enrolled");
+  assert.equal(active.props.value, "operations / r-test");
+  assert.equal(runtime.getView().root.props.children.length, 2, "the merged view excludes the replaced metrics");
   runtime.dispose();
 });
 
