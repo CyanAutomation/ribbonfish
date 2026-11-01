@@ -35,7 +35,7 @@ test("management page starts, renders its data, and dismisses errors", async () 
   try {
     window.eval(bundle.outputFiles[0].text);
     await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual(calls, ["/admin/api/overview", "/admin/api/enrollment-requests"]);
+    assert.deepEqual(calls, ["/admin/api/overview", "/admin/api/enrollment-requests", "/admin/api/capture-decisions"]);
     assert.match(window.document.querySelector("#playlists").textContent, /No playlists yet/);
     assert.match(window.document.querySelector("#devices").textContent, /No devices have been approved/);
 

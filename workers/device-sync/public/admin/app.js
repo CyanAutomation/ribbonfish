@@ -517,7 +517,8 @@ function renderPlaylists(playlists) {
   });
 }
 
-function renderCaptureTargets(targets) {
+function renderCaptureTargets(targets, decisions = []) {
+  const decisionByTarget = new Map(decisions.map((decision) => [decision.capture_id, decision]));
   const container = document.querySelector("#capture-target-list");
   container.replaceChildren();
   if (!targets.length) {
@@ -546,6 +547,14 @@ function renderCaptureTargets(targets) {
     metadata.append(node("summary", "Schedule and screenshot details"));
     metadata.append(node("p", `${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`, "muted"));
     if (target.last_error) metadata.append(node("p", `Full error: ${target.last_error}`, "error-title"));
+    if (Number.isSafeInteger(target.next_due_at)) metadata.append(node("p", `Next screenshot ${formatTimestamp(target.next_due_at)}`, "muted"));
+    const backgroundDecision = decisionByTarget.get(target.capture_id);
+    if (backgroundDecision) {
+      const suggestion = backgroundDecision.action === "defer_once" ? "A later capture could be suitable" :
+        backgroundDecision.action === "error" ? "Assessment unavailable" : "Keep the scheduled capture";
+      metadata.append(node("p", `Background assessment ${formatTimestamp(backgroundDecision.assessed_at)} for ${formatTimestamp(backgroundDecision.due_at)}: ${suggestion}. ${backgroundDecision.reason} The schedule was unchanged.`, "muted"));
+    }
+
     content.append(metadata);
 
     const actions = node("div", undefined, "action-row");
@@ -944,16 +953,17 @@ function renderAudit(events) {
 }
 
 async function refresh() {
-  const [overview, enrollmentRequests] = await Promise.all([
+  const [overview, enrollmentRequests, captureDecisions] = await Promise.all([
     api("/admin/api/overview"),
     api("/admin/api/enrollment-requests"),
+    api("/admin/api/capture-decisions").catch(() => []),
   ]);
   latestOverview = overview;
   renderEnvironment(overview.environment);
   renderHealth(overview.asset_health);
   renderFleetAttention(overview, enrollmentRequests);
   renderPlaylists(overview.playlists);
-  renderCaptureTargets(overview.capture_targets ?? []);
+  renderCaptureTargets(overview.capture_targets ?? [], captureDecisions);
   renderDevices(overview.devices);
   renderPendingEnrollments(enrollmentRequests);
   renderAudit(overview.audit);
@@ -1022,10 +1032,7 @@ function renderJevDecision(result, title, { captureID } = {}) {
     }
     answers.append(item);
   }
-  const metadata = [`Advisory only · ${result.model || "JEV"}`];
-  if (Number.isFinite(result.usage?.cost)) metadata.push(`reported cost $${result.usage.cost.toFixed(6)}`);
-  if (Number.isSafeInteger(result.usage?.input_tokens)) metadata.push(`${result.usage.input_tokens} input tokens`);
-  card.append(answers, node("p", metadata.join(" · "), "jev-advisory"));
+  card.append(answers, node("p", "Advisory only", "jev-advisory"));
   if (captureID && result.answers?.recommendation?.choice === "skip_once") {
     const eligibility = result.skip_eligibility;
     if (eligibility?.eligible && Number.isSafeInteger(eligibility.due_at)) {
