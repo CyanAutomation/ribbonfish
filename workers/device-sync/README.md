@@ -93,6 +93,18 @@ read-only and deterministic; no OpenUI generation provider is configured. The
 native DOM adapter is bundled with esbuild; no OpenUI framework renderer is
 installed.
 
+Background capture assessment runs in shadow mode when `CAPTURE_ANALYSIS_MODE` is
+`shadow` on the scheduled management Worker. It assesses up to three active
+playlist targets per tick during the five minutes before they are due and
+stores one decision per target and due time for 30 days. Decisions do not alter
+the capture schedule; errors leave the normal capture in place. The latest
+assessment appears in each target's schedule details. The stored record
+contains the bounded input summary, provider response and model for evaluation;
+no screenshot pixels are sent. Apply migration `0010_capture_decisions.sql`
+before deploying a Worker with this mode enabled. Shadow suggestions are not
+validated incident detection, and should not be used to suppress captures until
+representative, labelled histories have been evaluated.
+
 `init:local` is only for a fresh local database. It applies `schema.sql` and
 records the migrations already represented by that schema. Production schema
 changes use `npm run migrate:management`.

@@ -69,6 +69,17 @@ export async function handleAdminRequest(request, env, ctx) {
       return jsonResponse(await readOverview(env));
     }
 
+    if (url.pathname === "/admin/api/capture-decisions") {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      const rows = await env.DB.prepare(
+        "SELECT d.capture_id, d.due_at, d.assessed_at, d.action, d.reason FROM capture_decisions d " +
+        "JOIN capture_targets t ON t.capture_id = d.capture_id " +
+        "WHERE t.enabled = 1 AND d.action != 'pending' AND d.due_at = (SELECT MAX(d2.due_at) FROM capture_decisions d2 WHERE d2.capture_id = d.capture_id AND d2.action != 'pending') " +
+        "AND EXISTS (SELECT 1 FROM playlist_capture_items p WHERE p.capture_id = t.capture_id) LIMIT 100",
+      ).all();
+      return jsonResponse(rows.results ?? []);
+    }
+
     if (url.pathname === "/admin/api/jev/fleet-analysis") {
       if (request.method !== "POST") return methodNotAllowed("POST");
       const data = await readJSON(request);
@@ -200,7 +211,7 @@ export async function handleAdminRequest(request, env, ctx) {
 
     return jsonResponse({ error: "not found" }, 404);
   } catch (error) {
-    if (error instanceof JEVRequestError) return jsonResponse({ error: error.message }, error.status);
+    if (error instanceof JEVRequestError) return jsonResponse({ error: "Analysis is temporarily unavailable. Try again shortly." }, error.status);
     if (error instanceof HTTPError) return jsonResponse({ error: error.message }, error.status);
     return jsonResponse({ error: "internal error" }, 500);
   }
@@ -286,14 +297,14 @@ async function confirmCaptureSkip(captureID, dueAt, env, actorID) {
 
 async function enforceJevRateLimit(env, actorID) {
   if (typeof env.ENROLLMENT_RATE_LIMITER?.limit !== "function") {
-    throw new HTTPError(503, "JEV rate limiting is unavailable.");
+    throw new HTTPError(503, "Analysis is temporarily unavailable.");
   }
   const key = `jev:${actorID.trim().toLowerCase() || "anonymous"}`;
   let result;
   try { result = await env.ENROLLMENT_RATE_LIMITER.limit({ key }); } catch {
-    throw new HTTPError(503, "JEV rate limiting is unavailable.");
+    throw new HTTPError(503, "Analysis is temporarily unavailable.");
   }
-  if (!result?.success) throw new HTTPError(429, "JEV analysis rate limit reached. Try again shortly.");
+  if (!result?.success) throw new HTTPError(429, "Analysis limit reached. Try again shortly.");
 }
 
 function isAllowedAdminEmail(email, configuredEmails) {

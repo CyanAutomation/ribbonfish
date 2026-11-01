@@ -710,3 +710,12 @@ test("playlist delete action is visible once per group and explains the active-p
   assert.equal(afterSwitchStates[1].disabled, false);
   assert.equal(afterSwitchStates[1].hint, "Deleting removes all 3 saved versions.");
 });
+
+test('visible analysis copy is branded as Ribbonfish and omits provider metadata', async () => {
+  const html = await readFile(new URL('../public/admin/index.html', import.meta.url), 'utf8');
+  const script = await readFile(new URL('../public/admin/app.js', import.meta.url), 'utf8');
+  const visible = parseHTML(html).filter((item) => item.nodeName === '#text').map((item) => item.value).join(' ');
+  assert.doesNotMatch(visible, /\bJEV\b/i);
+  assert.match(visible, /Ribbonfish reviews/i);
+  assert.doesNotMatch(script, /result\.model|result\.usage/);
+});
