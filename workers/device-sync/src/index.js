@@ -1,3 +1,4 @@
+import { assessUpcomingCaptures } from "./capture-intelligence.js";
 import { isValidPositiveDuration } from "./duration.js";
 import { handleAdminRequest } from "./admin.js";
 import { cleanupExpiredCaptures, dispatchDueCaptures, handleCaptureQueue } from "./capture-workflow.js";
@@ -45,6 +46,10 @@ export async function scheduledHandler(controller, env) {
     reconcileAssets(env, now),
     refreshDeviceHealthStatuses(env.DB, now),
     cleanHealth ? cleanupDeviceHealth(env.DB, now) : Promise.resolve(0),
+    env.CAPTURE_ANALYSIS_MODE === "shadow"
+      ? assessUpcomingCaptures(env, now).catch((error) => {
+        console.error(JSON.stringify({ event: "capture_analysis_failed", message: String(error?.message ?? error).slice(0, 200) }));
+      }) : Promise.resolve(),
   ]);
   const cleanup = assets.cycle_completed ? await cleanupExpiredCaptures(env, now) : 0;
   return { ...dispatch, cleaned_targets: cleanup, asset_reconciliation: assets,
