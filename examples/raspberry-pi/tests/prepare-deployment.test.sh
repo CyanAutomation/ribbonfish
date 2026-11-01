@@ -42,6 +42,11 @@ grep -F '# RIBBONFISH_PROFILE=pi4' "$target_dir/.env.example"
 grep -F '# RIBBONFISH_DRM_DEVICE=/dev/dri/by-path/platform-gpu-card' "$target_dir/.env.example"
 grep -F 'pi4) default_device=/dev/dri/by-path/platform-gpu-card ;;' "$script_dir/prepare-deployment.sh"
 
+single_target="$HOME/containers/pi4-single"
+sh "$script_dir/prepare-deployment.sh" --target "$single_target" \
+	--profile pi4-single --drm-device /dev/null --drm-gid 0
+grep -Fx 'RIBBONFISH_PROFILE=pi4-single' "$single_target/.env"
+
 mkdir -p "$temp_dir/bin"
 cat > "$temp_dir/bin/stat" <<'EOF'
 #!/bin/sh
@@ -135,6 +140,8 @@ case "\$1" in
 esac
 EOF
 chmod +x "$temp_dir/bin/docker"
+RIBBONFISH_DEPLOYMENT_DIR="$single_target" PATH="$temp_dir/bin:$PATH" \
+	sh "$script_dir/verify-deployment.sh" --preflight
 chmod +x "$temp_dir/bin/stat" "$temp_dir/bin/sudo"
 cat > "$temp_dir/bin/sleep" <<'EOF'
 #!/bin/sh

@@ -22,7 +22,7 @@ networking disabled. Use --image to select an immutable tag or digest.
 
 Options:
   --target DIR          Deployment directory (default: ~/containers/ribbonfish)
-  --profile PROFILE     pi3a-plus, pi3b, or pi4 (auto-detected where possible)
+  --profile PROFILE     pi3a-plus, pi3b, pi4, or pi4-single (auto-detected where possible)
   --drm-device PATH     DRM device (Pi 4 defaults to its stable KMS alias)
   --drm-gid GID         Numeric group owning the DRM card (default: detected)
   --sync-url URL        Cloudflare Worker URL (requires --device-id)
@@ -109,14 +109,15 @@ if [ -z "$profile" ]; then
 		*"Raspberry Pi 3 Model A Plus"*) profile=pi3a-plus ;;
 		*"Raspberry Pi 3 Model B"*) profile=pi3b ;;
 		*"Raspberry Pi 4"*) profile=pi4 ;;
-		*) fail 'could not detect a supported Pi profile; pass --profile pi3a-plus, pi3b, or pi4' ;;
+		*) fail 'could not detect a supported Pi profile; pass --profile pi3a-plus, pi3b, pi4, or pi4-single' ;;
 	esac
 fi
 
 case "$profile" in
 	pi3a-plus|pi3b) default_device=/dev/dri/card0 ;;
 	pi4) default_device=/dev/dri/by-path/platform-gpu-card ;;
-	*) fail "unsupported Pi profile '$profile' (choose pi3a-plus, pi3b, or pi4)" ;;
+	pi4-single) default_device=/dev/dri/by-path/platform-gpu-card ;;
+	*) fail "unsupported Pi profile '$profile' (choose pi3a-plus, pi3b, pi4, or pi4-single)" ;;
 esac
 
 drm_device=${drm_device:-$default_device}

@@ -75,7 +75,7 @@ func defaultConfigPath() string {
 	}
 	profile := strings.TrimSpace(os.Getenv("RIBBONFISH_PROFILE"))
 	switch profile {
-	case "pi3a-plus", "pi3b", "pi4", "simulator", "simulator-pi3a-plus", "simulator-pi3b", "simulator-pi4":
+	case "pi3a-plus", "pi3b", "pi4", "pi4-single", "simulator", "simulator-pi3a-plus", "simulator-pi3b", "simulator-pi4":
 	default:
 		profile = "pi4"
 	}

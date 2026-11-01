@@ -49,7 +49,7 @@ expected_image=$(env_value RIBBONFISH_IMAGE)
 expected_image=${expected_image:-cyanautomation/ribbonfish:latest}
 
 case "$profile" in
-	pi3a-plus|pi3b|pi4) ;;
+	pi3a-plus|pi3b|pi4|pi4-single) ;;
 	*) fail "unsupported RIBBONFISH_PROFILE='$profile'" ;;
 esac
 [ -n "$drm_device" ] && [ -c "$drm_device" ] || fail "DRM device '$drm_device' is not a character device"
