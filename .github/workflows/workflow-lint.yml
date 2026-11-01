@@ -32,3 +32,5 @@ jobs:
             .github/workflows/workflow-lint.yml
       - name: Check workflow syntax and expressions
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
+      - name: Test release freshness logic
+        run: node --test .github/scripts/tests/release-freshness.test.mjs

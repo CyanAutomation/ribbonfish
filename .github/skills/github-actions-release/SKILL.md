@@ -14,8 +14,8 @@ Use this skill for changes to `.github/workflows/`, CI triggers, deployment auto
 - `agent.yml` runs Go checks for agent changes and pull requests.
 - `arm-container-smoke.yml` validates Compose and runs simulator profiles in ARM containers; it is not physical hardware acceptance.
 - `device-sync.yml` builds admin assets, tests the Worker, and dry-runs both Worker configurations.
-- `deploy-device-sync.yml` validates and then deploys both Workers and publishes the management panel on protected `main` pushes matching its path filter. It does not apply D1 migrations.
-- `publish-agent.yml` calls `verify-agent.yml`, then publishes ARM images to GHCR on protected `main` pushes affecting `agent/**`.
+- `deploy-device-sync.yml` validates and then deploys both Workers and publishes the management panel on protected `main` pushes matching its path filter. It checks migration readiness but does not apply D1 migrations.
+- `publish-agent.yml` calls `verify-agent.yml`, and the ARM smoke workflow, then publishes ARM images to GHCR on protected `main` pushes affecting `agent/**`.
 - `docker-publish.yml` handles Docker Hub multi-architecture publication and latest-tag promotion.
 - `workflow-lint.yml` runs actionlint on workflow changes.
 
@@ -26,7 +26,7 @@ Use this skill for changes to `.github/workflows/`, CI triggers, deployment auto
 - Keep pull-request validation available independently of production credentials. Do not execute untrusted PR code in a job with deploy secrets.
 - Update `paths` filters whenever a required source/config input changes, and ensure the validation workflow reports on every PR if it is a required check.
 - Keep production deployment behind the protected default branch and serialize deploy/publish jobs that mutate shared production state or tags.
-- Preserve immutable SHA image tags. Promote moving tags only after checking that the published commit is still the current `main` tip.
+- Preserve immutable SHA image tags. Promote moving tags only after checking that the published agent tree still matches current `main`.
 - Run actionlint and the relevant called workflow checks. Report QEMU and simulator evidence as container compatibility, never as DRM/KMS hardware validation.
 
 ## References
