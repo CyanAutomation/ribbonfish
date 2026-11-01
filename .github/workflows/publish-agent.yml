@@ -64,15 +64,17 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: true
           sbom: true
-      - name: Promote current main image to main
+      - name: Check whether agent image tags are current
+        id: freshness
         env:
           GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/release-freshness.mjs agent --allow-stale
+      - name: Promote current main image to main
+        if: steps.freshness.outcome == 'success' && steps.freshness.outputs.current == 'true'
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           IMAGE_SHA: ${{ github.sha }}
         run: |
-          if ! node .github/scripts/release-freshness.mjs agent; then
-            echo "Could not establish current agent inputs; skipping promotion"
-            exit 1
-          fi
           docker buildx imagetools create \
-            --tag ghcr.io/cyanautomation/ribbonfish:main \
+            --tag "ghcr.io/cyanautomation/ribbonfish:main" \
             "ghcr.io/cyanautomation/ribbonfish:sha-${IMAGE_SHA}"

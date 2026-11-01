@@ -80,14 +80,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/release-freshness.mjs workers/device-sync --allow-stale
       - name: Deploy device-sync Worker
-        if: steps.freshness.outputs.current == 'true'
+        if: steps.freshness.outcome == 'success' && steps.freshness.outputs.current == 'true'
         working-directory: workers/device-sync
         run: npm run deploy:production
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Publish management assets and deploy Worker
-        if: steps.freshness.outputs.current == 'true'
+        if: steps.freshness.outcome == 'success' && steps.freshness.outputs.current == 'true'
         working-directory: workers/device-sync
         run: npm run deploy:management
         env:

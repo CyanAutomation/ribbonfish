@@ -57,11 +57,13 @@ test("container publishers wait for shared validation and avoid promoting stale 
     assert.equal(workflow.jobs.verify.uses, "./.github/workflows/verify-agent.yml");
     assert.ok(publish.needs.includes("verify"));
     assert.match(publish.if, /ref_protected/);
+    const freshness = publish.steps.find((step) => step.id === "freshness");
+    assert.ok(freshness, `${registry} freshness check must exist`);
+    assert.match(freshness.run, /release-freshness.*--allow-stale/);
     const promotion = publish.steps.find((step) => /Promote current main image/.test(step.name));
     assert.ok(promotion, `${registry} image promotion step must exist`);
-    assert.match(promotion.run, /release-freshness/);
+    assert.equal(promotion.if, "steps.freshness.outcome == 'success' && steps.freshness.outputs.current == 'true'");
     assert.match(promotion.run, /IMAGE_SHA/);
-    assert.match(promotion.run, /exit 1/);
   }
 
   const ghcr = await readYaml(".github/workflows/publish-agent.yml");
@@ -72,7 +74,7 @@ test("container publishers wait for shared validation and avoid promoting stale 
 
   const dockerHub = await readYaml(".github/workflows/docker-publish.yml");
   const promotion = dockerHub.jobs.publish.steps.find((step) => /Promote current main image/.test(step.name));
-  assert.equal(promotion.env.GH_TOKEN, "${{ github.token }}");
+  assert.equal(dockerHub.jobs.publish.steps.find((step) => step.id === "freshness").env.GH_TOKEN, "${{ github.token }}");
   assert.match(promotion.run, /ribbonfish:latest/);
 });
 
@@ -128,7 +130,7 @@ test("release safeguards cover runtime sources, migration readiness, freshness, 
   for (const name of ["Deploy device-sync Worker", "Publish management assets and deploy Worker"]) {
     const index = steps.findIndex(s => s.name === name);
     assert.ok(index > freshness && index > readiness);
-    assert.equal(steps[index].if, "steps.freshness.outputs.current == 'true'");
+    assert.equal(steps[index].if, "steps.freshness.outcome == 'success' && steps.freshness.outputs.current == 'true'");
   }
   assert.equal(steps[readiness].env.CLOUDFLARE_API_TOKEN, "${{ secrets.CLOUDFLARE_API_TOKEN }}");
   for (const file of ["docker-publish.yml", "publish-agent.yml"]) {
