@@ -1,3 +1,6 @@
+import { buildCaptureAssessmentState, captureAssessmentQuestions } from './jev-use-cases.js';
+import { callJevDecision } from './jev.js';
+
 // The model supplies a suggestion; deterministic rules bound any prospective deferral.
 export function decideCapturePolicy(target, decision, now) {
   const interval = target.capture_interval_seconds * 1000;
@@ -15,9 +18,6 @@ export function decideCapturePolicy(target, decision, now) {
   }
   return { action: 'capture', next_due_at: due, reason: 'Keep the scheduled capture when evidence is insufficient or a safeguard applies.' };
 }
-
-import { buildCaptureAssessmentState, captureAssessmentQuestions } from './jev-use-cases.js';
-import { callJevDecision } from './jev.js';
 
 // Shadow decisions are recorded ahead of time and never modify capture schedules.
 export async function assessUpcomingCaptures(env, now = Date.now(), decide = callJevDecision) {

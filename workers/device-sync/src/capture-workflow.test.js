@@ -806,6 +806,13 @@ test('background screenshot assessment records a bounded shadow decision once pe
     await assessUpcomingCaptures(env, now, decide);
     assert.equal(calls, 1);
     assert.equal(sqlite.prepare('SELECT action FROM capture_decisions').get().action, 'capture');
+    const storedState = sqlite.prepare('SELECT state_json FROM capture_decisions').get().state_json;
+    assert.equal(typeof storedState, 'string');
+    const parsedState = JSON.parse(storedState);
+    assert.equal(typeof parsedState, 'object');
+    assert.equal(parsedState.screenshot_age_seconds, 0);
+    assert.equal(parsedState.seconds_until_due, 60);
+
     const response = await handleAdminRequest(await request('/admin/api/capture-decisions'), env);
     assert.equal(response.status, 200);
     const decisions = await response.json();
