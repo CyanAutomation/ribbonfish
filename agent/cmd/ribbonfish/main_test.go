@@ -169,6 +169,24 @@ func TestDefaultConfigPathSelectsPi3APlusSimulatorProfile(t *testing.T) {
 	}
 }
 
+func TestSingleDisplayPi4Profile(t *testing.T) {
+	t.Setenv("RIBBONFISH_CONFIG_FILE", "")
+	t.Setenv("RIBBONFISH_DEFAULTS_DIR", "../../defaults")
+	t.Setenv("RIBBONFISH_PROFILE", "pi4-single")
+	t.Setenv("RIBBONFISH_CACHE_DIR", "")
+	t.Setenv("RIBBONFISH_DRM_DEVICE", "")
+	if got := defaultConfigPath(); got != "../../defaults/pi4-single.json" {
+		t.Fatalf("single-display profile path = %q", got)
+	}
+	cfg, err := config.Load(defaultConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Displays) != 1 || cfg.Displays[0].Connector != "HDMI-A-1" {
+		t.Fatalf("single-display outputs = %#v", cfg.Displays)
+	}
+}
+
 func TestCheckDRMDisplaysMatchesConnectedConfiguredConnector(t *testing.T) {
 	t.Setenv("RIBBONFISH_CACHE_DIR", "")
 	t.Setenv("RIBBONFISH_DRM_DEVICE", "")
@@ -779,7 +797,7 @@ func TestBundledProfilesLoadWithVerifiedSharedOfflinePlaylist(t *testing.T) {
 		t.Fatal("runtime.Caller() could not locate test source")
 	}
 	defaults := filepath.Clean(filepath.Join(filepath.Dir(source), "../../defaults"))
-	profiles := []string{"pi3a-plus.json", "pi3b.json", "pi4.json", "simulator.json", "simulator-pi3a-plus.json", "simulator-pi3b.json", "simulator-pi4.json"}
+	profiles := []string{"pi3a-plus.json", "pi3b.json", "pi4.json", "pi4-single.json", "simulator.json", "simulator-pi3a-plus.json", "simulator-pi3b.json", "simulator-pi4.json"}
 	var sharedPlaylist *config.PlaylistConfig
 	for _, name := range profiles {
 		t.Run(name, func(t *testing.T) {
