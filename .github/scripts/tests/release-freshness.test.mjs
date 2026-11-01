@@ -11,7 +11,7 @@ test('tree lookup fails closed', () => {
   assert.throws(() => treeEntry([{ path: 'agent', type: 'blob', sha: 'abc' }], 'agent'));
 });
 
-test('stale promotion fails even when GitHub provides GITHUB_OUTPUT', async () => {
+test('stale release input is reported and can be safely skipped for promotion', async () => {
   const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join, delimiter } = await import('node:path');
@@ -28,5 +28,6 @@ test('stale promotion fails even when GitHub provides GITHUB_OUTPUT', async () =
     assert.match(readFileSync(output, 'utf8'), /current=false/);
     const skipped = spawnSync(process.execPath, [script, 'agent', '--allow-stale'], { env });
     assert.equal(skipped.status, 0, skipped.stderr.toString());
+    assert.match(readFileSync(output, 'utf8'), /current=false/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
