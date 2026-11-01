@@ -784,3 +784,71 @@ test("retention removes captures older than 30 days and restores their holding a
     sqlite.close();
   }
 });
+
+test('background screenshot assessment records a bounded shadow decision once per due time without changing the schedule', async () => {
+  const { assessUpcomingCaptures } = await import('./capture-intelligence.js');
+  const sqlite = await freshDatabase();
+  try {
+    sqlite.exec(await readFile(new URL('../migrations/0010_capture_decisions.sql', import.meta.url), 'utf8'));
+    const { env, messages } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const id = created.body.captures[0].capture_id;
+    sqlite.prepare("UPDATE capture_jobs SET status = 'succeeded' WHERE job_id = ?").run(messages.shift().job_id);
+    const now = Date.now();
+    const due = now + 60_000;
+    sqlite.prepare("UPDATE capture_targets SET current_sha256 = ?, current_size = 1, last_success_at = ?, next_due_at = ? WHERE capture_id = ?")
+      .run('a'.repeat(64), now, due, id);
+    await env.ASSETS.put(`assets/${'a'.repeat(64)}`, new Uint8Array([1]));
+    sqlite.prepare("INSERT INTO active_playlist (singleton, playlist_id, revision) VALUES (1, 'operations', ?)").run(created.body.revision);
+    let calls = 0;
+    const decide = async () => { calls++; return { model: 'test-model', answers: { recommendation: { choice: 'capture_now' }, risk: { score: 1 } } }; };
+    await assessUpcomingCaptures(env, now, decide);
+    await assessUpcomingCaptures(env, now, decide);
+    assert.equal(calls, 1);
+    assert.equal(sqlite.prepare('SELECT action FROM capture_decisions').get().action, 'capture');
+    const response = await handleAdminRequest(await request('/admin/api/capture-decisions'), env);
+    assert.equal(response.status, 200);
+    const decisions = await response.json();
+    assert.equal(decisions[0].capture_id, id);
+    assert.equal(decisions[0].action, 'capture');
+    assert.equal(decisions[0].model, undefined);
+    assert.equal(decisions[0].state_json, undefined);
+    assert.equal(sqlite.prepare('SELECT next_due_at FROM capture_targets WHERE capture_id = ?').get(id).next_due_at, due);
+  } finally { sqlite.close(); }
+});
+
+test('background assessment failures record a fallback and preserve the scheduled capture', async () => {
+  const { assessUpcomingCaptures } = await import('./capture-intelligence.js');
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const id = created.body.captures[0].capture_id;
+    sqlite.prepare("UPDATE capture_jobs SET status = 'succeeded' WHERE job_id = ?").run(messages.shift().job_id);
+    const now = Date.now(); const due = now + 60_000;
+    sqlite.prepare('UPDATE capture_targets SET next_due_at = ? WHERE capture_id = ?').run(due, id);
+    sqlite.prepare("INSERT INTO active_playlist (singleton, playlist_id, revision) VALUES (1, 'operations', ?)").run(created.body.revision);
+    await assessUpcomingCaptures(env, now, async () => { throw new Error('provider unavailable'); });
+    assert.equal(sqlite.prepare('SELECT action FROM capture_decisions').get().action, 'error');
+    await dispatchDueCaptures(env, due);
+    assert.equal(messages.length, 1);
+  } finally { sqlite.close(); }
+});
+
+
+test('abandoned background assessment can be retried without changing the schedule', async () => {
+  const { assessUpcomingCaptures } = await import('./capture-intelligence.js');
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const id = created.body.captures[0].capture_id;
+    sqlite.prepare("UPDATE capture_jobs SET status = 'succeeded' WHERE job_id = ?").run(messages.shift().job_id);
+    const now = Date.now(); const due = now + 60_000;
+    sqlite.prepare('UPDATE capture_targets SET next_due_at = ? WHERE capture_id = ?').run(due, id);
+    sqlite.prepare("INSERT INTO active_playlist (singleton, playlist_id, revision) VALUES (1, 'operations', ?)").run(created.body.revision);
+    sqlite.prepare("INSERT INTO capture_decisions (capture_id, due_at, assessed_at, action, reason) VALUES (?, ?, ?, 'pending', 'pending')").run(id, due, now - 121_000);
+    await assessUpcomingCaptures(env, now, async () => ({ answers: { recommendation: { choice: 'capture_now' }, risk: { score: 1 } } }));
+    assert.equal(sqlite.prepare('SELECT action FROM capture_decisions').get().action, 'capture');
+  } finally { sqlite.close(); }
+});
