@@ -10,7 +10,8 @@ backend.
 The container image includes `defaults/` and its starter images. The default
 profile is `pi4`; select `pi3b`, `pi3a-plus`, `simulator`,
 `simulator-pi3a-plus`, `simulator-pi3b`, or `simulator-pi4` with
-`RIBBONFISH_PROFILE`. `RIBBONFISH_CONFIG_FILE` can still point to a local
+`RIBBONFISH_PROFILE`. For a Pi 4 with only HDMI-A-1 connected, select
+`pi4-single`; `pi4` expects both HDMI outputs. `RIBBONFISH_CONFIG_FILE` can still point to a local
 override.
 
 The runnable two-display demo and its instructions are in
