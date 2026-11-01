@@ -24,28 +24,8 @@ test("production deployment validates relevant Worker changes before protected-m
   const deploy = workflow.jobs.deploy;
 
   assert.deepEqual(workflow.on.push.branches, ["main"]);
-  for (const path of [
-    "workers/device-sync/src/index.js",
-    "workers/device-sync/src/admin.js",
-    "workers/device-sync/src/asset-store.js",
-    "workers/device-sync/src/asset-registry.js",
-    "workers/device-sync/src/asset-maintenance.js",
-    "workers/device-sync/src/capture.js",
-    "workers/device-sync/src/capture-workflow.js",
-    "workers/device-sync/src/duration.js",
-    "workers/device-sync/migrations/**",
-    "workers/device-sync/public/admin/**",
-    "workers/device-sync/schema.sql",
-    "workers/device-sync/scripts/build-admin.mjs",
-    "workers/device-sync/scripts/publish-admin-assets.mjs",
-    "workers/device-sync/.nvmrc",
-    "workers/device-sync/wrangler.toml",
-    "workers/device-sync/wrangler.management.toml",
-    "workers/device-sync/package.json",
-    "workers/device-sync/package-lock.json",
-    ".github/workflows/deploy-device-sync.yml",
-  ]) assert.ok(paths.includes(path), `changes to ${path} must trigger deployment`);
-  assert.equal(paths.some((path) => /README|\.test\.js/.test(path)), false);
+  assert.ok(paths.includes("workers/device-sync/**"));
+  assert.ok(paths.includes(".github/workflows/deploy-device-sync.yml"));
 
   assert.deepEqual(workflow.permissions, { contents: "read" });
   assert.match(stepNamed(validate, "Test Worker routes and authorization").run, /npm test/);
@@ -75,13 +55,15 @@ test("container publishers wait for shared validation and avoid promoting stale 
     assert.ok(workflow.on.push.paths.includes("agent/**"));
     assert.ok(workflow.on.push.paths.includes(`.github/workflows/${file}`));
     assert.equal(workflow.jobs.verify.uses, "./.github/workflows/verify-agent.yml");
-    assert.equal(publish.needs, "verify");
+    assert.ok(publish.needs.includes("verify"));
     assert.match(publish.if, /ref_protected/);
+    const freshness = publish.steps.find((step) => step.id === "freshness");
+    assert.ok(freshness, `${registry} freshness check must exist`);
+    assert.match(freshness.run, /release-freshness.*--allow-stale/);
     const promotion = publish.steps.find((step) => /Promote current main image/.test(step.name));
     assert.ok(promotion, `${registry} image promotion step must exist`);
-    assert.match(promotion.run, /main_sha/);
+    assert.equal(promotion.if, "steps.freshness.outcome == 'success' && steps.freshness.outputs.current == 'true'");
     assert.match(promotion.run, /IMAGE_SHA/);
-    assert.match(promotion.run, /exit 0/);
   }
 
   const ghcr = await readYaml(".github/workflows/publish-agent.yml");
@@ -92,7 +74,7 @@ test("container publishers wait for shared validation and avoid promoting stale 
 
   const dockerHub = await readYaml(".github/workflows/docker-publish.yml");
   const promotion = dockerHub.jobs.publish.steps.find((step) => /Promote current main image/.test(step.name));
-  assert.equal(promotion.env.GH_TOKEN, "${{ github.token }}");
+  assert.equal(dockerHub.jobs.publish.steps.find((step) => step.id === "freshness").env.GH_TOKEN, "${{ github.token }}");
   assert.match(promotion.run, /ribbonfish:latest/);
 });
 
@@ -134,4 +116,26 @@ test("dependency updates cover the shipped npm package and container base images
   const dockerfile = await readFile(new URL("../../../agent/Dockerfile", import.meta.url), "utf8");
   assert.match(dockerfile, /^FROM --platform=\$BUILDPLATFORM golang:\d+\.\d+\.\d+-alpine@sha256:[a-f0-9]{64} AS build$/m);
   assert.match(dockerfile, /^FROM gcr\.io\/distroless\/static-debian12:nonroot@sha256:[a-f0-9]{64}$/m);
+});
+
+
+test("release safeguards cover runtime sources, migration readiness, freshness, and smoke tests", async () => {
+  const deploy = await readYaml(".github/workflows/deploy-device-sync.yml");
+  assert.ok(deploy.on.push.paths.includes("workers/device-sync/**"));
+  const steps = deploy.jobs.deploy.steps;
+  assert.ok(steps.some(s => s.name === "Check current Worker inputs"));
+  assert.ok(steps.some(s => s.name === "Check production migration readiness"));
+  const freshness = steps.findIndex(s => s.name === "Check current Worker inputs");
+  const readiness = steps.findIndex(s => s.name === "Check production migration readiness");
+  for (const name of ["Deploy device-sync Worker", "Publish management assets and deploy Worker"]) {
+    const index = steps.findIndex(s => s.name === name);
+    assert.ok(index > freshness && index > readiness);
+    assert.equal(steps[index].if, "steps.freshness.outcome == 'success' && steps.freshness.outputs.current == 'true'");
+  }
+  assert.equal(steps[readiness].env.CLOUDFLARE_API_TOKEN, "${{ secrets.CLOUDFLARE_API_TOKEN }}");
+  for (const file of ["docker-publish.yml", "publish-agent.yml"]) {
+    const workflow = await readYaml(`.github/workflows/${file}`);
+    assert.equal(workflow.jobs.smoke.uses, "./.github/workflows/arm-container-smoke.yml");
+    assert.ok(workflow.jobs.publish.needs.includes("smoke"));
+  }
 });

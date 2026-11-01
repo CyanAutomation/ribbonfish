@@ -8,6 +8,8 @@ on:
       - "agent/**"
       - ".github/workflows/publish-agent.yml"
       - ".github/workflows/verify-agent.yml"
+      - ".github/workflows/arm-container-smoke.yml"
+      - ".github/scripts/release-freshness.mjs"
 
 permissions:
   contents: read
@@ -16,8 +18,11 @@ jobs:
   verify:
     uses: ./.github/workflows/verify-agent.yml
 
+  smoke:
+    uses: ./.github/workflows/arm-container-smoke.yml
+
   publish:
-    needs: verify
+    needs: [verify, smoke]
     if: github.ref_protected
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -59,16 +64,17 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: true
           sbom: true
-      - name: Promote current main image to main
+      - name: Check whether agent image tags are current
+        id: freshness
         env:
           GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/release-freshness.mjs agent --allow-stale
+      - name: Promote current main image to main
+        if: steps.freshness.outcome == 'success' && steps.freshness.outputs.current == 'true'
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           IMAGE_SHA: ${{ github.sha }}
         run: |
-          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
-          if [ "$main_sha" != "$IMAGE_SHA" ]; then
-            echo "main has advanced; keeping main on the newer publish"
-            exit 0
-          fi
           docker buildx imagetools create \
-            --tag ghcr.io/cyanautomation/ribbonfish:main \
+            --tag "ghcr.io/cyanautomation/ribbonfish:main" \
             "ghcr.io/cyanautomation/ribbonfish:sha-${IMAGE_SHA}"

@@ -40,6 +40,11 @@ An optional QEMU container smoke check also builds and starts the ARMv7 and
 ARM64 images against simulated single- and dual-display profiles; this verifies
 container compatibility only and does not replace physical Pi testing.
 
+CI also runs Zizmor on Actions workflows and CodeQL on Go, JavaScript, and
+Actions. CodeQL requires GitHub code scanning to be available and configured
+for workflow-based (advanced) setup; check the repository security settings
+if default setup is already enabled.
+
 ## Goals
 
 - Run on Raspberry Pi 3B and 4 without a full desktop, Chromium, or a browser extension.
@@ -138,7 +143,7 @@ The current management Worker uses screenshot Quick Actions, not persistent brow
 
 ### Deployment model
 
-The experimental deployment is **Docker Compose on Raspberry Pi OS Lite**, with no graphical desktop, Chromium, X11, or Wayland session. The container includes its default profile and starter images, so the offline Compose setup needs no host-mounted config or asset files. It maps one DRM card, persists cache, last-good playlist snapshot, and device identity in a state volume, and runs non-root with a read-only root filesystem and no added capabilities. Networking defaults to `none`; set it to `bridge` for initial approval and optional sync. On protected `main` pushes that change `agent/**`, GitHub Actions publishes an ARMv7/ARM64 GHCR image tagged `main` and with the immutable commit SHA (`sha-<SHA>`), plus a multi-architecture Docker Hub image (`amd64`, `arm64`, and `arm/v7`) tagged with the commit SHA. Docker Hub's `latest` tag moves only when the published commit is still the `main` tip. Compose defaults to `latest`, with `RIBBONFISH_IMAGE` available to pin an immutable SHA tag or manifest digest for repeatable deployments. The image must already be present on the Pi for a fully offline first start.
+The experimental deployment is **Docker Compose on Raspberry Pi OS Lite**, with no graphical desktop, Chromium, X11, or Wayland session. The container includes its default profile and starter images, so the offline Compose setup needs no host-mounted config or asset files. It maps one DRM card, persists cache, last-good playlist snapshot, and device identity in a state volume, and runs non-root with a read-only root filesystem and no added capabilities. Networking defaults to `none`; set it to `bridge` for initial approval and optional sync. On protected `main` pushes that change `agent/**`, GitHub Actions publishes an ARMv7/ARM64 GHCR image tagged `main` and with the immutable commit SHA (`sha-<SHA>`), plus a multi-architecture Docker Hub image (`amd64`, `arm64`, and `arm/v7`) tagged with the commit SHA. Moving tags are promoted only when the published agent tree still matches `main`, even if unrelated commits have landed. Both publishers require the ARM container smoke checks to pass. Compose defaults to `latest`, with `RIBBONFISH_IMAGE` available to pin an immutable SHA tag or manifest digest for repeatable deployments. The image must already be present on the Pi for a fully offline first start.
 
 The Compose deployment maps only the selected DRM card and its numeric device group. The agent requests DRM master, configures the selected connector(s), and takes over scanout; the host display manager or compositor must release that card. Device access does not guarantee DRM master ownership or multi-output support. Select the bundled profile and verify the device path, group, and connector on each Pi. Avoid `privileged: true`.
 

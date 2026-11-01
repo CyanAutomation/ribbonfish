@@ -5,25 +5,10 @@ on:
     branches:
       - main
     paths:
-      - "workers/device-sync/src/index.js"
-      - "workers/device-sync/src/admin.js"
-      - "workers/device-sync/src/asset-store.js"
-      - "workers/device-sync/src/asset-registry.js"
-      - "workers/device-sync/src/asset-maintenance.js"
-      - "workers/device-sync/src/capture.js"
-      - "workers/device-sync/src/capture-workflow.js"
-      - "workers/device-sync/src/duration.js"
-      - "workers/device-sync/migrations/**"
-      - "workers/device-sync/public/admin/**"
-      - "workers/device-sync/schema.sql"
-      - "workers/device-sync/scripts/build-admin.mjs"
-      - "workers/device-sync/scripts/publish-admin-assets.mjs"
-      - "workers/device-sync/.nvmrc"
-      - "workers/device-sync/wrangler.toml"
-      - "workers/device-sync/wrangler.management.toml"
-      - "workers/device-sync/package.json"
-      - "workers/device-sync/package-lock.json"
+      - "workers/device-sync/**"
       - ".github/workflows/deploy-device-sync.yml"
+      - ".github/scripts/release-freshness.mjs"
+      - "workers/device-sync/scripts/migration-readiness.js"
 
 permissions:
   contents: read
@@ -83,13 +68,26 @@ jobs:
       - name: Install dependencies
         working-directory: workers/device-sync
         run: npm ci
+      - name: Check production migration readiness
+        working-directory: workers/device-sync
+        run: node scripts/migration-readiness.js
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Check current Worker inputs
+        id: freshness
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/release-freshness.mjs workers/device-sync --allow-stale
       - name: Deploy device-sync Worker
+        if: steps.freshness.outcome == 'success' && steps.freshness.outputs.current == 'true'
         working-directory: workers/device-sync
         run: npm run deploy:production
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Publish management assets and deploy Worker
+        if: steps.freshness.outcome == 'success' && steps.freshness.outputs.current == 'true'
         working-directory: workers/device-sync
         run: npm run deploy:management
         env:
