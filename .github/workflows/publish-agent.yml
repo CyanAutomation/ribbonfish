@@ -8,6 +8,8 @@ on:
       - "agent/**"
       - ".github/workflows/publish-agent.yml"
       - ".github/workflows/verify-agent.yml"
+      - ".github/workflows/arm-container-smoke.yml"
+      - ".github/scripts/release-freshness.mjs"
 
 permissions:
   contents: read
@@ -16,8 +18,11 @@ jobs:
   verify:
     uses: ./.github/workflows/verify-agent.yml
 
+  smoke:
+    uses: ./.github/workflows/arm-container-smoke.yml
+
   publish:
-    needs: verify
+    needs: [verify, smoke]
     if: github.ref_protected
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -64,10 +69,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           IMAGE_SHA: ${{ github.sha }}
         run: |
-          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
-          if [ "$main_sha" != "$IMAGE_SHA" ]; then
-            echo "main has advanced; keeping main on the newer publish"
-            exit 0
+          if ! node .github/scripts/release-freshness.mjs agent; then
+            echo "Could not establish current agent inputs; skipping promotion"
+            exit 1
           fi
           docker buildx imagetools create \
             --tag ghcr.io/cyanautomation/ribbonfish:main \

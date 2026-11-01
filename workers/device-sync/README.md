@@ -128,7 +128,7 @@ trusted local checkout with `npm run deploy:production` and
 
 `npm run deploy:management` publishes the management panel to the production R2
 bucket and deploys `wrangler.management.toml`. GitHub Actions does not apply D1
-migrations. The push to protected `main` deploys the Workers automatically, so
+migrations. The deployment checks the production migration ledger and fails if repository migrations are pending or the ledger cannot be read. The Cloudflare token therefore needs D1 query access. The push to protected `main` deploys the Workers automatically, so
 apply `npm run migrate:management` before merging code that depends on a new
 migration. The Access policy is configured on the Worker in Cloudflare and must
 stay enabled; `ADMIN_ACCESS_REQUIRED` also blocks `/admin/` and
