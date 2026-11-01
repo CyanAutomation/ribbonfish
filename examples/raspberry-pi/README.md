@@ -96,7 +96,9 @@ this README in the deployment directory. It does not copy config or image
 assets. Use `--profile`, `--drm-device`, or `--drm-gid` to override detection.
 The Pi profile mapping is:
 
-- Pi 4 uses profile `pi4`, which requires both HDMI connectors listed above.
+- Pi 4 uses profile `pi4` for both HDMI connectors, or `pi4-single` for only
+  HDMI-A-1. Select the single-display profile with `--profile pi4-single`
+  when staging a deployment; it is included in images built after this change.
   The helper defaults to `/dev/dri/by-path/platform-gpu-card`; check that the
   alias exists and points to the KMS display device before starting Compose.
 - Ribbonfish is a Pi 3 A+ using profile `pi3a-plus`, `/dev/dri/card0`, and GID `44`.
