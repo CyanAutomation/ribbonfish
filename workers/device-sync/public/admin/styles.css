@@ -387,3 +387,5 @@ label { display: grid; gap: var(--space-1); color: var(--color-text-label); font
 .module-dialog { width: min(720px, calc(100% - 2rem)); max-height: 85vh; overflow: auto; border: 0; border-radius: var(--radius-panel); box-shadow: var(--shadow-dialog); }
 .module-dialog::backdrop { background: var(--color-overlay); }
 .module-dialog > .button { float: right; }
+
+.module-dialog--page { position: static; width: 100%; max-height: none; margin: 1rem 0; }
