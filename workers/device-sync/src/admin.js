@@ -86,7 +86,7 @@ export async function handleAdminRequest(request, env, ctx) {
         "SELECT d.capture_id, d.due_at, d.assessed_at, d.action, d.reason FROM capture_decisions d " +
         "JOIN capture_targets t ON t.capture_id = d.capture_id " +
         "WHERE t.enabled = 1 AND d.action != 'pending' AND d.due_at = (SELECT MAX(d2.due_at) FROM capture_decisions d2 WHERE d2.capture_id = d.capture_id AND d2.action != 'pending') " +
-        "AND EXISTS (SELECT 1 FROM playlist_capture_items p WHERE p.capture_id = t.capture_id) LIMIT 100",
+        "LIMIT 1000",
       ).all();
       return jsonResponse(rows.results ?? []);
     }
@@ -153,6 +153,11 @@ export async function handleAdminRequest(request, env, ctx) {
     if (url.pathname === "/admin/api/assets") {
       if (request.method !== "POST") return methodNotAllowed("POST");
       return await uploadAsset(request, env, actorID);
+    }
+
+    if (url.pathname === "/admin/api/capture-sites") {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      return await createCaptureSite(request, env, actorID);
     }
 
     const captureSkipMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/skip-once$/i);
@@ -240,8 +245,7 @@ async function readCaptureAssessmentTarget(captureID, env) {
     "t.current_sha256, t.current_size, t.enabled, " +
     "(SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued', 'running') " +
     "ORDER BY j.created_at DESC LIMIT 1) AS job_status " +
-    "FROM capture_targets t WHERE t.capture_id = ? AND t.enabled = 1 " +
-    "AND EXISTS (SELECT 1 FROM playlist_capture_items p WHERE p.capture_id = t.capture_id) LIMIT 1",
+    "FROM capture_targets t WHERE t.capture_id = ? AND t.enabled = 1 LIMIT 1",
   ).bind(captureID).first();
   if (!target) return null;
   const [history, image] = await Promise.all([
@@ -299,7 +303,6 @@ async function confirmCaptureSkip(captureID, dueAt, env, actorID) {
       "AND t.last_error IS NULL AND (? - t.last_success_at) <= (t.capture_interval_seconds * 2000) " +
       "AND (SELECT COUNT(*) FROM (SELECT sha256 FROM capture_history WHERE capture_id = t.capture_id " +
       "ORDER BY captured_at DESC LIMIT 3) recent WHERE recent.sha256 = t.current_sha256) = 3 " +
-      "AND EXISTS (SELECT 1 FROM playlist_capture_items p WHERE p.capture_id = t.capture_id) " +
       "AND NOT EXISTS (SELECT 1 FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued', 'running'))) " +
       "ON CONFLICT(capture_id) DO UPDATE SET due_at = excluded.due_at, expires_at = excluded.expires_at, " +
       "actor_id = excluded.actor_id, created_at = excluded.created_at",
@@ -397,11 +400,10 @@ async function readOverview(env) {
       "CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
       "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size, " +
       "t.last_success_at, " +
-      "t.last_error, t.next_due_at, " +
+      "t.last_error, t.next_due_at, t.schedule_reviewed_at, " +
       "(SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued', 'running') " +
       "ORDER BY j.created_at DESC LIMIT 1) AS job_status FROM capture_targets t " +
-      "WHERE EXISTS (SELECT 1 FROM playlist_capture_items p WHERE p.capture_id = t.capture_id) " +
-      "ORDER BY t.next_due_at, t.created_at LIMIT 100",
+      "WHERE t.enabled = 1 ORDER BY t.next_due_at, t.created_at LIMIT 1000",
     ).bind(Date.now() - 30 * 24 * 60 * 60 * 1000, Date.now() - 30 * 24 * 60 * 60 * 1000).all(),
     env.DB.prepare(
       "SELECT sha256, issue_type, first_seen_at, last_seen_at FROM asset_integrity_issues " +
@@ -449,6 +451,7 @@ async function readOverview(env) {
         last_error: target.last_error,
         job_status: target.job_status,
         next_due_at: target.next_due_at,
+        schedule_reviewed: target.schedule_reviewed_at != null,
       };
     }),
     asset_health: {
@@ -715,7 +718,12 @@ async function createPlaylist(request, env, actorID, ctx) {
   }
 
   const captureTargets = [];
-  for (const capture of captures) captureTargets.push(await resolveCaptureTarget(capture, env, actorID));
+  for (const capture of captures) {
+    if (!hasExactKeys(capture, ["capture_id"])) {
+      throw new HTTPError(400, "Add existing sites from the Sites section after reviewing their screenshot schedules.");
+    }
+    captureTargets.push(await resolveCaptureTarget(capture, env, actorID));
+  }
 
   const revision = "r-" + crypto.randomUUID().replaceAll("-", "");
   const statements = [env.DB.prepare(
@@ -771,7 +779,7 @@ async function updateCaptureInterval(request, captureID, env, actorID) {
     throw new HTTPError(400, "capture_interval_seconds must be one of the supported values: 900, 1800, 3600, 21600, or 86400.");
   }
   const existing = await env.DB.prepare(
-    "SELECT capture_id, last_success_at FROM capture_targets WHERE capture_id = ? AND enabled = 1",
+    "SELECT capture_id, last_success_at, schedule_reviewed_at FROM capture_targets WHERE capture_id = ? AND enabled = 1",
   ).bind(captureID).first();
   if (!existing) throw new HTTPError(404, "That webpage capture is not available.");
   const now = Date.now();
@@ -779,9 +787,9 @@ async function updateCaptureInterval(request, captureID, env, actorID) {
     ? now : Math.max(now, existing.last_success_at + data.capture_interval_seconds * 1000);
   const batch = await env.DB.batch([
     env.DB.prepare(
-      "UPDATE capture_targets SET capture_interval_seconds = ?, next_due_at = ? WHERE capture_id = ? AND enabled = 1",
-    ).bind(data.capture_interval_seconds, nextDueAt, captureID),
-    auditStatement(env, actorID, "capture.interval_updated", "capture", captureID,
+      "UPDATE capture_targets SET capture_interval_seconds = ?, next_due_at = ?, schedule_reviewed_at = ? WHERE capture_id = ? AND enabled = 1",
+    ).bind(data.capture_interval_seconds, nextDueAt, Date.now(), captureID),
+    auditStatement(env, actorID, existing.schedule_reviewed_at == null ? "capture.schedule_reviewed" : "capture.interval_updated", "capture", captureID,
       { capture_interval_seconds: data.capture_interval_seconds }, { onlyWhenPreviousChanged: true }),
   ]);
   if (batch[0]?.meta?.changes !== 1) throw new HTTPError(404, "That webpage capture is not available.");
@@ -820,13 +828,14 @@ async function readPlaylistRevision(playlistID, revision, env) {
   return jsonResponse(result);
 }
 
-async function resolveCaptureTarget(input, env, actorID) {
+async function resolveCaptureTarget(input, env, actorID, { preserveExistingSchedule = false } = {}) {
   if (hasExactKeys(input, ["capture_id"])) {
     const existing = await env.DB.prepare(
-      "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size " +
+      "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, schedule_reviewed_at " +
       "FROM capture_targets WHERE capture_id = ? AND enabled = 1",
     ).bind(input.capture_id).first();
     if (!existing) throw new HTTPError(409, "One of the webpage captures is no longer available.");
+    if (existing.schedule_reviewed_at == null) throw new HTTPError(409, "Review and save this site's screenshot schedule before adding it to a playlist.");
     try {
       validateCaptureTargetURL(existing.url, env.CAPTURE_ALLOWED_HOSTS);
     } catch {
@@ -865,12 +874,12 @@ async function resolveCaptureTarget(input, env, actorID) {
     wait_until: "domcontentloaded",
   }));
   const existing = await env.DB.prepare(
-    "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, last_success_at " +
+      "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, last_success_at, schedule_reviewed_at " +
     "FROM capture_targets WHERE variant_key = ?",
   ).bind(variantKey).first();
   if (existing) {
     const interval = settings.capture_interval_seconds;
-    if (interval !== existing.capture_interval_seconds) {
+    if (!preserveExistingSchedule && interval !== existing.capture_interval_seconds) {
       const now = Date.now();
       const nextDueAt = existing.last_success_at == null
         ? now : Math.max(now, existing.last_success_at + interval * 1000);
@@ -888,6 +897,7 @@ async function resolveCaptureTarget(input, env, actorID) {
       viewport: { width: existing.viewport_width, height: existing.viewport_height },
       placeholder_sha256: existing.placeholder_sha256,
       placeholder_size: existing.placeholder_size,
+      schedule_reviewed_at: existing.schedule_reviewed_at,
     };
   }
 
@@ -909,12 +919,16 @@ async function resolveCaptureTarget(input, env, actorID) {
     markAssetLiveStatement(env.DB, placeholderAsset.sha256, placeholderAsset.size, now),
     env.DB.prepare(
       "INSERT OR IGNORE INTO capture_targets (capture_id, variant_key, url, capture_interval_seconds, viewport_width, viewport_height, " +
-      "placeholder_sha256, placeholder_size, created_at, next_due_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "placeholder_sha256, placeholder_size, created_at, next_due_at, schedule_reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
     ).bind(captureID, variantKey, url, settings.capture_interval_seconds, settings.viewport_width, settings.viewport_height,
       placeholderAsset.sha256, placeholderAsset.size, now, now),
+    auditStatement(env, actorID, "capture.site_created", "capture", captureID, {
+      capture_interval_seconds: settings.capture_interval_seconds,
+      viewport: { width: settings.viewport_width, height: settings.viewport_height },
+    }, { onlyWhenPreviousChanged: true }),
   ]);
   const target = await env.DB.prepare(
-    "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size " +
+    "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, schedule_reviewed_at " +
     "FROM capture_targets WHERE variant_key = ?",
   ).bind(variantKey).first();
   if (!target) throw new HTTPError(503, "The webpage capture could not be saved.");
@@ -925,7 +939,21 @@ async function resolveCaptureTarget(input, env, actorID) {
     viewport: { width: target.viewport_width, height: target.viewport_height },
     placeholder_sha256: target.placeholder_sha256,
     placeholder_size: target.placeholder_size,
+    schedule_reviewed_at: target.schedule_reviewed_at,
   };
+}
+
+async function createCaptureSite(request, env, actorID) {
+  const data = await readJSON(request);
+  if (!hasExactKeys(data, ["url", "viewport"]) || !Object.hasOwn(data, "url") || !Object.hasOwn(data, "viewport")) {
+    throw new HTTPError(400, "A site needs a URL and screenshot size.");
+  }
+  const site = await resolveCaptureTarget({
+    url: data.url,
+    capture_interval_seconds: DEFAULT_CAPTURE_INTERVAL_SECONDS,
+    viewport: data.viewport,
+  }, env, actorID, { preserveExistingSchedule: true });
+  return jsonResponse({ ...site, schedule_reviewed: site.schedule_reviewed_at != null }, 201);
 }
 
 async function activatePlaylist(request, env, actorID) {

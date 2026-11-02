@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS capture_targets (
   validator_last_modified TEXT,
   last_error TEXT,
   failure_count INTEGER NOT NULL DEFAULT 0,
+  schedule_reviewed_at INTEGER,
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
   CHECK ((current_sha256 IS NULL AND current_size IS NULL) OR (current_sha256 IS NOT NULL AND current_size > 0))
 );
