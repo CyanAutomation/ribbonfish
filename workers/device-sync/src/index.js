@@ -1,5 +1,5 @@
 import { assessUpcomingCaptures } from "./capture-intelligence.js";
-import { isValidPositiveDuration } from "./duration.js";
+import { isSupportedRotationInterval } from "./intervals.js";
 import { handleAdminRequest } from "./admin.js";
 import { cleanupExpiredCaptures, dispatchDueCaptures, handleCaptureQueue } from "./capture-workflow.js";
 import { reconcileAssets } from "./asset-maintenance.js";
@@ -395,7 +395,7 @@ async function readActivePlaylist(env, ifNoneMatch = null) {
 function validatePlaylist(playlist) {
   if (!hasExactKeys(playlist, ["version", "revision", "id", "rotation_interval", "assets"]) ||
       playlist.version !== 2 || !ID_PATTERN.test(playlist.revision ?? "") ||
-      !ID_PATTERN.test(playlist.id ?? "") || !isValidPositiveDuration(playlist.rotation_interval) ||
+      !ID_PATTERN.test(playlist.id ?? "") || !isSupportedRotationInterval(playlist.rotation_interval) ||
       !Array.isArray(playlist.assets) || playlist.assets.length < 1 || playlist.assets.length > 256) {
     throw new Error("invalid playlist envelope");
   }

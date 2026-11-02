@@ -40,6 +40,7 @@ let fleetSummaryInitialized = false;
 let pendingEnrollmentsLoaded = false;
 let pendingEnrollmentIDs = new Set();
 let playlistEditSource = null;
+let intervalDefinitions = null;
 const fleetViewRuntime = createFleetOpenUI({ getOverview: async () => latestOverview });
 
 fleetViewRuntime.subscribe(renderFleetSummary);
@@ -319,6 +320,7 @@ async function startPlaylistEdit(playlist) {
     const form = playlistForm();
     form.reset();
     resetPlaylistEditor();
+    resetIntervalSelections(form);
     playlistEditSource = { playlist_id: detail.playlist_id, revision: detail.revision };
     document.querySelector("#playlist-editor").open = true;
     document.querySelector("#playlist-editor-summary").textContent = `Edit ${detail.playlist_id} playlist version`;
@@ -546,6 +548,31 @@ function renderCaptureTargets(targets, decisions = []) {
     const metadata = node("details", undefined, "capture-target__details");
     metadata.append(node("summary", "Schedule and screenshot details"));
     metadata.append(node("p", `${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`, "muted"));
+    const intervalLabel = node("label", "Screenshot interval ");
+    const intervalSelect = node("select");
+    intervalSelect.className = "field-control";
+    intervalSelect.setAttribute("aria-label", `Screenshot interval for ${target.display_url}`);
+    for (const option of intervalDefinitions?.capture.options ?? []) {
+      const item = node("option", option.label);
+      item.value = String(option.value);
+      item.selected = option.value === target.capture_interval_seconds;
+      intervalSelect.append(item);
+    }
+    intervalLabel.append(intervalSelect);
+    const saveInterval = button("Save screenshot interval", "secondary");
+    saveInterval.addEventListener("click", async () => {
+      saveInterval.disabled = true;
+      try {
+        await api(`/admin/api/captures/${encodeURIComponent(target.capture_id)}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ capture_interval_seconds: Number(intervalSelect.value) }),
+        });
+        showMessage("Screenshot interval updated.", false, "playlist");
+        await refresh();
+      } catch (error) { showMessage(error.message, true, "playlist"); }
+      finally { saveInterval.disabled = false; }
+    });
+    metadata.append(intervalLabel, saveInterval);
     if (target.last_error) metadata.append(node("p", `Full error: ${target.last_error}`, "error-title"));
     if (Number.isSafeInteger(target.next_due_at)) metadata.append(node("p", `Next screenshot ${formatTimestamp(target.next_due_at)}`, "muted"));
     const backgroundDecision = decisionByTarget.get(target.capture_id);
@@ -953,11 +980,17 @@ function renderAudit(events) {
 }
 
 async function refresh() {
-  const [overview, enrollmentRequests, captureDecisions] = await Promise.all([
+  const [overview, enrollmentRequests, captureDecisions, intervals] = await Promise.all([
     api("/admin/api/overview"),
     api("/admin/api/enrollment-requests"),
     api("/admin/api/capture-decisions").catch(() => []),
+    api("/admin/api/intervals"),
   ]);
+  intervalDefinitions = intervals;
+  populateIntervalSelect(document.querySelector("#playlist-form [name=rotation_interval]"), intervals.rotation.options,
+    intervals.rotation.default, (option) => option.value);
+  populateIntervalSelect(document.querySelector("#playlist-form [name=capture_interval_seconds]"), intervals.capture.options,
+    intervals.capture.default, (option) => option.value);
   latestOverview = overview;
   renderEnvironment(overview.environment);
   renderHealth(overview.asset_health);
@@ -973,6 +1006,24 @@ async function refresh() {
   } else {
     fleetViewRuntime.refresh();
   }
+}
+
+function populateIntervalSelect(select, options, selectedValue, getValue) {
+  const previous = select.value;
+  select.replaceChildren();
+  for (const option of options) {
+    const item = node("option", option.label);
+    item.value = String(getValue(option));
+    select.append(item);
+  }
+  select.value = options.some((option) => String(getValue(option)) === previous)
+    ? previous : String(selectedValue);
+}
+
+function resetIntervalSelections(form) {
+  if (!intervalDefinitions) return;
+  form.elements.namedItem("rotation_interval").value = intervalDefinitions.rotation.default;
+  form.elements.namedItem("capture_interval_seconds").value = String(intervalDefinitions.capture.default);
 }
 
 function renderEnvironment(environment) {
@@ -1212,6 +1263,7 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
     showMessage(`New version ${compactIdentifier(result.revision)} is ready to activate.${captureNote}`, false, "playlist");
     formElement.reset();
     resetPlaylistEditor();
+    resetIntervalSelections(formElement);
     await refresh();
   } catch (error) { showInlineMessage(feedback, error.message, true); }
   finally { submitButton.disabled = false; }
@@ -1220,6 +1272,7 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
 document.querySelector("#cancel-playlist-edit").addEventListener("click", () => {
   playlistForm().reset();
   resetPlaylistEditor();
+  resetIntervalSelections(playlistForm());
   showMessage("Editing cancelled. Your saved versions are unchanged.", false, "playlist");
 });
 

@@ -25,19 +25,19 @@ test("capture URLs require canonical public HTTPS hostnames", () => {
   }
 });
 
-test("capture settings enforce the one-minute floor and bounded viewport", () => {
+test("capture settings accept only the supported capture intervals and bounded viewport", () => {
   assert.deepEqual(validateCaptureSettings({
-    capture_interval_seconds: 300,
+    capture_interval_seconds: 900,
     viewport: { width: 1920, height: 1080 },
   }), {
-    capture_interval_seconds: 300,
+    capture_interval_seconds: 900,
     viewport_width: 1920,
     viewport_height: 1080,
   });
   for (const input of [
-    { capture_interval_seconds: 59, viewport: { width: 1920, height: 1080 } },
-    { capture_interval_seconds: 60, viewport: { width: 0, height: 1080 } },
-    { capture_interval_seconds: 60, viewport: { width: 4096, height: 2160 } },
+    { capture_interval_seconds: 300, viewport: { width: 1920, height: 1080 } },
+    { capture_interval_seconds: 900, viewport: { width: 0, height: 1080 } },
+    { capture_interval_seconds: 4096, viewport: { width: 4096, height: 2160 } },
     { capture_interval_seconds: 60.5, viewport: { width: 1920, height: 1080 } },
   ]) {
     assert.throws(() => validateCaptureSettings(input));

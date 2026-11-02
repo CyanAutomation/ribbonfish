@@ -41,7 +41,7 @@ func TestLoadSnapshotMigratesLegacyManifest(t *testing.T) {
 				},
 			},
 			"displays": []any{
-				map[string]any{"id": "display-main", "playlist_id": "operations", "rotation_interval": "30s"},
+				map[string]any{"id": "display-main", "playlist_id": "operations", "rotation_interval": "15s"},
 			},
 		},
 	}
@@ -58,7 +58,7 @@ func TestLoadSnapshotMigratesLegacyManifest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSnapshot() error = %v", err)
 	}
-	if restored.Snapshot.Version != 2 || restored.Snapshot.ID != "operations" || restored.Snapshot.RotationInterval != "30s" {
+	if restored.Snapshot.Version != 2 || restored.Snapshot.ID != "operations" || restored.Snapshot.RotationInterval != config.DefaultRotationInterval {
 		t.Fatalf("migrated snapshot = %#v", restored.Snapshot)
 	}
 	if !strings.HasPrefix(restored.Snapshot.Revision, "legacy-") || restored.ETag != `"`+restored.Snapshot.Revision+`"` {
@@ -69,6 +69,45 @@ func TestLoadSnapshotMigratesLegacyManifest(t *testing.T) {
 	}
 	if _, err := store.Load(context.Background(), cache.Asset{SHA256: digest, Bytes: asset.Bytes}); err != nil {
 		t.Fatalf("legacy cached image was not retained: %v", err)
+	}
+}
+
+func TestLoadSnapshotMigratesUnsupportedSavedRotationToDefault(t *testing.T) {
+	pngBytes := syncerPNG(t, color.RGBA{R: 40, G: 120, B: 200, A: 255})
+	digest := fmt.Sprintf("%x", sha256.Sum256(pngBytes))
+	store := syncerStore(t)
+	asset, err := store.Put(context.Background(), bytes.NewReader(pngBytes), digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hardware := syncerConfig()
+	snapshot := PlaylistSnapshot{Version: 2, Revision: "r-saved", ID: "operations", RotationInterval: "15s",
+		Assets: []PlaylistAsset{{SHA256: digest, Size: asset.Bytes}}}
+	data, err := json.Marshal(savedSnapshot{Version: 2, ETag: `"r-saved"`, Snapshot: snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	filename := filepath.Join(t.TempDir(), "last-good.json")
+	if err := os.WriteFile(filename, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := LoadSnapshot(filename, hardware, store)
+	if err != nil {
+		t.Fatalf("LoadSnapshot() error = %v", err)
+	}
+	if restored.Snapshot.RotationInterval != config.DefaultRotationInterval {
+		t.Fatalf("rotation interval = %q", restored.Snapshot.RotationInterval)
+	}
+	persisted, err := os.ReadFile(filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved savedSnapshot
+	if err := json.Unmarshal(persisted, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Snapshot.RotationInterval != config.DefaultRotationInterval {
+		t.Fatalf("persisted rotation interval = %q", saved.Snapshot.RotationInterval)
 	}
 }
 
@@ -87,8 +126,8 @@ func TestLoadSnapshotRejectsLegacyManifestWithDifferentDisplayContent(t *testing
 				map[string]any{"id": "second", "assets": []any{}},
 			},
 			"displays": []any{
-				map[string]any{"id": "display-a", "playlist_id": "first", "rotation_interval": "15s"},
-				map[string]any{"id": "display-b", "playlist_id": "second", "rotation_interval": "15s"},
+				map[string]any{"id": "display-a", "playlist_id": "first", "rotation_interval": "90s"},
+				map[string]any{"id": "display-b", "playlist_id": "second", "rotation_interval": "90s"},
 			},
 		},
 	}
