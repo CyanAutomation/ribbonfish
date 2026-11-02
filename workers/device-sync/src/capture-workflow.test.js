@@ -813,7 +813,7 @@ test("Browser Run failures use bounded delayed retries and leave the holding ima
     assert.equal(calls, 3);
     assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(jobID).status, "failed");
     assert.equal(sqlite.prepare("SELECT current_sha256 FROM capture_targets WHERE capture_id = ?").get(captureID).current_sha256, null);
-    assert.equal(sqlite.prepare("SELECT browser_ms FROM capture_usage WHERE singleton = 1").get().browser_ms, 3 * 45_000,
+    assert.equal(sqlite.prepare("SELECT browser_ms FROM capture_usage WHERE singleton = 1").get().browser_ms, 3 * 60_000,
       "requests without a usage header consume the configured safety reserve");
   } finally {
     sqlite.close();
