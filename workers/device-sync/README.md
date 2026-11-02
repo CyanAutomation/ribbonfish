@@ -265,8 +265,8 @@ before any remaining issues. R2 deletion failures remain claimed and are retried
 on later passes.
 The consumer uses one message and one concurrent capture, coalesces each target
 to one open job, caps pending jobs at 100, spaces Browser Run requests by 10
-seconds, and applies a daily browser-time budget (9 minutes by default,
-reserving 45 seconds for a capture when Browser Run usage is unavailable).
+seconds, and applies a daily browser-time budget (10 minutes by default,
+reserving 60 seconds for a capture when Browser Run usage is unavailable).
 Transient errors retry at
 60 and 180 seconds; budget/rate deferrals wait for a later Cron tick. Check
 current account Browser Run quotas before enabling production capture.
