@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS capture_targets (
   last_success_at INTEGER,
   validator_etag TEXT,
   validator_last_modified TEXT,
+  wait_for_selector TEXT,
   last_error TEXT,
   failure_count INTEGER NOT NULL DEFAULT 0,
   schedule_reviewed_at INTEGER,
@@ -151,10 +152,20 @@ CREATE TABLE IF NOT EXISTS capture_jobs (
   finished_at INTEGER,
   lease_until INTEGER,
   error TEXT,
+  validator_outcome TEXT NOT NULL DEFAULT 'unknown'
+    CHECK (validator_outcome IN ('unknown', 'disabled', 'unchanged', 'changed', 'no_stored_validator', 'unavailable', 'cached_asset_missing')),
+  result_kind TEXT NOT NULL DEFAULT 'screenshot'
+    CHECK (result_kind IN ('unknown', 'screenshot', 'validator_unchanged')),
+  scheduled_due_at INTEGER,
+  browser_ms_total INTEGER NOT NULL DEFAULT 0 CHECK (browser_ms_total >= 0),
+  browser_ms_response_header INTEGER NOT NULL DEFAULT 0 CHECK (browser_ms_response_header >= 0),
+  browser_ms_reserve INTEGER NOT NULL DEFAULT 0 CHECK (browser_ms_reserve >= 0),
+  browser_ms_legacy_unknown INTEGER NOT NULL DEFAULT 0 CHECK (browser_ms_legacy_unknown IN (0, 1)),
   FOREIGN KEY (capture_id) REFERENCES capture_targets(capture_id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS capture_jobs_open_target_idx ON capture_jobs(capture_id) WHERE status IN ('queued', 'running');
 CREATE INDEX IF NOT EXISTS capture_jobs_status_idx ON capture_jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS capture_jobs_created_idx ON capture_jobs(created_at);
 CREATE TABLE IF NOT EXISTS capture_history (
   capture_id TEXT NOT NULL,
   job_id TEXT NOT NULL,
@@ -162,11 +173,14 @@ CREATE TABLE IF NOT EXISTS capture_history (
   size INTEGER NOT NULL CHECK (size > 0),
   captured_at INTEGER NOT NULL,
   browser_ms INTEGER NOT NULL DEFAULT 0 CHECK (browser_ms >= 0),
+  browser_ms_source TEXT NOT NULL DEFAULT 'unknown'
+    CHECK (browser_ms_source IN ('unknown', 'response_header', 'reserve')),
   PRIMARY KEY (capture_id, job_id),
   FOREIGN KEY (capture_id) REFERENCES capture_targets(capture_id),
   FOREIGN KEY (job_id) REFERENCES capture_jobs(job_id)
 );
 CREATE INDEX IF NOT EXISTS capture_history_retention_idx ON capture_history(capture_id, captured_at DESC);
+CREATE INDEX IF NOT EXISTS capture_history_captured_idx ON capture_history(captured_at);
 CREATE INDEX IF NOT EXISTS capture_history_digest_idx ON capture_history(sha256);
 CREATE TABLE IF NOT EXISTS capture_usage (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -466,6 +480,9 @@ CREATE TABLE IF NOT EXISTS capture_decisions (
   state_json TEXT,
   decision_json TEXT,
   model TEXT,
+  observed_at INTEGER,
+  observed_result TEXT CHECK (observed_result IN ('changed', 'unchanged', 'validator_unchanged', 'failed', 'budget_deferred')),
+  observed_delay_ms INTEGER CHECK (observed_delay_ms IS NULL OR observed_delay_ms >= 0),
   PRIMARY KEY (capture_id, due_at),
   FOREIGN KEY (capture_id) REFERENCES capture_targets(capture_id) ON DELETE CASCADE
 );
