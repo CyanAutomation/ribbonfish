@@ -73,7 +73,7 @@ CREATE INDEX IF NOT EXISTS enrollment_requests_pending_idx ON enrollment_request
 CREATE TABLE IF NOT EXISTS playlists (
   playlist_id TEXT NOT NULL,
   revision TEXT NOT NULL,
-  rotation_interval TEXT NOT NULL,
+  rotation_interval TEXT NOT NULL CHECK (rotation_interval IN ('30s', '60s', '90s', '120s', '5m')),
   created_at INTEGER NOT NULL,
   PRIMARY KEY (playlist_id, revision)
 );
@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS capture_targets (
   capture_id TEXT PRIMARY KEY,
   variant_key TEXT NOT NULL UNIQUE,
   url TEXT NOT NULL,
-  capture_interval_seconds INTEGER NOT NULL CHECK (capture_interval_seconds >= 60 AND capture_interval_seconds <= 2592000),
+  capture_interval_seconds INTEGER NOT NULL CHECK (capture_interval_seconds IN (900, 1800, 3600, 21600, 86400)),
   viewport_width INTEGER NOT NULL CHECK (viewport_width >= 320 AND viewport_width <= 3840),
   viewport_height INTEGER NOT NULL CHECK (viewport_height >= 240 AND viewport_height <= 2160),
   placeholder_sha256 TEXT NOT NULL,

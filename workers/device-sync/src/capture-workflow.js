@@ -1,6 +1,7 @@
 import { captureScreenshot, validateCaptureTargetURL } from "./capture.js";
 import { ASSET_RECONCILIATION_PAGE_SIZE, deleteUnreferencedAssets } from "./asset-maintenance.js";
 import { markAssetLiveStatement } from "./asset-registry.js";
+import { DEFAULT_CAPTURE_INTERVAL_SECONDS } from "./intervals.js";
 
 export const MAX_CAPTURE_ATTEMPTS = 3;
 export const MAX_CAPTURE_HISTORY = 10;
@@ -175,7 +176,7 @@ async function processCaptureMessage(message, env, now) {
     return;
   }
   if (job.enabled !== 1) {
-    await markJobFinished(env, jobID, job.capture_id, "failed", "Capture target is disabled.", now);
+    await markJobFinished(env, jobID, job.capture_id, "failed", "Capture target is disabled.", now, job.capture_interval_seconds);
     message.ack();
     return;
   }
@@ -359,7 +360,8 @@ async function handleCaptureFailure(env, message, job, error, now) {
   message.ack();
 }
 
-async function markJobFinished(env, jobID, captureID, status, error, now, intervalSeconds = 60) {
+async function markJobFinished(env, jobID, captureID, status, error, now,
+  intervalSeconds = DEFAULT_CAPTURE_INTERVAL_SECONDS) {
   await env.DB.batch([
     env.DB.prepare(
       "UPDATE capture_jobs SET status = ?, finished_at = ?, lease_until = NULL, error = ? WHERE job_id = ?",

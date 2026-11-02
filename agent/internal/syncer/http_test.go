@@ -21,6 +21,24 @@ import (
 
 const testDeviceToken = "device-secret-012345678901234567890123456789"
 
+func TestValidatePlaylistSnapshotAcceptsOnlySupportedRotationIntervals(t *testing.T) {
+	hardware := syncerConfig()
+	for _, interval := range []string{"30s", "60s", "90s", "120s", "5m"} {
+		snapshot := PlaylistSnapshot{Version: 2, Revision: "r-1", ID: "welcome", RotationInterval: interval,
+			Assets: []PlaylistAsset{{SHA256: strings.Repeat("a", 64), Size: 1}}}
+		if err := validatePlaylistSnapshot(snapshot, hardware); err != nil {
+			t.Errorf("interval %q rejected: %v", interval, err)
+		}
+	}
+	for _, interval := range []string{"15s", "2m", "1h"} {
+		snapshot := PlaylistSnapshot{Version: 2, Revision: "r-1", ID: "welcome", RotationInterval: interval,
+			Assets: []PlaylistAsset{{SHA256: strings.Repeat("a", 64), Size: 1}}}
+		if err := validatePlaylistSnapshot(snapshot, hardware); err == nil {
+			t.Errorf("interval %q unexpectedly accepted", interval)
+		}
+	}
+}
+
 func TestHTTPClientDownloadsVerifiedContentAndUsesETag(t *testing.T) {
 	pngBytes := syncerPNG(t, color.RGBA{G: 210, A: 255})
 	digest := fmt.Sprintf("%x", sha256.Sum256(pngBytes))
@@ -475,7 +493,7 @@ func syncerConfig() config.Config {
 		LogLevel: "info",
 		Cache:    config.CacheConfig{Directory: "/var/cache/ribbonfish", MaxBytes: 2 << 20},
 		Output:   config.OutputConfig{Backend: "simulator", Directory: "/var/frames", Fit: "contain"},
-		Playlist: config.PlaylistConfig{ID: "default", RotationInterval: "10s", Assets: []config.AssetConfig{{Path: "/starter.png"}}},
+		Playlist: config.PlaylistConfig{ID: "default", RotationInterval: "90s", Assets: []config.AssetConfig{{Path: "/starter.png"}}},
 		Displays: []config.DisplayConfig{{ID: "screen-main", Mode: "preferred"}},
 	}
 }

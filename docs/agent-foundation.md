@@ -42,7 +42,8 @@ is verified again when loaded for presentation, so one missing or corrupt
 asset does not make other displays or assets unavailable.
 
 Playlist timing is a local device concern and is independent of Cloudflare's
-minimum 60-second screenshot capture interval. The scheduler receives wall
+15-minute minimum screenshot capture interval. Supported rotations are 30, 60,
+90, or 120 seconds, or 5 minutes; 90 seconds is the default. The scheduler receives wall
 clock instants explicitly and uses deterministic schedule anchors, allowing
 it to recover a stable position after restart without remote connectivity or
 persisted timer state.

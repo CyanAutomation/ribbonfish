@@ -107,7 +107,7 @@ function insertCapture(sqlite, { captureID = "capture-1", current = null, lastSu
   sqlite.prepare(
     "INSERT INTO capture_targets (capture_id, variant_key, url, capture_interval_seconds, viewport_width, viewport_height, " +
     "placeholder_sha256, placeholder_size, current_sha256, current_size, created_at, next_due_at, last_success_at) " +
-    "VALUES (?, ?, ?, 60, 1280, 720, ?, ?, ?, ?, 1, 1, ?)",
+    "VALUES (?, ?, ?, 900, 1280, 720, ?, ?, ?, ?, 1, 1, ?)",
   ).run(captureID, `variant-${captureID}`, "https://example.com/", placeholderDigest, placeholder.byteLength,
     current, current ? screenshot.byteLength : null, lastSuccess);
   return captureID;
@@ -245,7 +245,7 @@ test("an active write lease protects an object if its last reference is removed"
     const { env, objects } = environment(sqlite);
     const now = Date.now();
     objects.set(`assets/${screenshotDigest}`, { bytes: screenshot, uploaded: new Date(now - DAY_MS) });
-    sqlite.prepare("INSERT INTO playlists (playlist_id, revision, rotation_interval, created_at) VALUES ('p', 'r1', '15s', 1)").run();
+    sqlite.prepare("INSERT INTO playlists (playlist_id, revision, rotation_interval, created_at) VALUES ('p', 'r1', '90s', 1)").run();
     await env.DB.batch([
       markAssetLiveStatement(env.DB, screenshotDigest, screenshot.byteLength, now),
       env.DB.prepare("INSERT INTO playlist_assets (playlist_id, revision, position, sha256, size) VALUES ('p', 'r1', 0, ?, ?)")
@@ -277,7 +277,7 @@ test("missing capture objects clear stale current/history references and missing
       .run(jobID, captureID);
     sqlite.prepare("INSERT INTO capture_history (capture_id, job_id, sha256, size, captured_at) VALUES (?, ?, ?, ?, ?)")
       .run(captureID, jobID, screenshotDigest, screenshot.byteLength, Date.now() - 1_000);
-    sqlite.prepare("INSERT INTO playlists (playlist_id, revision, rotation_interval, created_at) VALUES ('p', 'r1', '15s', 1)").run();
+    sqlite.prepare("INSERT INTO playlists (playlist_id, revision, rotation_interval, created_at) VALUES ('p', 'r1', '90s', 1)").run();
     sqlite.prepare("INSERT INTO playlist_assets (playlist_id, revision, position, sha256, size) VALUES ('p', 'r1', 0, ?, ?)")
       .run("d".repeat(64), screenshot.byteLength);
 
@@ -320,7 +320,7 @@ test("D1 reference pagination reaches later missing images and resolves issues a
   try {
     const { env, objects } = environment(sqlite);
     env.ASSET_RECONCILIATION_PAGE_SIZE = "1";
-    sqlite.prepare("INSERT INTO playlists (playlist_id, revision, rotation_interval, created_at) VALUES ('p', 'r1', '15s', 1)").run();
+    sqlite.prepare("INSERT INTO playlists (playlist_id, revision, rotation_interval, created_at) VALUES ('p', 'r1', '90s', 1)").run();
     for (const [position, sha256] of [[0, "1".repeat(64)], [1, "2".repeat(64)]]) {
       sqlite.prepare("INSERT INTO playlist_assets (playlist_id, revision, position, sha256, size) VALUES ('p', 'r1', ?, ?, 10)")
         .run(position, sha256);
@@ -350,7 +350,7 @@ test("missing-reference repairs stay bounded and continue from the last processe
   console.warn = () => {};
   try {
     const { env } = environment(sqlite);
-    sqlite.prepare("INSERT INTO playlists (playlist_id, revision, rotation_interval, created_at) VALUES ('p', 'r1', '15s', 1)").run();
+    sqlite.prepare("INSERT INTO playlists (playlist_id, revision, rotation_interval, created_at) VALUES ('p', 'r1', '90s', 1)").run();
     const digests = Array.from({ length: 6 }, (_, index) => (index + 1).toString(16).padStart(64, "0"));
     for (const [position, sha256] of digests.entries()) {
       sqlite.prepare("INSERT INTO playlist_assets (playlist_id, revision, position, sha256, size) VALUES ('p', 'r1', ?, ?, 10)")
@@ -376,7 +376,7 @@ test("reference writes cannot race an asset deletion claim", async () => {
     const sha256 = "e".repeat(64);
     sqlite.prepare("INSERT INTO managed_assets (sha256, size, state, expires_at, updated_at) VALUES (?, 10, 'deleting', NULL, 1)")
       .run(sha256);
-    sqlite.prepare("INSERT INTO playlists (playlist_id, revision, rotation_interval, created_at) VALUES ('p', 'r1', '15s', 1)").run();
+    sqlite.prepare("INSERT INTO playlists (playlist_id, revision, rotation_interval, created_at) VALUES ('p', 'r1', '90s', 1)").run();
 
     assert.throws(() => sqlite.prepare(
       "INSERT INTO playlist_assets (playlist_id, revision, position, sha256, size) VALUES ('p', 'r1', 0, ?, 10)",

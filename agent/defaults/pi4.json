@@ -24,7 +24,7 @@
   ],
   "playlist": {
     "id": "default",
-    "rotation_interval": "15s",
+    "rotation_interval": "90s",
     "assets": [
       {
         "path": "assets/deployment-pipeline.png",
