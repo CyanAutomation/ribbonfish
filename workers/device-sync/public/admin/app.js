@@ -1,3 +1,4 @@
+import { initModuleNavigation } from "./module-navigation.ts";
 import {
   createFleetOpenUI,
   OPENUI_STARTER_SOURCE,
@@ -990,6 +991,9 @@ async function refresh() {
   populateIntervalSelect(document.querySelector("#playlist-form [name=rotation_interval]"), intervals.rotation.options,
     intervals.rotation.default, (option) => option.value);
   latestOverview = overview;
+  document.querySelector("#sites-tile-status").textContent = `${(overview.capture_targets ?? []).length} sites`;
+  document.querySelector("#playlists-tile-status").textContent = `${overview.playlists.length} playlist versions`;
+  document.querySelector("#devices-tile-status").textContent = `${overview.devices.length} devices · ${enrollmentRequests.length} awaiting approval`;
   renderEnvironment(overview.environment);
   renderHealth(overview.asset_health);
   renderFleetAttention(overview, enrollmentRequests);
@@ -1151,38 +1155,7 @@ function showConfirmDialog({ title, description, confirmLabel, destructive = fal
 
 document.querySelector("#run-fleet-analysis").addEventListener("click", runFleetJevAnalysis);
 
-const sectionLinks = [...document.querySelectorAll(".section-nav a")];
-document.querySelector(".section-nav").addEventListener("click", (event) => {
-  const link = event.target.closest("a[href^='#']");
-  if (!link) return;
-  const target = document.querySelector(link.getAttribute("href"));
-  const disclosure = target?.closest("details");
-  if (disclosure) disclosure.open = true;
-  const more = link.closest(".section-nav__more");
-  if (more) more.open = false;
-});
-const observedSections = sectionLinks
-  .map((link) => document.querySelector(link.getAttribute("href")))
-  .filter(Boolean);
-if ("IntersectionObserver" in window) {
-  const visibleSections = new Set();
-  const sectionObserver = new IntersectionObserver((entries) => {
-    entries.forEach((entry) => {
-      if (entry.isIntersecting) visibleSections.add(entry.target);
-      else visibleSections.delete(entry.target);
-    });
-    const current = [...visibleSections]
-      .sort((left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top)[0];
-    if (!current) return;
-    sectionLinks.forEach((link) => {
-      if (link.hash === `#${current.id}`) link.setAttribute("aria-current", "location");
-      else link.removeAttribute("aria-current");
-    });
-  }, { rootMargin: "-20% 0px -65% 0px", threshold: [0, 0.1, 0.5] });
-  observedSections.forEach((section) => sectionObserver.observe(section));
-} else {
-  sectionLinks[0]?.setAttribute("aria-current", "location");
-}
+initModuleNavigation();
 
 document.querySelector("#capture-site-form").addEventListener("submit", async (event) => {
   event.preventDefault();
