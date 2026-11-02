@@ -17,6 +17,7 @@ class FakeDatabase {
       last_seen_at: 200,
     }]]);
     this.enrollments = [];
+    this.enrollmentRequests = [];
     this.playlists = new Map([["welcome:revision-1", {
       playlist_id: "welcome",
       revision: "revision-1",
@@ -127,6 +128,17 @@ class FakeDatabase {
       const [enabled, device_id] = values;
       const row = this.devices.get(device_id);
       if (row) row.enabled = enabled;
+    } else if (sql.startsWith("UPDATE enrollment_requests")) {
+      const [decided_at, actor_id, device_id] = values;
+      let changed = 0;
+      for (const request of this.enrollmentRequests) {
+        if (request.device_id !== device_id || request.status !== "pending") continue;
+        Object.assign(request, { status: "rejected", decided_at, actor_id });
+        changed += 1;
+      }
+      return changed;
+    } else if (sql.startsWith("DELETE FROM devices")) {
+      return this.devices.delete(values[0]) ? 1 : 0;
     } else if (sql.startsWith("UPDATE capture_targets SET capture_interval_seconds")) {
       if (this.captureTarget?.capture_id === values[3]) {
         this.captureTarget.capture_interval_seconds = values[0];
@@ -649,10 +661,10 @@ test("capture target interval API rejects values outside the supported set", asy
 
 test("capture interval and manual-run routes reject methods for the other route", async () => {
   const capturePath = `/admin/api/captures/${captureID}`;
-  for (const method of ["GET", "DELETE"]) {
+  for (const method of ["GET", "POST"]) {
     const response = await handleAdminRequest(request(capturePath, { method }), testEnvironment());
     assert.equal(response.status, 405);
-    assert.equal(response.headers.get("Allow"), "PATCH");
+    assert.equal(response.headers.get("Allow"), "PATCH, DELETE");
   }
 
   const runResponse = await handleAdminRequest(request(`${capturePath}/run`, {
@@ -825,6 +837,31 @@ test("device status changes are recorded and token rotation returns the token on
   assert.equal(JSON.stringify(env.DB.auditEvents).includes(device_token), false);
   assert.equal(env.DB.auditEvents.some((event) => event.event_type === "device.credential_rotated"), true);
   assert.equal(env.DB.auditEvents.at(-1).actor_id, "anonymous");
+});
+
+test("a device can be permanently removed through the admin API", async () => {
+  const env = testEnvironment();
+  env.DB.enrollmentRequests.push({ device_id: "pi-office", status: "pending" });
+
+  const response = await handleAdminRequest(request("/admin/api/devices/pi-office", {
+    method: "DELETE",
+  }), env);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { device_id: "pi-office", deleted: true });
+  assert.equal(env.DB.devices.has("pi-office"), false);
+  assert.equal(env.DB.auditEvents.at(-1).event_type, "device.deleted");
+  assert.equal(env.DB.auditEvents.at(-1).subject_id, "pi-office");
+  assert.equal(env.DB.enrollmentRequests[0].status, "rejected");
+  assert.equal(env.DB.enrollmentRequests[0].actor_id, "anonymous");
+  assert.equal(Number.isSafeInteger(env.DB.enrollmentRequests[0].decided_at), true);
+});
+
+test("removing an unknown device returns not found", async () => {
+  const env = testEnvironment();
+  const response = await handleAdminRequest(request("/admin/api/devices/missing", { method: "DELETE" }), env);
+  assert.equal(response.status, 404);
+  assert.equal(env.DB.auditEvents.length, 0);
 });
 
 test("device key authentication cannot be converted back to a bearer token", async () => {

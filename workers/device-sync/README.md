@@ -189,10 +189,12 @@ in Wrangler's local mode.
 | `POST /admin/api/enrollment-requests/{request_id}/reject` | Reject the exact pending request; body: `{}` |
 | `POST /admin/api/enrollment-codes` | Legacy provisioning API; create a one-time code with `{"expires_in_minutes":30}` |
 | `PATCH /admin/api/devices/{device_id}` | Enable or disable a device; body: `{"enabled":false}` |
+| `DELETE /admin/api/devices/{device_id}` | Permanently remove a device and its health history; pending enrollment requests for its ID are rejected |
 | `POST /admin/api/devices/{device_id}/rotate` | Replace a legacy device token and return it once; key-based devices use a new approval to change identity |
 | `POST /admin/api/assets` | Upload one PNG body with `Content-Type: image/png`; returns its SHA-256 and byte size |
 | `GET /admin/api/assets/{sha256}` | Preview a PNG that is referenced by a playlist revision |
 | `POST /admin/api/capture-sites` | Register a URL and viewport independently; new sites start with the default daily schedule pending review |
+| `DELETE /admin/api/captures/{capture_id}` | Remove a site from management and stop queued or future screenshots; existing playlist images and capture history remain |
 | `POST /admin/api/playlists` | Stage an immutable playlist revision with PNG assets and/or reviewed capture site IDs |
 | `POST /admin/api/captures/{capture_id}/run` | Queue a capture now; normal queue, rate, and budget controls still apply |
 | `PATCH /admin/api/captures/{capture_id}` | Review or change a target schedule; body: `{"capture_interval_seconds":21600}` |
@@ -221,7 +223,10 @@ playlist revision, or device playlist APIs.
 The Sites section manages page URLs and schedules independently. Playlist
 editing selects from reviewed sites in that library. Registering a site does
 not start scheduled captures; the Worker schedules targets referenced by the
-active playlist.
+active playlist. Removing a site disables its scheduler and hides it from the
+library while retaining saved playlist images and capture history. Registering
+the same URL and screenshot size again restores the site and its existing
+schedule.
 
 Playlist staging verifies every referenced object exists in R2 with the declared
 size. A webpage slot references a reusable URL/viewport capture target and

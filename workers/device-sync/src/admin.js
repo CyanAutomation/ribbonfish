@@ -173,8 +173,13 @@ export async function handleAdminRequest(request, env, ctx) {
 
     const captureIntervalMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})$/i);
     if (captureIntervalMatch) {
-      if (request.method !== "PATCH") return methodNotAllowed("PATCH");
-      return await updateCaptureInterval(request, captureIntervalMatch[1].toLowerCase(), env, actorID);
+      if (request.method === "PATCH") {
+        return await updateCaptureInterval(request, captureIntervalMatch[1].toLowerCase(), env, actorID);
+      }
+      if (request.method === "DELETE") {
+        return await removeCaptureSite(captureIntervalMatch[1].toLowerCase(), env, actorID);
+      }
+      return methodNotAllowed("PATCH, DELETE");
     }
 
     const captureRunMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/run$/i);
@@ -227,8 +232,13 @@ export async function handleAdminRequest(request, env, ctx) {
 
     const deviceMatch = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/);
     if (deviceMatch) {
-      if (request.method !== "PATCH") return methodNotAllowed("PATCH");
-      return await setDeviceEnabled(request, decodeURIComponent(deviceMatch[1]), env, actorID);
+      if (request.method === "PATCH") {
+        return await setDeviceEnabled(request, decodeURIComponent(deviceMatch[1]), env, actorID);
+      }
+      if (request.method === "DELETE") {
+        return await deleteDevice(decodeURIComponent(deviceMatch[1]), env, actorID);
+      }
+      return methodNotAllowed("PATCH, DELETE");
     }
 
     return jsonResponse({ error: "not found" }, 404);
@@ -796,6 +806,22 @@ async function updateCaptureInterval(request, captureID, env, actorID) {
   return jsonResponse({ capture_id: captureID, capture_interval_seconds: data.capture_interval_seconds });
 }
 
+async function removeCaptureSite(captureID, env, actorID) {
+  const target = await env.DB.prepare(
+    "SELECT capture_id FROM capture_targets WHERE capture_id = ?",
+  ).bind(captureID).first();
+  if (!target) throw new HTTPError(404, "That webpage capture could not be found.");
+  const results = await env.DB.batch([
+    env.DB.prepare("UPDATE capture_targets SET enabled = 0 WHERE capture_id = ? AND enabled = 1").bind(captureID),
+    auditStatement(env, actorID, "capture.site_removed", "capture", captureID, {}, { onlyWhenPreviousChanged: true }),
+    env.DB.prepare(
+      "UPDATE capture_jobs SET status = 'failed', finished_at = ?, lease_until = NULL, error = ? " +
+      "WHERE capture_id = ? AND status = 'queued'",
+    ).bind(Date.now(), "Capture site removed.", captureID),
+  ]);
+  return jsonResponse({ capture_id: captureID, removed: results?.[0]?.meta?.changes === 1 });
+}
+
 async function readPlaylistRevision(playlistID, revision, env) {
   const playlist = await env.DB.prepare(
     "SELECT playlist_id, revision, rotation_interval FROM playlists WHERE playlist_id = ? AND revision = ?",
@@ -875,10 +901,16 @@ async function resolveCaptureTarget(input, env, actorID, { preserveExistingSched
     wait_until: "domcontentloaded",
   }));
   const existing = await env.DB.prepare(
-      "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, last_success_at, schedule_reviewed_at " +
+      "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, last_success_at, schedule_reviewed_at, enabled " +
     "FROM capture_targets WHERE variant_key = ?",
   ).bind(variantKey).first();
   if (existing) {
+    if (!existing.enabled) {
+      await env.DB.batch([
+        env.DB.prepare("UPDATE capture_targets SET enabled = 1 WHERE capture_id = ?").bind(existing.capture_id),
+        auditStatement(env, actorID, "capture.site_restored", "capture", existing.capture_id, {}),
+      ]);
+    }
     const interval = settings.capture_interval_seconds;
     if (!preserveExistingSchedule && interval !== existing.capture_interval_seconds) {
       const now = Date.now();
@@ -1048,6 +1080,22 @@ async function setDeviceEnabled(request, deviceID, env, actorID) {
     auditStatement(env, actorID, data.enabled ? "device.enabled" : "device.disabled", "device", deviceID, {}),
   ]);
   return jsonResponse({ device_id: deviceID, enabled: data.enabled });
+}
+
+async function deleteDevice(deviceID, env, actorID) {
+  const device = await env.DB.prepare("SELECT device_id FROM devices WHERE device_id = ?").bind(deviceID).first();
+  if (!device) throw new HTTPError(404, "device not found");
+  const now = Date.now();
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE enrollment_requests SET status = 'rejected', decided_at = ?, actor_id = ? " +
+      "WHERE device_id = ? AND status = 'pending'",
+    ).bind(now, actorID, deviceID),
+    env.DB.prepare("DELETE FROM devices WHERE device_id = ?").bind(deviceID),
+    auditStatement(env, actorID, "device.deleted", "device", deviceID, {}, { onlyWhenPreviousChanged: true }),
+  ]);
+  if (results?.[1]?.meta?.changes !== 1) throw new HTTPError(404, "device not found");
+  return jsonResponse({ device_id: deviceID, deleted: true });
 }
 
 async function rotateDeviceCredential(request, deviceID, env, actorID) {

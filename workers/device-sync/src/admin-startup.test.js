@@ -16,6 +16,7 @@ test("management page starts, renders its data, and dismisses errors", async () 
   });
   const dom = new JSDOM(html, { url: "https://example.test/admin/", runScripts: "outside-only" });
   const { window } = dom;
+  window.confirm = () => true;
   const calls = [];
   const requests = [];
   let fail = false;
@@ -107,6 +108,25 @@ test("management page starts, renders its data, and dismisses errors", async () 
     const playlistRequest = requests.find(({ path }) => path === "/admin/api/playlists");
     const playlistBody = JSON.parse(playlistRequest.options.body);
     assert.deepEqual(playlistBody.captures, [{ capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }]);
+
+    const removeSiteButton = [...window.document.querySelectorAll("#capture-target-list button")]
+      .find((button) => button.textContent === "Remove capture site");
+    assert.ok(removeSiteButton);
+    removeSiteButton.click();
+    await new Promise((resolve) => setImmediate(resolve));
+    const removeSiteRequest = requests.find(({ path }) => path === "/admin/api/captures/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    assert.equal(removeSiteRequest.options.method, "DELETE");
+
+    overview.devices = [{ device_id: "pi-office", enabled: true, auth_type: "key", health: { status: "healthy" } }];
+    window.document.querySelector("#reload").click();
+    await new Promise((resolve) => setImmediate(resolve));
+    const removeDeviceButton = [...window.document.querySelectorAll("#devices button")]
+      .find((button) => button.textContent === "Delete device");
+    assert.ok(removeDeviceButton);
+    removeDeviceButton.click();
+    await new Promise((resolve) => setImmediate(resolve));
+    const removeDeviceRequest = requests.find(({ path }) => path === "/admin/api/devices/pi-office");
+    assert.equal(removeDeviceRequest.options.method, "DELETE");
 
     fail = true;
     window.document.querySelector("#reload").click();
