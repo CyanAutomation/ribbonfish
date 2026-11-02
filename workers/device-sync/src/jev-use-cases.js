@@ -85,7 +85,8 @@ export function buildFleetAnalysisState(overview) {
 export function buildCaptureAssessmentState(target, now = Date.now()) {
   const lastSuccess = Number.isFinite(target.last_success_at) ? target.last_success_at : null;
   const nextDue = Number.isFinite(target.next_due_at) ? target.next_due_at : now;
-  const durations = (target.history ?? []).map((item) => item.browser_ms)
+  const durations = (target.history ?? []).filter((item) => item.browser_ms_source === "response_header")
+    .map((item) => item.browser_ms)
     .filter((value) => Number.isFinite(value) && value >= 0).sort((a, b) => a - b);
   const midpoint = Math.floor(durations.length / 2);
   const medianBrowserMs = durations.length
@@ -112,7 +113,8 @@ export function buildCaptureAssessmentState(target, now = Date.now()) {
     consecutive_failures: Number.isSafeInteger(target.failure_count) ? Math.max(0, target.failure_count) : 0,
     recent_job: ["queued", "running"].includes(target.job_status) ? target.job_status : "none",
     recent_error_present: Boolean(target.last_error),
-    recent_capture_count: durations.length,
+    recent_capture_count: (target.history ?? []).length,
+    browser_duration_sample_count: durations.length,
     median_browser_ms: medianBrowserMs,
     recent_content_change_count: recentContentChangeCount,
     unchanged_capture_streak: unchangedCaptureStreak,

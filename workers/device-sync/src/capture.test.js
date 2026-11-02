@@ -43,6 +43,7 @@ test("capture settings accept only the supported capture intervals and bounded v
     capture_interval_seconds: 900,
     viewport_width: 1920,
     viewport_height: 1080,
+    wait_for_selector: null,
   });
   for (const input of [
     { capture_interval_seconds: 300, viewport: { width: 1920, height: 1080 } },
@@ -51,6 +52,23 @@ test("capture settings accept only the supported capture intervals and bounded v
     { capture_interval_seconds: 60.5, viewport: { width: 1920, height: 1080 } },
   ]) {
     assert.throws(() => validateCaptureSettings(input));
+  }
+  assert.equal(validateCaptureSettings({
+    capture_interval_seconds: 900,
+    viewport: { width: 1920, height: 1080 },
+    wait_for_selector: "  main .status-card  ",
+  }).wait_for_selector, "main .status-card");
+  assert.equal(validateCaptureSettings({
+    capture_interval_seconds: 900,
+    viewport: { width: 1920, height: 1080 },
+    wait_for_selector: " ",
+  }).wait_for_selector, null);
+  for (const wait_for_selector of [42, "x".repeat(257), "main\nscript"]) {
+    assert.throws(() => validateCaptureSettings({
+      capture_interval_seconds: 900,
+      viewport: { width: 1920, height: 1080 },
+      wait_for_selector,
+    }), /selector/i);
   }
 });
 
@@ -64,6 +82,7 @@ test("browser capture validates its response and stores bytes through the shared
         assert.equal(options.url, "https://example.com/");
         assert.deepEqual(options.viewport, { width: 1280, height: 720 });
         assert.deepEqual(options.screenshotOptions, { type: "png", fullPage: false });
+        assert.equal(options.waitForSelector, "main .ready");
         return new Response(png, {
           headers: { "Content-Type": "image/png", "X-Browser-Ms-Used": "1234" },
         });
@@ -79,6 +98,7 @@ test("browser capture validates its response and stores bytes through the shared
     url: "https://example.com/",
     viewport_width: 1280,
     viewport_height: 720,
+    wait_for_selector: "main .ready",
   }, env);
 
   assert.equal(result.size, png.byteLength);

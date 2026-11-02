@@ -6,7 +6,10 @@ const now = 1_000_000;
 const target = { capture_interval_seconds: 60, last_success_at: now - 60_000, next_due_at: now,
   current_asset_present: true, current_sha256: 'x', failure_count: 0, last_error: null, job_status: null,
   history: [{ sha256: 'x' }, { sha256: 'x' }, { sha256: 'x' }] };
-const decision = { answers: { recommendation: { choice: 'skip_once' }, risk: { score: 0 } } };
+const decision = { answers: {
+  recommendation: { choice: 'skip_once', confidence: 0.9 },
+  risk: { score: 0, confidence: 0.9 },
+} };
 
 test('stable captures can be proposed for one bounded deferral', () => {
   assert.deepEqual(decideCapturePolicy(target, decision, now), { action: 'defer_once', next_due_at: now + 60_000, reason: 'Three recent screenshots are identical and the current image is available.' });
@@ -19,6 +22,13 @@ test('uncertain, stale, missing or failed captures always retain their schedule'
   ]) assert.equal(decideCapturePolicy({ ...target, ...changed }, decision, now).action, 'capture');
   assert.equal(decideCapturePolicy(target, null, now).action, 'capture');
   assert.equal(decideCapturePolicy(target, { answers: { recommendation: { choice: 'capture_now' } } }, now).action, 'capture');
+  for (const uncertain of [
+    { recommendation: { choice: 'skip_once' }, risk: { score: 0, confidence: 0.9 } },
+    { recommendation: { choice: 'skip_once', confidence: 0.79 }, risk: { score: 0, confidence: 0.9 } },
+    { recommendation: { choice: 'skip_once', confidence: 0.9 }, risk: { score: 0, confidence: 0.79 } },
+  ]) {
+    assert.equal(decideCapturePolicy(target, { answers: uncertain }, now).action, 'capture');
+  }
 });
 
 test('a repeated deferral cannot exceed two configured intervals of image age', () => {

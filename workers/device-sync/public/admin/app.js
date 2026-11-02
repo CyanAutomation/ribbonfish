@@ -57,6 +57,24 @@ function button(text, variant = "primary") {
   return value;
 }
 
+function formatRunTime(milliseconds) {
+  const seconds = Math.max(0, Math.round((Number(milliseconds) || 0) / 1000));
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function formatCaptureObservation(decision) {
+  const delay = Number.isFinite(decision.observed_delay_ms)
+    ? ` ${formatRunTime(decision.observed_delay_ms)} after due time.` : "";
+  switch (decision.observed_result) {
+    case "changed": return `The scheduled screenshot changed content.${delay}`;
+    case "unchanged": return `The scheduled screenshot matched the previous image.${delay}`;
+    case "validator_unchanged": return "HTTP validators indicated no change; no screenshot was taken to verify the image.";
+    case "failed": return `The scheduled screenshot failed.${delay}`;
+    case "budget_deferred": return "Browser Run budget delayed the scheduled screenshot; no content result is available yet.";
+    default: return "The scheduled screenshot outcome has not been recorded yet.";
+  }
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, { cache: "no-store", ...options });
   const result = await response.json().catch(() => ({}));
@@ -492,10 +510,23 @@ function renderPlaylists(playlists) {
   });
 }
 
-function renderCaptureTargets(targets, decisions = []) {
+function renderCaptureTargets(targets, decisions = [], efficiency = null) {
   const decisionByTarget = new Map(decisions.map((decision) => [decision.capture_id, decision]));
   const container = document.querySelector("#capture-target-list");
   container.replaceChildren();
+  if (efficiency) {
+    const daily = efficiency.daily_usage ?? {};
+    const recent = efficiency.last_30_days ?? {};
+    const runTime = recent.browser_run_ms ?? {};
+    container.append(node("p",
+      `Browser Run today: ${formatRunTime(daily.accounted_ms)} of ${formatRunTime(daily.budget_ms)} accounted. ` +
+      `Last 30 days: ${recent.successful_screenshots ?? 0} screenshots completed, ${recent.validator_unchanged ?? 0} unchanged validator checks skipped Browser Run, ` +
+      `${recent.successful_unclassified ?? 0} older results unclassified. Browser Run time: ${formatRunTime(runTime.response_header)} measured, ` +
+      `${formatRunTime(runTime.reserve)} reserve-estimated, ${runTime.unclassified_jobs ?? 0} older jobs unclassified. ` +
+      `Scheduled JEV made ${recent.jev_shadow_assessments ?? 0} shadow assessments. Of ${recent.jev_candidate_deferrals ?? 0} defer suggestions, ` +
+      `${recent.jev_candidate_changed ?? 0} were followed by changed screenshots and ${recent.jev_candidate_unchanged ?? 0} by unchanged screenshots; ` +
+      `${recent.jev_candidate_unverified ?? 0} remain unverified. Schedules were unchanged.`, "muted"));
+  }
   if (!targets.length) {
     container.append(node("p", "No capture sites yet. Add a site above to configure its screenshot schedule.", "muted"));
     return;
@@ -548,13 +579,37 @@ function renderCaptureTargets(targets, decisions = []) {
       finally { saveInterval.disabled = false; }
     });
     metadata.append(intervalLabel, saveInterval);
+    const selectorLabel = node("label", "Wait for CSS selector ");
+    const selectorInput = node("input");
+    selectorInput.type = "text";
+    selectorInput.maxLength = 256;
+    selectorInput.className = "field-control";
+    selectorInput.value = target.wait_for_selector ?? "";
+    selectorInput.setAttribute("aria-label", `Wait for CSS selector for ${target.display_url}`);
+    selectorLabel.append(selectorInput);
+    metadata.append(selectorLabel, node("p",
+      "Optional. Capture waits for this element to appear after page load. Leave blank to keep the current readiness behavior.", "field-hint"));
+    const saveReadiness = button("Save readiness setting", "secondary");
+    saveReadiness.addEventListener("click", async () => {
+      saveReadiness.disabled = true;
+      try {
+        await api(`/admin/api/captures/${encodeURIComponent(target.capture_id)}/readiness`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wait_for_selector: selectorInput.value }),
+        });
+        showMessage("Capture readiness updated. The screenshot schedule is unchanged.", false, "global");
+        await refresh();
+      } catch (error) { showMessage(error.message, true, "global"); }
+      finally { saveReadiness.disabled = false; }
+    });
+    metadata.append(saveReadiness);
     if (target.last_error) metadata.append(node("p", `Full error: ${target.last_error}`, "error-title"));
     if (Number.isSafeInteger(target.next_due_at)) metadata.append(node("p", `Next screenshot ${formatTimestamp(target.next_due_at)}`, "muted"));
     const backgroundDecision = decisionByTarget.get(target.capture_id);
     if (backgroundDecision) {
       const suggestion = backgroundDecision.action === "defer_once" ? "A later capture could be suitable" :
         backgroundDecision.action === "error" ? "Assessment unavailable" : "Keep the scheduled capture";
-      metadata.append(node("p", `Background assessment ${formatTimestamp(backgroundDecision.assessed_at)} for ${formatTimestamp(backgroundDecision.due_at)}: ${suggestion}. ${backgroundDecision.reason} The schedule was unchanged.`, "muted"));
+      metadata.append(node("p", `Background assessment ${formatTimestamp(backgroundDecision.assessed_at)} for ${formatTimestamp(backgroundDecision.due_at)}: ${suggestion}. ${backgroundDecision.reason} ${formatCaptureObservation(backgroundDecision)} The schedule was unchanged.`, "muted"));
     }
 
     content.append(metadata);
@@ -1037,7 +1092,7 @@ async function refresh() {
   renderHealth(overview.asset_health);
   renderFleetAttention(overview, enrollmentRequests);
   renderPlaylists(overview.playlists);
-  renderCaptureTargets(overview.capture_targets ?? [], captureDecisions);
+  renderCaptureTargets(overview.capture_targets ?? [], captureDecisions, overview.capture_efficiency);
   renderAvailableSites(overview.capture_targets ?? []);
   renderDevices(overview.devices);
   renderPendingEnrollments(enrollmentRequests);

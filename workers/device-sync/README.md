@@ -105,6 +105,19 @@ before deploying a Worker with this mode enabled. Shadow suggestions are not
 validated incident detection, and should not be used to suppress captures until
 representative, labelled histories have been evaluated.
 
+Background recommendations also require both JEV answer confidences to be at
+least 0.8 in addition to the existing freshness, hash-stability, asset, and
+error checks. Each scheduled job records its due time so a completed screenshot
+can label the matching shadow suggestion as followed by changed or unchanged
+content. Validator shortcuts, failures, and budget deferrals are reported
+separately because they do not verify screenshot content. This feedback remains
+advisory and never changes the next capture time. The Sites dashboard reports
+these outcomes alongside daily accounted Browser Run time and total durations
+across retries, separated between `X-Browser-Ms-Used` and the reserve estimate.
+Existing rows stay unclassified until new captures provide that evidence.
+Apply migration `0013_capture_efficiency_audit.sql` before deploying these
+changes.
+
 Migration `0011_interval_defaults.sql` sets existing capture targets to 24 hours
 and playlist rotations to 90 seconds. It assigns the active playlist a new
 revision token so agents fetch the migrated rotation interval.
@@ -198,6 +211,7 @@ in Wrangler's local mode.
 | `POST /admin/api/playlists` | Stage an immutable playlist revision with PNG assets and/or reviewed capture site IDs |
 | `POST /admin/api/captures/{capture_id}/run` | Queue a capture now; normal queue, rate, and budget controls still apply |
 | `PATCH /admin/api/captures/{capture_id}` | Review or change a target schedule; body: `{"capture_interval_seconds":21600}` |
+| `PATCH /admin/api/captures/{capture_id}/readiness` | Set or clear an optional CSS readiness selector without changing its schedule; body: `{"wait_for_selector":"main .ready"}` |
 | `GET /admin/api/playlists/{playlist_id}/{revision}` | Read a revision and its ordered image and capture references for editing |
 | `DELETE /admin/api/playlists/{playlist_id}` | Delete all revisions of an inactive playlist and its D1 image references; the active playlist is protected |
 | `PUT /admin/api/active-playlist` | Activate or roll back to an existing revision; body: `{"playlist_id":"operations","revision":"r-…"}` |
@@ -219,6 +233,11 @@ browser runtime budget and queue capacity. To change rotation, stage a new
 playlist revision with the desired value and activate it with
 `PUT /admin/api/active-playlist`. Read current values through the overview,
 playlist revision, or device playlist APIs.
+
+Each site can optionally set a CSS selector that Browser Run waits for before
+taking the screenshot. Leave it blank to keep the existing
+`domcontentloaded` behavior. Use a selector only when it marks the content that
+must be visible; waiting for that element does not change the capture interval.
 
 The Sites section manages page URLs and schedules independently. Playlist
 editing selects from reviewed sites in that library. Registering a site does

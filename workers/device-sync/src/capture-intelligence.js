@@ -1,6 +1,8 @@
 import { buildCaptureAssessmentState, captureAssessmentQuestions } from './jev-use-cases.js';
 import { callJevDecision } from './jev.js';
 
+const MIN_JEV_CONFIDENCE = 0.8;
+
 // The model supplies a suggestion; deterministic rules bound any prospective deferral.
 export function decideCapturePolicy(target, decision, now) {
   const interval = target.capture_interval_seconds * 1000;
@@ -11,8 +13,12 @@ export function decideCapturePolicy(target, decision, now) {
     Number.isSafeInteger(target.last_success_at) && target.last_success_at <= now &&
     due >= now && due + interval - target.last_success_at <= 2 * interval &&
     target.current_asset_present && !target.failure_count && !target.last_error && !target.job_status && stable;
-  if (safe && decision?.answers?.recommendation?.choice === 'skip_once' &&
-      Number.isFinite(decision?.answers?.risk?.score) && decision.answers.risk.score <= 0.5) {
+  const recommendation = decision?.answers?.recommendation;
+  const risk = decision?.answers?.risk;
+  if (safe && recommendation?.choice === 'skip_once' &&
+      Number.isFinite(recommendation.confidence) && recommendation.confidence >= MIN_JEV_CONFIDENCE &&
+      Number.isFinite(risk?.confidence) && risk.confidence >= MIN_JEV_CONFIDENCE &&
+      Number.isFinite(risk.score) && risk.score <= 0.5) {
     return { action: 'defer_once', next_due_at: due + interval,
       reason: 'Three recent screenshots are identical and the current image is available.' };
   }
@@ -34,7 +40,7 @@ export async function assessUpcomingCaptures(env, now = Date.now(), decide = cal
     if (claim.meta?.changes !== 1) continue;
     try {
       const [history, asset] = await Promise.all([
-        env.DB.prepare('SELECT sha256, browser_ms, captured_at FROM capture_history WHERE capture_id = ? ORDER BY captured_at DESC LIMIT 10').bind(target.capture_id).all(),
+        env.DB.prepare('SELECT sha256, browser_ms, browser_ms_source, captured_at FROM capture_history WHERE capture_id = ? ORDER BY captured_at DESC LIMIT 10').bind(target.capture_id).all(),
         target.current_sha256 ? env.ASSETS.head(`assets/${target.current_sha256}`) : Promise.resolve(null),
       ]);
       target.history = history.results ?? [];
