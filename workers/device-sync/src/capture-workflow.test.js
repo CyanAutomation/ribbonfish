@@ -146,7 +146,7 @@ test("a confirmed screenshot skip is bound to one due time and consumed once", a
       .get(captureID).next_due_at, dueAt + interval * 1000);
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_skip_approvals WHERE capture_id = ?")
       .get(captureID).count, 0);
-    const skipEvents = sqlite.prepare("SELECT event_type FROM audit_events WHERE subject_id = ? ORDER BY occurred_at").all(captureID);
+    const skipEvents = sqlite.prepare("SELECT event_type FROM audit_events WHERE subject_id = ? AND event_type LIKE 'capture.skip_once_%' ORDER BY occurred_at").all(captureID);
     assert.deepEqual(skipEvents.map((row) => row.event_type), ["capture.skip_once_confirmed", "capture.skip_once_applied"]);
 
     await dispatchDueCaptures(env, dueAt + interval * 1000 + 1);
@@ -188,7 +188,7 @@ test("capture interval API updates a stored target, next due time, and audit rec
       .get(captureID);
     assert.equal(target.capture_interval_seconds, 21600);
     assert.ok(target.next_due_at >= Date.now() + 21_590_000);
-    const event = sqlite.prepare("SELECT event_type, metadata_json FROM audit_events WHERE subject_id = ?")
+    const event = sqlite.prepare("SELECT event_type, metadata_json FROM audit_events WHERE subject_id = ? ORDER BY occurred_at DESC LIMIT 1")
       .get(captureID);
     assert.equal(event.event_type, "capture.interval_updated");
     assert.deepEqual(JSON.parse(event.metadata_json), { capture_interval_seconds: 21600 });
@@ -226,21 +226,68 @@ test("a skip approval for a stale due time cannot suppress a screenshot", async 
 });
 
 async function createCapturePlaylist(env, url = "https://example.com/status", ctx, captureInterval = 900) {
+  const siteResult = await registerCaptureSite(env, url, captureInterval, ctx);
+  if (!siteResult.response.ok) return siteResult;
   const response = await handleAdminRequest(await request("/admin/api/playlists", {
     method: "POST",
     body: {
       id: "operations",
       rotation_interval: "90s",
       assets: [],
-      captures: [{
-        url,
-        ...(captureInterval === null ? {} : { capture_interval_seconds: captureInterval }),
-        viewport: { width: 1280, height: 720 },
-      }],
+      captures: [{ capture_id: siteResult.body.capture_id }],
     },
   }), env, ctx);
   return { response, body: await response.json() };
 }
+
+async function registerCaptureSite(env, url, captureInterval = 900, ctx) {
+  const response = await handleAdminRequest(await request("/admin/api/capture-sites", {
+    method: "POST",
+    body: { url, viewport: { width: 1280, height: 720 } },
+  }), env, ctx);
+  const site = await response.json();
+  if (!response.ok) return { response, body: site };
+  const review = await handleAdminRequest(await request(`/admin/api/captures/${site.capture_id}`, {
+    method: "PATCH", body: { capture_interval_seconds: captureInterval ?? 86400 },
+  }), env, ctx);
+  return { response: review, body: await review.json() };
+}
+
+test("reviewed sites do not schedule captures until a playlist uses them", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    const site = await registerCaptureSite(env, "https://example.com/library-only", 900);
+    assert.equal(site.response.status, 200);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_jobs").get().count, 0);
+    const result = await scheduledHandler({ scheduledTime: Date.now() }, env);
+    assert.equal(result.enqueued, 0);
+    assert.equal(messages.length, 0);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("capture site registration returns 201 only for a new site", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env } = environment(sqlite);
+    const body = { url: "https://example.com/pending", viewport: { width: 1280, height: 720 } };
+    const first = await handleAdminRequest(await request("/admin/api/capture-sites", { method: "POST", body }), env);
+    const firstSite = await first.json();
+    assert.equal(first.status, 201);
+    assert.equal(firstSite.schedule_reviewed, false);
+
+    const duplicate = await handleAdminRequest(await request("/admin/api/capture-sites", { method: "POST", body }), env);
+    const duplicateSite = await duplicate.json();
+    assert.equal(duplicate.status, 200);
+    assert.equal(duplicateSite.capture_id, firstSite.capture_id);
+    assert.equal(duplicateSite.schedule_reviewed, false);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_targets").get().count, 1);
+  } finally {
+    sqlite.close();
+  }
+});
 
 function addDevice(sqlite) {
   const token = "device-token-for-capture-workflow-test";
@@ -265,6 +312,9 @@ test("saving a staged webpage queues its first capture and activation serves the
     assert.equal(created.body.capture_count, 1);
     assert.equal(sqlite.prepare("SELECT capture_interval_seconds FROM capture_targets").get().capture_interval_seconds, 86400);
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM playlist_capture_items").get().count, 1);
+    assert.deepEqual(sqlite.prepare("SELECT event_type FROM audit_events ORDER BY occurred_at, rowid").all().map((row) => row.event_type), [
+      "capture.site_created", "capture.schedule_reviewed", "playlist.revision_created",
+    ]);
     assert.equal(messages.length, 1, "saving a playlist should queue the initial capture before activation");
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM active_playlist").get().count, 0);
 
@@ -362,17 +412,11 @@ test("initial capture dispatch respects the pending limit and drains staged work
       },
     });
     env.CAPTURE_MAX_PENDING = "1";
+    const one = await registerCaptureSite(env, "https://example.com/one", 900);
+    const two = await registerCaptureSite(env, "https://example.com/two", 900);
     const response = await handleAdminRequest(await request("/admin/api/playlists", {
-      method: "POST",
-      body: {
-        id: "operations",
-        rotation_interval: "90s",
-        assets: [],
-        captures: [
-          { url: "https://example.com/one", capture_interval_seconds: 900, viewport: { width: 1280, height: 720 } },
-          { url: "https://example.com/two", capture_interval_seconds: 900, viewport: { width: 1280, height: 720 } },
-        ],
-      },
+      method: "POST", body: { id: "operations", rotation_interval: "90s", assets: [],
+        captures: [{ capture_id: one.body.capture_id }, { capture_id: two.body.capture_id }] },
     }), env);
     const created = await response.json();
     assert.equal(response.status, 201);

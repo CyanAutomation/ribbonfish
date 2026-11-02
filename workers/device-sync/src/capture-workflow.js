@@ -74,7 +74,7 @@ export async function dispatchDueCaptures(env, now = Date.now()) {
   // Staged targets receive a first or stale-image warmup; recurring captures stay active-playlist only.
   const due = await env.DB.prepare(
     "SELECT t.capture_id, t.next_due_at FROM capture_targets t " +
-    "WHERE t.enabled = 1 AND t.next_due_at <= ? " +
+    "WHERE t.enabled = 1 AND t.schedule_reviewed_at IS NOT NULL AND t.next_due_at <= ? " +
     "AND (EXISTS (SELECT 1 FROM playlist_capture_items p JOIN active_playlist a " +
     "ON a.playlist_id = p.playlist_id AND a.revision = p.revision WHERE p.capture_id = t.capture_id) " +
     "OR ((t.current_sha256 IS NULL OR t.last_success_at IS NULL OR t.last_success_at < ?) " +

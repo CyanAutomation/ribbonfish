@@ -3,6 +3,8 @@ const AUDIT_EVENT_LABELS = {
   "capture.skip_once_applied": "Skipped one scheduled screenshot",
   "capture.skip_once_confirmed": "Confirmed one screenshot skip",
   "capture.interval_updated": "Updated screenshot interval",
+  "capture.schedule_reviewed": "Reviewed screenshot schedule",
+  "capture.site_created": "Added capture site",
   "device.credential_rotated": "Rotated device token",
   "device.disabled": "Disabled device",
   "device.enabled": "Enabled device",
@@ -110,17 +112,6 @@ export function playlistDeleteActionStates(playlists) {
   });
 }
 
-export function parsePageURLs(value) {
-  return String(value ?? "")
-    .split(/\r?\n/)
-    .map((url) => url.trim())
-    .filter(Boolean);
-}
-
-export function hasPageURLs(value) {
-  return parsePageURLs(value).length > 0;
-}
-
 export function formatScreenshotStatus(jobStatus, lastError, lastSuccessAt) {
   if (jobStatus === "running") return { label: "Screenshot in progress", tone: "warning" };
   if (jobStatus === "queued") return { label: "Screenshot queued", tone: "warning" };
@@ -177,7 +168,7 @@ export function summarizeFleetAttention(overview = {}, enrollmentRequests = []) 
       count: failedCaptures,
       singular: "screenshot needing attention",
       plural: "screenshots needing attention",
-      href: "#capture-targets",
+      href: "#sites-section",
     });
   }
   return items;
