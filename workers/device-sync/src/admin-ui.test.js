@@ -26,8 +26,6 @@ import {
   formatScreenshotStatus,
   formatTimestamp,
   summarizeFleetAttention,
-  hasPageURLs,
-  parsePageURLs,
 } from "../public/admin/ui-utils.js";
 
 // Contract source: ../README.md#local-development and ../README.md#management-api.
@@ -154,7 +152,7 @@ test("feedback locations have contextual announcements and dismissal controls", 
 test("management page prioritizes task navigation and defers optional panels", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const nodes = parseHTML(html);
-  for (const sectionID of ["playlist-section", "device-section"]) {
+  for (const sectionID of ["sites-section", "playlist-section", "device-section"]) {
     assert.ok(nodes.some((node) => node.tagName === "a" && attribute(node, "href") === `#${sectionID}`));
     assert.ok(byID(nodes, sectionID));
   }
@@ -200,7 +198,7 @@ test("fleet attention shows only actionable health and content issues", () => {
     { key: "enrollments", count: 1, singular: "device awaiting approval", plural: "devices awaiting approval", href: "#pending-enrollments-title" },
     { key: "devices", count: 2, singular: "device needing health review", plural: "devices needing health review", href: "#device-section" },
     { key: "assets", count: 3, singular: "image availability issue", plural: "image availability issues", href: "#asset-health" },
-    { key: "captures", count: 1, singular: "screenshot needing attention", plural: "screenshots needing attention", href: "#capture-targets" },
+    { key: "captures", count: 1, singular: "screenshot needing attention", plural: "screenshots needing attention", href: "#sites-section" },
   ]);
   assert.deepEqual(summarizeFleetAttention({ devices: [], asset_health: { missing: [] }, capture_targets: [] }, []), []);
 });
@@ -583,6 +581,8 @@ test("audit events and metadata are presented as readable labels", () => {
   assert.equal(formatAuditEventType("capture.skip_once_confirmed"), "Confirmed one screenshot skip");
   assert.equal(formatAuditEventType("capture.skip_once_applied"), "Skipped one scheduled screenshot");
   assert.equal(formatAuditEventType("capture.interval_updated"), "Updated screenshot interval");
+  assert.equal(formatAuditEventType("capture.schedule_reviewed"), "Reviewed screenshot schedule");
+  assert.equal(formatAuditEventType("capture.site_created"), "Added capture site");
   assert.equal(formatAuditEventType("development.bootstrap"), "Created initial playlist");
   assert.equal(formatAuditEventType("device.disabled"), "Disabled device");
   assert.deepEqual(formatAuditDetails({
@@ -640,15 +640,6 @@ test("confirmed actions return the token result and do not execute when declined
   });
   assert.deepEqual(accepted, { confirmed: true, result: { device_token: "new-token" } });
   assert.equal(actions, 1);
-});
-
-test("playlist URL input trims blank lines and preserves each submitted page", () => {
-  assert.deepEqual(parsePageURLs("  https://one.example/  \n\nhttps://two.example/path\n"), [
-    "https://one.example/",
-    "https://two.example/path",
-  ]);
-  assert.equal(hasPageURLs(" \n  \n"), false);
-  assert.equal(hasPageURLs("https://status.example.com"), true);
 });
 
 test("playlist state, screenshot status, and screenshot intervals use consistent labels", () => {

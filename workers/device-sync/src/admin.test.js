@@ -128,9 +128,10 @@ class FakeDatabase {
       const row = this.devices.get(device_id);
       if (row) row.enabled = enabled;
     } else if (sql.startsWith("UPDATE capture_targets SET capture_interval_seconds")) {
-      if (this.captureTarget?.capture_id === values[2]) {
+      if (this.captureTarget?.capture_id === values[3]) {
         this.captureTarget.capture_interval_seconds = values[0];
         this.captureTarget.next_due_at = values[1];
+        this.captureTarget.schedule_reviewed_at = values[2];
       }
     } else if (sql.startsWith("UPDATE devices SET token_hash")) {
       const [token_hash, device_id] = values;
@@ -587,13 +588,56 @@ test("interval API exposes the supported choices and defaults", async () => {
 
 test("capture target interval can be changed through the API", async () => {
   const env = testEnvironment();
-  env.DB.captureTarget = { capture_id: captureID, capture_interval_seconds: 3600, next_due_at: 123 };
+  env.DB.captureTarget = { capture_id: captureID, capture_interval_seconds: 3600, next_due_at: 123, last_success_at: null };
   const response = await handleAdminRequest(request(`/admin/api/captures/${captureID}`, {
     method: "PATCH", body: { capture_interval_seconds: 21600 },
   }), env);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { capture_id: captureID, capture_interval_seconds: 21600 });
   assert.equal(env.DB.captureTarget.capture_interval_seconds, 21600);
+  assert.ok(Number.isSafeInteger(env.DB.captureTarget.schedule_reviewed_at));
+});
+
+test("an existing pending site can be retrieved with the default unreviewed schedule", async () => {
+  const env = testEnvironment();
+  env.CAPTURE_ALLOWED_HOSTS = "example.com";
+  env.DB.captureTarget = {
+    capture_id: captureID, url: "https://example.com/", capture_interval_seconds: 86400,
+    viewport_width: 1920, viewport_height: 1080, placeholder_sha256: digest, placeholder_size: 4,
+    schedule_reviewed_at: null,
+  };
+  const response = await handleAdminRequest(request("/admin/api/capture-sites", {
+    method: "POST", body: { url: "https://example.com/", viewport: { width: 1920, height: 1080 } },
+  }), env);
+  assert.equal(response.status, 200);
+  const site = await response.json();
+  assert.equal(site.capture_id, captureID);
+  assert.equal(site.capture_interval_seconds, 86400);
+  assert.equal(site.schedule_reviewed, false);
+});
+
+test("a playlist cannot include a site until its schedule has been reviewed", async () => {
+  const env = testEnvironment();
+  env.DB.captureTarget = {
+    capture_id: captureID, url: "https://example.com/", capture_interval_seconds: 86400,
+    viewport_width: 1920, viewport_height: 1080, placeholder_sha256: digest, placeholder_size: 4,
+    schedule_reviewed_at: null,
+  };
+  const response = await handleAdminRequest(request("/admin/api/playlists", {
+    method: "POST", body: { id: "operations", captures: [{ capture_id: captureID }] },
+  }), env);
+  assert.equal(response.status, 409);
+  assert.equal(env.DB.playlists.has("operations:revision-1"), false);
+});
+
+test("playlist APIs reject creating sites inline", async () => {
+  const env = testEnvironment();
+  const response = await handleAdminRequest(request("/admin/api/playlists", {
+    method: "POST", body: {
+      id: "operations", captures: [{ url: "https://example.com/", capture_interval_seconds: 86400, viewport: { width: 1920, height: 1080 } }],
+    },
+  }), env);
+  assert.equal(response.status, 400);
 });
 
 test("capture target interval API rejects values outside the supported set", async () => {

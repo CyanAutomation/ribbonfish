@@ -126,6 +126,10 @@ operator approvals for screenshot skips. Apply it with
 `npm run migrate:management` before deploying code that confirms screenshot
 skips.
 
+Migration `0012_site_schedule_review.sql` records whether each site schedule
+has been reviewed, while preserving existing sites as reviewed. Apply it with
+`npm run migrate:management` before deploying the site-first admin flow.
+
 The management config uses a remote Browser binding so screenshot Quick Actions
 can run during local development. Queue messages and D1/R2 state remain local,
 but Browser Run requests consume the configured Cloudflare account's usage.
@@ -188,9 +192,10 @@ in Wrangler's local mode.
 | `POST /admin/api/devices/{device_id}/rotate` | Replace a legacy device token and return it once; key-based devices use a new approval to change identity |
 | `POST /admin/api/assets` | Upload one PNG body with `Content-Type: image/png`; returns its SHA-256 and byte size |
 | `GET /admin/api/assets/{sha256}` | Preview a PNG that is referenced by a playlist revision |
-| `POST /admin/api/playlists` | Stage an immutable playlist revision with PNG assets and/or webpage captures |
+| `POST /admin/api/capture-sites` | Register a URL and viewport independently; new sites start with the default daily schedule pending review |
+| `POST /admin/api/playlists` | Stage an immutable playlist revision with PNG assets and/or reviewed capture site IDs |
 | `POST /admin/api/captures/{capture_id}/run` | Queue a capture now; normal queue, rate, and budget controls still apply |
-| `PATCH /admin/api/captures/{capture_id}` | Change a target interval; body: `{"capture_interval_seconds":21600}` |
+| `PATCH /admin/api/captures/{capture_id}` | Review or change a target schedule; body: `{"capture_interval_seconds":21600}` |
 | `GET /admin/api/playlists/{playlist_id}/{revision}` | Read a revision and its ordered image and capture references for editing |
 | `DELETE /admin/api/playlists/{playlist_id}` | Delete all revisions of an inactive playlist and its D1 image references; the active playlist is protected |
 | `PUT /admin/api/active-playlist` | Activate or roll back to an existing revision; body: `{"playlist_id":"operations","revision":"r-…"}` |
@@ -200,21 +205,23 @@ in Wrangler's local mode.
 capture values are 900, 1800, 3600, 21600, and 86400 seconds (default 86400);
 rotation values are `30s`, `60s`, `90s`, `120s`, and `5m` (default `90s`).
 Playlist staging accepts `rotation_interval` and defaults it to `90s` when
-omitted. Each new webpage target accepts its own `capture_interval_seconds`
-and defaults it to 86400 when omitted. Use `PATCH /admin/api/captures/{capture_id}`
-to update a saved target; the target is shared by every playlist revision that
-references the same canonical URL and screenshot size, so changing its interval
-changes that shared schedule. The shortest supported interval is 15 minutes
+omitted. Register a site first with `POST /admin/api/capture-sites`, then review
+or amend its schedule with `PATCH /admin/api/captures/{capture_id}`; saving the
+default interval confirms the schedule. Playlist staging accepts existing
+`capture_id` values only after their schedules have been reviewed. The target is
+shared by every playlist revision that references the same canonical URL and
+screenshot size, so changing its interval changes that shared schedule. The
+shortest supported interval is 15 minutes
 (up to 96 captures per target per day); frequent schedules share the daily
 browser runtime budget and queue capacity. To change rotation, stage a new
 playlist revision with the desired value and activate it with
 `PUT /admin/api/active-playlist`. Read current values through the overview,
 playlist revision, or device playlist APIs.
 
-The management editor provides a separate interval selector for every new page
-URL. Existing page targets retain their saved shared interval when selected in
-the editor; adjust a saved target from Page screenshots to change its schedule
-across all playlists that use it.
+The Sites section manages page URLs and schedules independently. Playlist
+editing selects from reviewed sites in that library. Registering a site does
+not start scheduled captures; the Worker schedules targets referenced by the
+active playlist.
 
 Playlist staging verifies every referenced object exists in R2 with the declared
 size. A webpage slot references a reusable URL/viewport capture target and
@@ -226,7 +233,7 @@ credentials, intervals of 900, 1800, 3600, 21600, or 86400 seconds, and viewport
 
 Activation updates the single global pointer only after a revision exists.
 Editing a revision creates a new immutable revision. You can keep or remove its
-existing images and webpage items, then add uploads or URLs; the source
+existing images and webpage items, then add uploads or reviewed sites; the source
 revision stays unchanged. Uploads, holding images, and screenshots share the
 same PNG validation, SHA-256 naming, size limit, and R2 storage helper. When a
 capture succeeds, the playlist slot points at the new digest, so devices receive

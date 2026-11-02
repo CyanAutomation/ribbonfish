@@ -21,8 +21,6 @@ import {
   playlistDeleteActionStates,
   formatScreenshotStatus,
   formatTimestamp,
-  hasPageURLs,
-  parsePageURLs,
   summarizeFleetAttention,
 } from "./ui-utils.js";
 
@@ -286,50 +284,6 @@ function playlistVersionKey(playlist) {
   return JSON.stringify([playlist.playlist_id, playlist.revision]);
 }
 
-function captureURLKey(url) {
-  try { return new URL(url).href; } catch { return url.trim(); }
-}
-
-function syncScreenshotSettings() {
-  const settings = document.querySelector("#screenshot-settings");
-  const urls = parsePageURLs(document.querySelector('[name="capture_urls"]').value);
-  const visible = urls.length > 0;
-  settings.hidden = !visible;
-  settings.disabled = !visible;
-  const intervalContainer = document.querySelector("#new-capture-intervals");
-  const selectedByURL = new Map();
-  [...intervalContainer.querySelectorAll("select")].forEach((select) => {
-    if (!selectedByURL.has(select.dataset.urlKey)) selectedByURL.set(select.dataset.urlKey, select.value);
-  });
-  intervalContainer.replaceChildren();
-  urls.forEach((url, index) => {
-    const row = node("div", undefined, "new-capture-interval-option");
-    const label = node("label", undefined, "new-capture-interval-option__label");
-    label.append(node("span", url));
-    const select = node("select");
-    select.className = "field-control new-capture-interval";
-    select.dataset.urlIndex = String(index);
-    select.dataset.urlKey = captureURLKey(url);
-    select.setAttribute("aria-label", `Screenshot interval for ${url}`);
-    const options = intervalDefinitions?.capture.options ?? [];
-    for (const option of options) {
-      const item = node("option", option.label);
-      item.value = String(option.value);
-      select.append(item);
-    }
-    const selected = selectedByURL.get(select.dataset.urlKey) ?? String(intervalDefinitions?.capture.default ?? 86400);
-    select.value = options.some((option) => String(option.value) === selected)
-      ? selected : String(intervalDefinitions?.capture.default ?? 86400);
-    select.addEventListener("change", () => {
-      intervalContainer.querySelectorAll("select").forEach((other) => {
-        if (other.dataset.urlKey === select.dataset.urlKey) other.value = select.value;
-      });
-    });
-    row.append(label, select);
-    intervalContainer.append(row);
-  });
-}
-
 function resetPlaylistEditor() {
   const form = playlistForm();
   const editor = document.querySelector("#playlist-editor");
@@ -337,16 +291,16 @@ function resetPlaylistEditor() {
   editor.querySelector("summary").textContent = "Create playlist version";
   editor.open = false;
   form.querySelector("#playlist-form-help").textContent =
-    "Add PNG images or page URLs. Images and screenshots can be reused across playlists. Saved versions stay available until you delete the playlist.";
+    "Add PNG images and select reviewed sites from the library. Saved versions stay available until you delete the playlist.";
   form.querySelector("[name=assets]").required = false;
   form.querySelector("#playlist-submit").textContent = "Save playlist version";
   form.querySelector("#cancel-playlist-edit").hidden = true;
-  for (const selector of ["#playlist-current-assets", "#playlist-current-captures"]) {
+  for (const selector of ["#playlist-current-assets"]) {
     const selection = document.querySelector(selector);
     selection.querySelector(".asset-selection__list").replaceChildren();
     selection.hidden = true;
   }
-  syncScreenshotSettings();
+  renderAvailableSites(latestOverview?.capture_targets ?? [], new Set());
 }
 
 async function startPlaylistEdit(playlist) {
@@ -364,7 +318,7 @@ async function startPlaylistEdit(playlist) {
     form.elements.namedItem("id").value = detail.playlist_id;
     form.elements.namedItem("rotation_interval").value = detail.rotation_interval;
     form.querySelector("#playlist-form-help").textContent =
-      `Editing ${detail.playlist_id}, version ${compactIdentifier(detail.revision)}. Keep the images and page URLs you want, then save a new version. Saved versions do not change.`;
+      `Editing ${detail.playlist_id}, version ${compactIdentifier(detail.revision)}. Keep the images and sites you want, then save a new version. Saved versions do not change.`;
     form.querySelector("[name=assets]").required = false;
     form.querySelector("#playlist-submit").textContent = "Save as new version";
     form.querySelector("#cancel-playlist-edit").hidden = false;
@@ -389,26 +343,7 @@ async function startPlaylistEdit(playlist) {
       assetList.append(label);
     });
     selection.hidden = false;
-    const captureSelection = document.querySelector("#playlist-current-captures");
-    const captureList = captureSelection.querySelector(".asset-selection__list");
-    captureList.replaceChildren();
-    (detail.captures ?? []).forEach((capture, index) => {
-      const label = node("label", undefined, "asset-option");
-      const checkbox = node("input");
-      checkbox.type = "checkbox";
-      checkbox.checked = true;
-      checkbox.dataset.captureId = capture.capture_id;
-      const preview = node("img", undefined, "asset-option__preview");
-      preview.src = `/admin/api/assets/${capture.sha256}`;
-      preview.alt = "";
-      preview.loading = "lazy";
-      preview.decoding = "async";
-      preview.addEventListener("error", () => { preview.hidden = true; }, { once: true });
-      const caption = node("span", `Keep page ${index + 1} · ${capture.url} · ${formatCaptureInterval(capture.capture_interval_seconds)}; schedule shared wherever this page and screenshot size are used`);
-      label.append(checkbox, preview, caption);
-      captureList.append(label);
-    });
-    captureSelection.hidden = !(detail.captures ?? []).length;
+    renderAvailableSites(latestOverview?.capture_targets ?? [], new Set((detail.captures ?? []).map((capture) => capture.capture_id)));
     document.querySelector("#playlist-feedback").hidden = true;
     form.scrollIntoView({ behavior: "smooth", block: "start" });
     form.elements.namedItem("id").focus({ preventScroll: true });
@@ -547,7 +482,7 @@ function renderPlaylists(playlists) {
     records: playlists,
     fields,
     emptyState: {
-      message: "No playlists yet. Add images or page URLs to create your first playlist version.",
+      message: "No playlists yet. Add images or reviewed sites to create your first playlist version.",
       actionLabel: "Create playlist version",
       href: "#playlist-editor",
     },
@@ -561,7 +496,7 @@ function renderCaptureTargets(targets, decisions = []) {
   const container = document.querySelector("#capture-target-list");
   container.replaceChildren();
   if (!targets.length) {
-    container.append(node("p", "No page screenshots yet. Add a page URL to a playlist to create one.", "muted"));
+    container.append(node("p", "No capture sites yet. Add a site above to configure its screenshot schedule.", "muted"));
     return;
   }
   targets.forEach((target) => {
@@ -578,6 +513,7 @@ function renderCaptureTargets(targets, decisions = []) {
     heading.append(node("h4", target.display_url));
     const screenshotStatus = formatScreenshotStatus(target.job_status, target.last_error, target.last_success_at);
     heading.append(statusBadge(screenshotStatus.label, screenshotStatus.tone));
+    if (!target.schedule_reviewed) heading.append(statusBadge("Schedule review needed", "warning"));
     content.append(heading);
     content.append(node("p", target.last_success_at ? `Last screenshot ${formatTimestamp(target.last_success_at)}` : "No screenshot is ready yet.", "muted"));
     if (target.last_error) content.append(node("p", `Screenshot error: ${target.last_error}`, "capture-target__error error-title"));
@@ -597,7 +533,7 @@ function renderCaptureTargets(targets, decisions = []) {
       intervalSelect.append(item);
     }
     intervalLabel.append(intervalSelect);
-    const saveInterval = button("Save screenshot interval", "secondary");
+    const saveInterval = button(target.schedule_reviewed ? "Save screenshot schedule" : "Confirm schedule", "secondary");
     saveInterval.addEventListener("click", async () => {
       saveInterval.disabled = true;
       try {
@@ -605,9 +541,9 @@ function renderCaptureTargets(targets, decisions = []) {
           method: "PATCH", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ capture_interval_seconds: Number(intervalSelect.value) }),
         });
-        showMessage("Screenshot interval updated.", false, "playlist");
+        showMessage(target.schedule_reviewed ? "Screenshot schedule updated." : "Screenshot schedule reviewed. This site can now be added to playlists.", false, "global");
         await refresh();
-      } catch (error) { showMessage(error.message, true, "playlist"); }
+      } catch (error) { showMessage(error.message, true, "global"); }
       finally { saveInterval.disabled = false; }
     });
     metadata.append(intervalLabel, saveInterval);
@@ -665,6 +601,32 @@ function renderCaptureTargets(targets, decisions = []) {
     content.append(assessmentDisclosure);
     card.append(preview, content);
     container.append(card);
+  });
+}
+
+function renderAvailableSites(targets, selectedIDs = null) {
+  const list = document.querySelector("#available-sites .asset-selection__list");
+  const prior = new Map([...list.querySelectorAll("input[data-capture-id]")].map((input) => [input.dataset.captureId, input.checked]));
+  list.replaceChildren();
+  const eligible = targets.filter((target) => target.schedule_reviewed);
+  if (!eligible.length) {
+    list.append(node("p", "No reviewed sites yet. Add and review a site in the Sites section first.", "muted"));
+    return;
+  }
+  eligible.forEach((target) => {
+    const label = node("label", undefined, "asset-option");
+    const checkbox = node("input");
+    checkbox.type = "checkbox";
+    checkbox.dataset.captureId = target.capture_id;
+    checkbox.checked = selectedIDs ? selectedIDs.has(target.capture_id) : (prior.get(target.capture_id) ?? false);
+    const preview = node("img", undefined, "asset-option__preview");
+    preview.src = `/admin/api/assets/${target.sha256}`;
+    preview.alt = "";
+    preview.loading = "lazy";
+    preview.decoding = "async";
+    preview.addEventListener("error", () => { preview.hidden = true; }, { once: true });
+    label.append(checkbox, preview, node("span", `${target.display_url} · ${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`));
+    list.append(label);
   });
 }
 
@@ -1027,13 +989,13 @@ async function refresh() {
   intervalDefinitions = intervals;
   populateIntervalSelect(document.querySelector("#playlist-form [name=rotation_interval]"), intervals.rotation.options,
     intervals.rotation.default, (option) => option.value);
-  syncScreenshotSettings();
   latestOverview = overview;
   renderEnvironment(overview.environment);
   renderHealth(overview.asset_health);
   renderFleetAttention(overview, enrollmentRequests);
   renderPlaylists(overview.playlists);
   renderCaptureTargets(overview.capture_targets ?? [], captureDecisions);
+  renderAvailableSites(overview.capture_targets ?? []);
   renderDevices(overview.devices);
   renderPendingEnrollments(enrollmentRequests);
   renderAudit(overview.audit);
@@ -1060,7 +1022,6 @@ function populateIntervalSelect(select, options, selectedValue, getValue) {
 function resetIntervalSelections(form) {
   if (!intervalDefinitions) return;
   form.elements.namedItem("rotation_interval").value = intervalDefinitions.rotation.default;
-  syncScreenshotSettings();
 }
 
 function renderEnvironment(environment) {
@@ -1223,7 +1184,33 @@ if ("IntersectionObserver" in window) {
   sectionLinks[0]?.setAttribute("aria-current", "location");
 }
 
-document.querySelector('[name="capture_urls"]').addEventListener("input", syncScreenshotSettings);
+document.querySelector("#capture-site-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const feedback = document.querySelector("#capture-site-feedback");
+  const submit = form.querySelector("button[type=submit]");
+  submit.disabled = true;
+  try {
+    const result = await api("/admin/api/capture-sites", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: form.elements.namedItem("url").value,
+        viewport: {
+          width: Number(form.elements.namedItem("viewport_width").value),
+          height: Number(form.elements.namedItem("viewport_height").value),
+        },
+      }),
+    });
+    form.reset();
+    form.elements.namedItem("viewport_width").value = "1920";
+    form.elements.namedItem("viewport_height").value = "1080";
+    showInlineMessage(feedback, result.schedule_reviewed
+      ? "This site already exists and its schedule has been reviewed."
+      : "Site added with the default daily schedule. Review or confirm that schedule below.");
+    await refresh();
+  } catch (error) { showInlineMessage(feedback, error.message, true); }
+  finally { submit.disabled = false; }
+});
 
 function displaySecret(title, value) {
   document.querySelector("#secret-title").textContent = title;
@@ -1259,18 +1246,11 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
       size: Number(input.dataset.size),
     }))
     : [];
-  const captures = [...document.querySelectorAll("#playlist-current-captures input:checked")].map((input) => ({
+  const selectedSites = [...document.querySelectorAll("#available-sites input:checked")].map((input) => ({
     capture_id: input.dataset.captureId,
   }));
-  const newURLs = parsePageURLs(form.get("capture_urls"));
-  const newCaptureIntervals = new Map([...document.querySelectorAll(".new-capture-interval")]
-    .map((select) => [Number(select.dataset.urlIndex), Number(select.value)]));
-  const viewport = {
-    width: Number(form.get("viewport_width")),
-    height: Number(form.get("viewport_height")),
-  };
-  if (!files.length && !assets.length && !captures.length && !newURLs.length) {
-    return showInlineMessage(feedback, "Add at least one PNG image or page URL.", true);
+  if (!files.length && !assets.length && !selectedSites.length) {
+    return showInlineMessage(feedback, "Add at least one PNG image or capture site.", true);
   }
   submitButton.disabled = true;
   try {
@@ -1288,11 +1268,7 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
         id: form.get("id"),
         rotation_interval: form.get("rotation_interval"),
         assets,
-        captures: captures.concat(newURLs.map((url, index) => ({
-          url,
-          capture_interval_seconds: newCaptureIntervals.get(index) ?? intervalDefinitions.capture.default,
-          viewport,
-        }))),
+        captures: selectedSites,
       }),
     });
     const captureNote = result.capture_count
