@@ -403,6 +403,7 @@ test("saving another revision reuses a recent screenshot without queueing a dupl
     const first = await createCapturePlaylist(env);
     const message = { body: messages[0], ack() {}, retry() { throw new Error("unexpected retry"); } };
     await queueHandler({ messages: [message] }, env);
+    env.CAPTURE_ALLOWED_HOSTS = "";
 
     const secondResponse = await handleAdminRequest(await request("/admin/api/playlists", {
       method: "POST",
