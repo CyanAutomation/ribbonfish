@@ -43,7 +43,7 @@ export function validateCaptureTargetURL(value, allowedHosts) {
   const hostname = new URL(normalized).hostname.toLowerCase();
   const allowlist = new Set(String(allowedHosts ?? "")
     .split(",").map((host) => host.trim().toLowerCase()).filter(Boolean));
-  if (!allowlist.has(hostname)) {
+  if (allowlist.size > 0 && !allowlist.has(hostname)) {
     throw new Error("The webpage host is not on the configured capture allowlist.");
   }
   return normalized;
