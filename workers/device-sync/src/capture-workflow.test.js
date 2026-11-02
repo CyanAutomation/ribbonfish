@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { dispatchDueCaptures, enqueueCapture } from "./capture-workflow.js";
+import { dispatchDueCaptures, enqueueCapture, handleCaptureQueue } from "./capture-workflow.js";
 import { fetchHandler, queueHandler, scheduledHandler } from "./index.js";
 import { handleAdminRequest } from "./admin.js";
 
@@ -50,7 +50,7 @@ function environment(sqlite, { quickAction } = {}) {
       DB,
       ADMIN_ENABLED: "true",
       ADMIN_ACCESS_REQUIRED: "false",
-      DAILY_BROWSER_BUDGET_MS: "540000",
+      DAILY_BROWSER_BUDGET_MS: "600000",
       CAPTURE_MIN_REQUEST_GAP_MS: "0",
       CAPTURE_ALLOWED_HOSTS: "example.com",
       CAPTURE_QUEUE: { async send(body) { messages.push(body); } },
@@ -289,6 +289,56 @@ test("capture site registration returns 201 only for a new site", async () => {
   }
 });
 
+test("capture readiness selectors are optional, bounded, audited and used for later screenshots", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const calls = [];
+    const { env, messages } = environment(sqlite, {
+      async quickAction(action, options) {
+        calls.push({ action, options });
+        return new Response(screenshot, {
+          headers: { "Content-Type": "image/png", "X-Browser-Ms-Used": "1234" },
+        });
+      },
+    });
+    const created = await handleAdminRequest(await request("/admin/api/capture-sites", {
+      method: "POST", body: { url: "https://example.com/ready", viewport: { width: 1280, height: 720 } },
+    }), env);
+    const site = await created.json();
+    const originalDueAt = sqlite.prepare("SELECT next_due_at FROM capture_targets WHERE capture_id = ?")
+      .get(site.capture_id).next_due_at;
+    const configured = await handleAdminRequest(await request(`/admin/api/captures/${site.capture_id}/readiness`, {
+      method: "PATCH", body: { wait_for_selector: " main .ready " },
+    }), env);
+    assert.equal(configured.status, 200, await configured.clone().text());
+    assert.deepEqual(await configured.json(), { capture_id: site.capture_id, wait_for_selector: "main .ready" });
+    assert.equal(messages.length, 0, "readiness configuration does not enqueue captures");
+
+    const invalid = await handleAdminRequest(await request(`/admin/api/captures/${site.capture_id}/readiness`, {
+      method: "PATCH", body: { wait_for_selector: "x".repeat(257) },
+    }), env);
+    assert.equal(invalid.status, 400);
+    assert.equal(sqlite.prepare("SELECT wait_for_selector FROM capture_targets WHERE capture_id = ?")
+      .get(site.capture_id).wait_for_selector, "main .ready");
+    assert.equal(sqlite.prepare("SELECT next_due_at FROM capture_targets WHERE capture_id = ?")
+      .get(site.capture_id).next_due_at, originalDueAt, "readiness configuration leaves the scheduled due time unchanged");
+
+    const capture = await enqueueCapture(site.capture_id, env);
+    const message = { body: { job_id: capture.job_id }, ack() {}, retry() { throw new Error("unexpected retry"); } };
+    await queueHandler({ messages: [message] }, env);
+    assert.equal(calls[0].options.waitForSelector, "main .ready");
+
+    const overview = await handleAdminRequest(await request("/admin/api/overview"), env);
+    assert.equal((await overview.json()).capture_targets[0].wait_for_selector, "main .ready");
+    const audit = sqlite.prepare("SELECT event_type, metadata_json FROM audit_events WHERE subject_id = ? ORDER BY rowid DESC LIMIT 1")
+      .get(site.capture_id);
+    assert.equal(audit.event_type, "capture.readiness_updated");
+    assert.deepEqual(JSON.parse(audit.metadata_json), { wait_for_selector: "main .ready" });
+  } finally {
+    sqlite.close();
+  }
+});
+
 function addDevice(sqlite) {
   const token = "device-token-for-capture-workflow-test";
   const tokenHash = createHash("sha256").update(token).digest("hex");
@@ -327,6 +377,14 @@ test("saving a staged webpage queues its first capture and activation serves the
     await queueHandler({ messages: [message] }, env);
     assert.equal(message.acked, true);
     assert.equal(sqlite.prepare("SELECT status FROM capture_jobs").get().status, "succeeded");
+    assert.equal(sqlite.prepare("SELECT result_kind, validator_outcome FROM capture_jobs").get().result_kind, "screenshot");
+    assert.equal(sqlite.prepare("SELECT validator_outcome FROM capture_jobs").get().validator_outcome, "disabled");
+    assert.deepEqual({ ...sqlite.prepare("SELECT browser_ms_total, browser_ms_response_header, browser_ms_reserve FROM capture_jobs").get() }, {
+      browser_ms_total: 1234, browser_ms_response_header: 1234, browser_ms_reserve: 0,
+    });
+    assert.deepEqual({ ...sqlite.prepare("SELECT browser_ms, browser_ms_source FROM capture_history").get() }, {
+      browser_ms: 1234, browser_ms_source: "response_header",
+    });
 
     const target = sqlite.prepare("SELECT current_sha256, next_due_at FROM capture_targets").get();
     const expected = createHash("sha256").update(screenshot).digest("hex");
@@ -529,6 +587,34 @@ test("scheduled capture updates the playlist slot to a content-addressed screens
   }
 });
 
+test("reserve-based Browser Run accounting is explicitly distinguishable from measured duration", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite, {
+      async quickAction() { return new Response(screenshot, { headers: { "Content-Type": "image/png" } }); },
+    });
+    const created = await createCapturePlaylist(env);
+    const message = { body: messages[0], ack() {}, retry() { throw new Error("unexpected retry"); } };
+    await queueHandler({ messages: [message] }, env);
+    assert.equal(sqlite.prepare("SELECT browser_ms, browser_ms_source FROM capture_history").get().browser_ms, 60_000);
+    assert.equal(sqlite.prepare("SELECT browser_ms_source FROM capture_history").get().browser_ms_source, "reserve");
+    assert.equal(sqlite.prepare("SELECT browser_ms FROM capture_usage WHERE singleton = 1").get().browser_ms, 60_000);
+    assert.deepEqual({ ...sqlite.prepare("SELECT browser_ms_total, browser_ms_response_header, browser_ms_reserve FROM capture_jobs").get() }, {
+      browser_ms_total: 60_000, browser_ms_response_header: 0, browser_ms_reserve: 60_000,
+    });
+    const overview = await handleAdminRequest(await request("/admin/api/overview"), env);
+    const stats = (await overview.json()).capture_efficiency;
+    assert.equal(stats.daily_usage.budget_ms, 600_000);
+    assert.equal(stats.daily_usage.accounted_ms, 60_000);
+    assert.equal(stats.last_30_days.browser_ms_sources.reserve, 1);
+    assert.equal(stats.last_30_days.browser_run_ms.reserve, 60_000);
+    assert.equal(stats.last_30_days.browser_run_ms.unclassified_jobs, 0);
+    assert.equal(created.response.status, 201);
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("trusted unchanged HTTP validators skip Browser Run and preserve the cached screenshot", async () => {
   const sqlite = await freshDatabase();
   const originalFetch = globalThis.fetch;
@@ -564,13 +650,82 @@ test("trusted unchanged HTTP validators skip Browser Run and preserve the cached
     assert.equal(probeRequest.options.method, "HEAD");
     assert.equal(probeRequest.options.headers.get("If-None-Match"), '"source-v1"');
     assert.equal(browserCalls, 0);
-    assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(jobID).status, "succeeded");
+    assert.deepEqual({ ...sqlite.prepare("SELECT status, result_kind, validator_outcome FROM capture_jobs WHERE job_id = ?").get(jobID) }, {
+      status: "succeeded", result_kind: "validator_unchanged", validator_outcome: "unchanged",
+    });
     const preserved = sqlite.prepare("SELECT current_sha256, validator_etag FROM capture_targets WHERE capture_id = ?").get(captureID);
     assert.equal(preserved.current_sha256, sha256);
     assert.equal(preserved.validator_etag, '"source-v1"');
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_history").get().count, 0);
     assert.equal(sqlite.prepare("SELECT browser_ms FROM capture_usage WHERE singleton = 1").get() ?? null, null,
       "a validator hit does not consume Browser Run budget");
+    const overview = await handleAdminRequest(await request("/admin/api/overview"), env);
+    const efficiency = (await overview.json()).capture_efficiency;
+    assert.equal(efficiency.last_30_days.validator_unchanged, 1);
+    assert.equal(efficiency.last_30_days.successful_screenshots, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    sqlite.close();
+  }
+});
+
+test("a changed validator is audited and falls through to a fresh Browser Run screenshot", async () => {
+  const sqlite = await freshDatabase();
+  const originalFetch = globalThis.fetch;
+  try {
+    let browserCalls = 0;
+    const { env, messages, objects } = environment(sqlite, {
+      async quickAction() {
+        browserCalls += 1;
+        return new Response(screenshot, { headers: { "Content-Type": "image/png", "X-Browser-Ms-Used": "2500" } });
+      },
+    });
+    env.CAPTURE_VALIDATOR_HOSTS = "example.com";
+    const created = await createCapturePlaylist(env);
+    const id = created.body.captures[0].capture_id;
+    const digest = createHash("sha256").update(screenshot).digest("hex");
+    objects.set(`assets/${digest}`, screenshot);
+    sqlite.prepare("UPDATE capture_targets SET current_sha256 = ?, current_size = ?, last_success_at = ?, validator_etag = ? WHERE capture_id = ?")
+      .run(digest, screenshot.byteLength, Date.now() - 60_000, '"source-v1"', id);
+    globalThis.fetch = async () => new Response(null, { status: 200, headers: { ETag: '"source-v2"' } });
+
+    await queueHandler({ messages: [{ body: messages[0], ack() {}, retry() { throw new Error("unexpected retry"); } }] }, env);
+
+    assert.equal(browserCalls, 1);
+    const job = sqlite.prepare("SELECT status, result_kind, validator_outcome FROM capture_jobs").get();
+    assert.deepEqual({ ...job }, { status: "succeeded", result_kind: "screenshot", validator_outcome: "changed" });
+    assert.equal(sqlite.prepare("SELECT validator_etag FROM capture_targets WHERE capture_id = ?").get(id).validator_etag, '"source-v2"');
+    assert.equal(sqlite.prepare("SELECT browser_ms_source FROM capture_history").get().browser_ms_source, "response_header");
+  } finally {
+    globalThis.fetch = originalFetch;
+    sqlite.close();
+  }
+});
+
+test("unavailable validator probes are audited and cannot replace trusted validators", async () => {
+  const sqlite = await freshDatabase();
+  const originalFetch = globalThis.fetch;
+  try {
+    let browserCalls = 0;
+    const { env, messages } = environment(sqlite, {
+      async quickAction() {
+        browserCalls += 1;
+        return new Response(screenshot, { headers: { "Content-Type": "image/png", "X-Browser-Ms-Used": "2500" } });
+      },
+    });
+    env.CAPTURE_VALIDATOR_HOSTS = "example.com";
+    const created = await createCapturePlaylist(env);
+    const id = created.body.captures[0].capture_id;
+    sqlite.prepare("UPDATE capture_targets SET validator_etag = ? WHERE capture_id = ?").run('"source-v1"', id);
+    globalThis.fetch = async () => new Response(null, { status: 503, headers: { ETag: '"bad-response"' } });
+
+    await queueHandler({ messages: [{ body: messages[0], ack() {}, retry() { throw new Error("unexpected retry"); } }] }, env);
+
+    assert.equal(browserCalls, 1);
+    assert.equal(sqlite.prepare("SELECT validator_outcome FROM capture_jobs").get().validator_outcome, "unavailable");
+    assert.equal(sqlite.prepare("SELECT validator_etag FROM capture_targets WHERE capture_id = ?").get(id).validator_etag, '"source-v1"');
+    const overview = await handleAdminRequest(await request("/admin/api/overview"), env);
+    assert.equal((await overview.json()).capture_efficiency.last_30_days.validator_outcomes.unavailable, 1);
   } finally {
     globalThis.fetch = originalFetch;
     sqlite.close();
@@ -815,6 +970,9 @@ test("Browser Run failures use bounded delayed retries and leave the holding ima
     assert.equal(sqlite.prepare("SELECT current_sha256 FROM capture_targets WHERE capture_id = ?").get(captureID).current_sha256, null);
     assert.equal(sqlite.prepare("SELECT browser_ms FROM capture_usage WHERE singleton = 1").get().browser_ms, 3 * 60_000,
       "requests without a usage header consume the configured safety reserve");
+    assert.deepEqual({ ...sqlite.prepare("SELECT browser_ms_total, browser_ms_response_header, browser_ms_reserve FROM capture_jobs WHERE job_id = ?").get(jobID) }, {
+      browser_ms_total: 3 * 60_000, browser_ms_response_header: 0, browser_ms_reserve: 3 * 60_000,
+    }, "the per-job audit includes every retry, not only the last attempt");
   } finally {
     sqlite.close();
   }
@@ -850,6 +1008,10 @@ test("unexpected capture exceptions fail without retrying the queue delivery", a
     assert.equal(message.retryDelay, null);
     assert.equal(calls, 1);
     assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(jobID).status, "failed");
+    assert.deepEqual({ ...sqlite.prepare("SELECT browser_ms_total, browser_ms_response_header, browser_ms_reserve FROM capture_jobs WHERE job_id = ?").get(jobID) }, {
+      browser_ms_total: 60_000, browser_ms_response_header: 0, browser_ms_reserve: 60_000,
+    });
+    assert.equal(sqlite.prepare("SELECT browser_ms FROM capture_usage WHERE singleton = 1").get().browser_ms, 60_000);
   } finally {
     sqlite.close();
   }
@@ -951,7 +1113,70 @@ test('background screenshot assessment records a bounded shadow decision once pe
     assert.equal(decisions[0].action, 'capture');
     assert.equal(decisions[0].model, undefined);
     assert.equal(decisions[0].state_json, undefined);
+    const overviewResponse = await handleAdminRequest(await request('/admin/api/overview'), env);
+    const jevMetrics = (await overviewResponse.json()).capture_efficiency.last_30_days;
+    assert.equal(jevMetrics.jev_shadow_assessments, 1);
+    assert.equal(jevMetrics.jev_candidate_deferrals, 0);
     assert.equal(sqlite.prepare('SELECT next_due_at FROM capture_targets WHERE capture_id = ?').get(id).next_due_at, due);
+  } finally { sqlite.close(); }
+});
+
+test('shadow deferral suggestions are evaluated against the scheduled screenshot outcome', async () => {
+  const { assessUpcomingCaptures } = await import('./capture-intelligence.js');
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite, {
+      async quickAction() {
+        return new Response(screenshot, { headers: { "Content-Type": "image/png", "X-Browser-Ms-Used": "2500" } });
+      },
+    });
+    const created = await createCapturePlaylist(env);
+    const id = created.body.captures[0].capture_id;
+    const initialJob = messages.shift();
+    sqlite.prepare("UPDATE capture_jobs SET status = 'succeeded' WHERE job_id = ?").run(initialJob.job_id);
+    const now = Date.now();
+    const dueAt = now + 1_000;
+    const interval = sqlite.prepare("SELECT capture_interval_seconds FROM capture_targets WHERE capture_id = ?").get(id).capture_interval_seconds;
+    const previousHash = "a".repeat(64);
+    sqlite.prepare("UPDATE capture_targets SET current_sha256 = ?, current_size = 1, last_success_at = ?, next_due_at = ? WHERE capture_id = ?")
+      .run(previousHash, now - 1_000, dueAt, id);
+    await env.ASSETS.put(`assets/${previousHash}`, new Uint8Array([1]));
+    for (let index = 0; index < 3; index++) {
+      const jobID = crypto.randomUUID();
+      sqlite.prepare("INSERT INTO capture_jobs (job_id, capture_id, status, attempts, created_at) VALUES (?, ?, 'succeeded', 0, ?)")
+        .run(jobID, id, now - index - 1);
+      sqlite.prepare("INSERT INTO capture_history (capture_id, job_id, sha256, size, captured_at, browser_ms, browser_ms_source) VALUES (?, ?, ?, 1, ?, 100, 'response_header')")
+        .run(id, jobID, previousHash, now - index - 1);
+    }
+    sqlite.prepare("INSERT INTO active_playlist (singleton, playlist_id, revision) VALUES (1, 'operations', ?)")
+      .run(created.body.revision);
+
+    await assessUpcomingCaptures(env, now, async () => ({
+      answers: {
+        recommendation: { choice: 'skip_once', confidence: 0.95 },
+        risk: { score: 0, confidence: 0.95 },
+      },
+    }));
+    assert.equal(sqlite.prepare("SELECT action FROM capture_decisions WHERE capture_id = ? AND due_at = ?").get(id, dueAt).action, "defer_once");
+
+    assert.equal((await dispatchDueCaptures(env, dueAt)).enqueued, 1);
+    const scheduledJobID = messages[0].job_id;
+    assert.equal(sqlite.prepare("SELECT scheduled_due_at FROM capture_jobs WHERE job_id = ?").get(scheduledJobID).scheduled_due_at, dueAt);
+    assert.equal(sqlite.prepare("SELECT next_due_at FROM capture_targets WHERE capture_id = ?").get(id).next_due_at, dueAt + interval * 1000,
+      "shadow decisions leave the next capture at the existing interval");
+    await handleCaptureQueue({ messages: [{ body: messages[0], ack() {}, retry() { throw new Error("unexpected retry"); } }] }, env, dueAt + 5);
+
+    const decision = sqlite.prepare("SELECT observed_result, observed_at, observed_delay_ms FROM capture_decisions WHERE capture_id = ? AND due_at = ?")
+      .get(id, dueAt);
+    assert.equal(decision.observed_result, "changed", "the candidate deferral is recorded as risky when the screenshot changed");
+    assert.ok(decision.observed_at >= dueAt);
+    assert.ok(decision.observed_delay_ms >= 0);
+    const decisionResponse = await handleAdminRequest(await request("/admin/api/capture-decisions"), env);
+    const [latestDecision] = await decisionResponse.json();
+    assert.equal(latestDecision.observed_result, "changed");
+    assert.equal(latestDecision.observed_delay_ms, decision.observed_delay_ms);
+    const overview = await handleAdminRequest(await request("/admin/api/overview"), env);
+    assert.equal((await overview.json()).capture_efficiency.last_30_days.jev_candidate_changed, 1);
   } finally { sqlite.close(); }
 });
 

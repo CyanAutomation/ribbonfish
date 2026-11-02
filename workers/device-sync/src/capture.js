@@ -64,7 +64,19 @@ export function validateCaptureSettings(value) {
     capture_interval_seconds: interval,
     viewport_width: viewport.width,
     viewport_height: viewport.height,
+    wait_for_selector: normalizeCaptureSelector(value?.wait_for_selector),
   };
+}
+
+export function normalizeCaptureSelector(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") throw new Error("Wait for selector must be text up to 256 characters.");
+  const selector = value.trim();
+  if (!selector) return null;
+  if (selector.length > 256 || /[\u0000-\u001f\u007f]/.test(selector)) {
+    throw new Error("Wait for selector must be text up to 256 characters without control characters.");
+  }
+  return selector;
 }
 
 export async function captureScreenshot(target, env) {
@@ -78,6 +90,7 @@ export async function captureScreenshot(target, env) {
   if (!env.BROWSER || typeof env.BROWSER.quickAction !== "function") {
     throw new CaptureError("Browser Run binding is unavailable.", { retryable: true });
   }
+  const waitForSelector = normalizeCaptureSelector(target.wait_for_selector);
 
   let response;
   try {
@@ -86,13 +99,18 @@ export async function captureScreenshot(target, env) {
       viewport: { width, height },
       screenshotOptions: { type: "png", fullPage: false },
       gotoOptions: { waitUntil: "domcontentloaded", timeout: MAX_CAPTURE_TIMEOUT_MS },
+      ...(waitForSelector ? { waitForSelector } : {}),
     });
   } catch (error) {
     throw new CaptureError("Browser Run screenshot request failed.", { retryable: true, browserStarted: true, cause: error });
   }
 
-  const browserMs = parseBrowserMilliseconds(response.headers.get("X-Browser-Ms-Used"));
+  let browserMs = 0;
+  try { browserMs = parseBrowserMilliseconds(response?.headers?.get?.("X-Browser-Ms-Used")); } catch {}
   const completedRequest = { browserMs, browserStarted: true };
+  if (!response || typeof response.ok !== "boolean" || typeof response.headers?.get !== "function") {
+    throw new CaptureError("Browser Run returned an invalid response.", completedRequest);
+  }
   if (!response.ok) {
     throw new CaptureError(`Browser Run screenshot request returned ${response.status}.`, {
       retryable: response.status === 429 || response.status >= 500,

@@ -26,7 +26,7 @@ export async function enqueueCapture(captureID, env, { now = Date.now(), schedul
     throw new Error("Capture queue is not configured.");
   }
   const target = await env.DB.prepare(
-    "SELECT capture_id, url, capture_interval_seconds, enabled FROM capture_targets WHERE capture_id = ?",
+    "SELECT capture_id, url, capture_interval_seconds, enabled, next_due_at FROM capture_targets WHERE capture_id = ?",
   ).bind(captureID).first();
   if (!target || target.enabled !== 1) return null;
   try {
@@ -37,8 +37,10 @@ export async function enqueueCapture(captureID, env, { now = Date.now(), schedul
 
   const jobID = crypto.randomUUID();
   const inserted = await env.DB.prepare(
-    "INSERT OR IGNORE INTO capture_jobs (job_id, capture_id, status, attempts, created_at) VALUES (?, ?, 'queued', 0, ?)",
-  ).bind(jobID, captureID, now).run();
+    "INSERT OR IGNORE INTO capture_jobs (job_id, capture_id, status, attempts, created_at, validator_outcome, result_kind, scheduled_due_at, " +
+    "browser_ms_total, browser_ms_response_header, browser_ms_reserve, browser_ms_legacy_unknown) " +
+    "VALUES (?, ?, 'queued', 0, ?, 'unknown', 'screenshot', ?, 0, 0, 0, 0)",
+  ).bind(jobID, captureID, now, scheduled ? target.next_due_at : null).run();
   if (inserted.meta?.changes !== 1) {
     const existing = await env.DB.prepare(
       "SELECT job_id, status FROM capture_jobs WHERE capture_id = ? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1",
@@ -162,8 +164,8 @@ async function processCaptureMessage(message, env, now) {
     return;
   }
   const job = await env.DB.prepare(
-    "SELECT j.job_id, j.capture_id, j.status, j.attempts, j.lease_until, " +
-    "t.url, t.capture_interval_seconds, t.viewport_width, t.viewport_height, t.enabled, " +
+    "SELECT j.job_id, j.capture_id, j.status, j.attempts, j.lease_until, j.scheduled_due_at, " +
+    "t.url, t.capture_interval_seconds, t.viewport_width, t.viewport_height, t.wait_for_selector, t.enabled, " +
     "t.current_sha256, t.current_size, t.validator_etag, t.validator_last_modified " +
     "FROM capture_jobs j JOIN capture_targets t ON t.capture_id = j.capture_id WHERE j.job_id = ?",
   ).bind(jobID).first();
@@ -176,7 +178,7 @@ async function processCaptureMessage(message, env, now) {
     return;
   }
   if (job.enabled !== 1) {
-    await markJobFinished(env, jobID, job.capture_id, "failed", "Capture target is disabled.", now, job.capture_interval_seconds);
+    await markJobFinished(env, jobID, job.capture_id, "failed", "Capture target is disabled.", now, job.capture_interval_seconds, job.scheduled_due_at);
     message.ack();
     return;
   }
@@ -191,6 +193,8 @@ async function processCaptureMessage(message, env, now) {
   }
 
   const validator = await probeCaptureValidator(job, env);
+  await env.DB.prepare("UPDATE capture_jobs SET validator_outcome = ? WHERE job_id = ?")
+    .bind(validator.outcome, jobID).run();
   if (validator?.unchanged) {
     await completeUnchangedCapture(env, job, validator, now);
     message.ack();
@@ -198,7 +202,7 @@ async function processCaptureMessage(message, env, now) {
   }
   const deferral = await captureDeferral(env, now);
   if (deferral) {
-    await deferCapture(env, jobID, job.capture_id, deferral.at, deferral.reason, now);
+    await deferCapture(env, jobID, job.capture_id, deferral.at, deferral.reason, now, job.scheduled_due_at);
     message.ack();
     return;
   }
@@ -211,7 +215,8 @@ async function processCaptureMessage(message, env, now) {
     const usedMs = Number.isSafeInteger(error.browserMs) && error.browserMs > 0
       ? error.browserMs
       : error.browserStarted ? nonNegativeInteger(env.CAPTURE_BUDGET_RESERVE_MS, DEFAULT_BUDGET_RESERVE_MS) : 0;
-    if (usedMs) await addBrowserUsage(env, usedMs, now);
+    if (usedMs) await addBrowserUsage(env, usedMs, now, jobID,
+      error.browserMs > 0 ? "response_header" : "reserve");
     await handleCaptureFailure(env, message, job, error, now);
     return;
   }
@@ -219,20 +224,25 @@ async function processCaptureMessage(message, env, now) {
   const usedMs = result.browserMs > 0
     ? result.browserMs
     : nonNegativeInteger(env.CAPTURE_BUDGET_RESERVE_MS, DEFAULT_BUDGET_RESERVE_MS);
-  if (usedMs) await addBrowserUsage(env, usedMs, now);
+  if (usedMs) await addBrowserUsage(env, usedMs, now, jobID,
+    result.browserMs > 0 ? "response_header" : "reserve");
+  const validatorHeadersUsable = !["disabled", "unavailable"].includes(validator.outcome);
+  const validatorEtag = validatorHeadersUsable ? validator.etag : job.validator_etag;
+  const validatorLastModified = validatorHeadersUsable ? validator.lastModified : job.validator_last_modified;
   await env.DB.batch([
     markAssetLiveStatement(env.DB, result.sha256, result.size, now),
     env.DB.prepare(
-      "INSERT INTO capture_history (capture_id, job_id, sha256, size, captured_at, browser_ms) VALUES (?, ?, ?, ?, ?, ?)",
-    ).bind(job.capture_id, jobID, result.sha256, result.size, now, usedMs),
+      "INSERT INTO capture_history (capture_id, job_id, sha256, size, captured_at, browser_ms, browser_ms_source) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).bind(job.capture_id, jobID, result.sha256, result.size, now, usedMs, result.browserMs > 0 ? "response_header" : "reserve"),
     env.DB.prepare(
       "UPDATE capture_targets SET current_sha256 = ?, current_size = ?, last_attempt_at = ?, last_success_at = ?, " +
       "last_error = NULL, failure_count = 0, next_due_at = ?, validator_etag = ?, validator_last_modified = ? WHERE capture_id = ?",
     ).bind(result.sha256, result.size, now, now, now + job.capture_interval_seconds * 1000,
-      validator ? validator.etag : job.validator_etag, validator ? validator.lastModified : job.validator_last_modified, job.capture_id),
+      validatorEtag, validatorLastModified, job.capture_id),
     env.DB.prepare(
       "UPDATE capture_jobs SET status = 'succeeded', finished_at = ?, lease_until = NULL, error = NULL WHERE job_id = ?",
     ).bind(now, jobID),
+    decisionObservationStatement(env.DB, job, result.sha256 === job.current_sha256 ? "unchanged" : "changed", now),
   ]);
   await pruneCaptureHistory(env, job.capture_id, now);
   message.ack();
@@ -242,8 +252,12 @@ export async function probeCaptureValidator(target, env, fetcher = globalThis.fe
   const approvedHosts = new Set(String(env.CAPTURE_VALIDATOR_HOSTS ?? "")
     .split(",").map((host) => host.trim().toLowerCase()).filter(Boolean));
   let url;
-  try { url = new URL(validateCaptureTargetURL(target.url, env.CAPTURE_ALLOWED_HOSTS)); } catch { return null; }
-  if (!approvedHosts.has(url.hostname)) return null;
+  try { url = new URL(validateCaptureTargetURL(target.url, env.CAPTURE_ALLOWED_HOSTS)); } catch {
+    return { unchanged: false, outcome: "disabled", etag: target.validator_etag, lastModified: target.validator_last_modified };
+  }
+  if (!approvedHosts.has(url.hostname)) {
+    return { unchanged: false, outcome: "disabled", etag: target.validator_etag, lastModified: target.validator_last_modified };
+  }
 
   const headers = new Headers();
   if (target.validator_etag) headers.set("If-None-Match", target.validator_etag);
@@ -259,25 +273,37 @@ export async function probeCaptureValidator(target, env, fetcher = globalThis.fe
     const lastModified = response.headers.get("Last-Modified");
     const hasStoredValidator = Boolean(target.validator_etag || target.validator_last_modified);
     let unchanged = response.status === 304 && hasStoredValidator;
-    if (response.status >= 200 && response.status < 300 && hasStoredValidator) {
+    let outcome;
+    if (response.status === 304) {
+      outcome = hasStoredValidator ? "unchanged" : "no_stored_validator";
+    } else if (response.status >= 200 && response.status < 300 && hasStoredValidator) {
       const hasComparable = Boolean((target.validator_etag && etag) || (target.validator_last_modified && lastModified));
       unchanged = hasComparable &&
         (!target.validator_etag || target.validator_etag === etag) &&
         (!target.validator_last_modified || target.validator_last_modified === lastModified);
-    }
-    if (unchanged && target.current_sha256 && target.current_size > 0) {
-      const object = await env.ASSETS.head(`assets/${target.current_sha256}`);
-      unchanged = object?.size === target.current_size;
+      outcome = unchanged ? "unchanged" : "changed";
+    } else if (response.status >= 200 && response.status < 300) {
+      outcome = "no_stored_validator";
     } else {
-      unchanged = false;
+      outcome = "unavailable";
+    }
+    if (unchanged) {
+      if (target.current_sha256 && target.current_size > 0) {
+        const object = await env.ASSETS.head(`assets/${target.current_sha256}`);
+        unchanged = object?.size === target.current_size;
+      } else {
+        unchanged = false;
+      }
+      outcome = unchanged ? "unchanged" : "cached_asset_missing";
     }
     return {
       unchanged,
+      outcome,
       etag: response.status === 304 ? etag ?? target.validator_etag : etag,
       lastModified: response.status === 304 ? lastModified ?? target.validator_last_modified : lastModified,
     };
   } catch {
-    return null;
+    return { unchanged: false, outcome: "unavailable", etag: target.validator_etag, lastModified: target.validator_last_modified };
   }
 }
 
@@ -288,9 +314,17 @@ async function completeUnchangedCapture(env, job, validator, now) {
       "next_due_at = ?, validator_etag = ?, validator_last_modified = ? WHERE capture_id = ?",
     ).bind(now, now, now + job.capture_interval_seconds * 1000, validator.etag, validator.lastModified, job.capture_id),
     env.DB.prepare(
-      "UPDATE capture_jobs SET status = 'succeeded', finished_at = ?, lease_until = NULL, error = NULL WHERE job_id = ?",
+      "UPDATE capture_jobs SET status = 'succeeded', result_kind = 'validator_unchanged', validator_outcome = 'unchanged', finished_at = ?, lease_until = NULL, error = NULL WHERE job_id = ?",
     ).bind(now, job.job_id),
+    decisionObservationStatement(env.DB, job, "validator_unchanged", now),
   ]);
+}
+
+function decisionObservationStatement(db, job, outcome, now) {
+  return db.prepare(
+    "UPDATE capture_decisions SET observed_at = ?, observed_result = ?, observed_delay_ms = ? " +
+    "WHERE capture_id = ? AND due_at = ? AND observed_result IS NULL",
+  ).bind(now, outcome, Math.max(0, now - (job.scheduled_due_at ?? now)), job.capture_id, job.scheduled_due_at);
 }
 
 async function captureDeferral(env, now) {
@@ -322,23 +356,31 @@ async function markBrowserStart(env, now) {
   ).bind(day, now).run();
 }
 
-async function addBrowserUsage(env, browserMs, now) {
+async function addBrowserUsage(env, browserMs, now, jobID, source) {
   const day = new Date(now).toISOString().slice(0, 10);
-  await env.DB.prepare(
-    "INSERT INTO capture_usage (singleton, usage_day, browser_ms, last_started_at) VALUES (1, ?, ?, NULL) " +
-    "ON CONFLICT(singleton) DO UPDATE SET browser_ms = " +
-    "CASE WHEN capture_usage.usage_day = excluded.usage_day THEN capture_usage.browser_ms + excluded.browser_ms ELSE excluded.browser_ms END, " +
-    "usage_day = excluded.usage_day",
-  ).bind(day, browserMs).run();
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO capture_usage (singleton, usage_day, browser_ms, last_started_at) VALUES (1, ?, ?, NULL) " +
+      "ON CONFLICT(singleton) DO UPDATE SET browser_ms = " +
+      "CASE WHEN capture_usage.usage_day = excluded.usage_day THEN capture_usage.browser_ms + excluded.browser_ms ELSE excluded.browser_ms END, " +
+      "usage_day = excluded.usage_day",
+    ).bind(day, browserMs),
+    env.DB.prepare(
+      "UPDATE capture_jobs SET browser_ms_total = COALESCE(browser_ms_total, 0) + ?, " +
+      "browser_ms_response_header = COALESCE(browser_ms_response_header, 0) + ?, " +
+      "browser_ms_reserve = COALESCE(browser_ms_reserve, 0) + ? WHERE job_id = ?",
+    ).bind(browserMs, source === "response_header" ? browserMs : 0, source === "reserve" ? browserMs : 0, jobID),
+  ]);
 }
 
-async function deferCapture(env, jobID, captureID, at, reason, now) {
+async function deferCapture(env, jobID, captureID, at, reason, now, scheduledDueAt = null) {
   await env.DB.batch([
     env.DB.prepare(
       "UPDATE capture_jobs SET status = 'deferred', finished_at = ?, lease_until = NULL, error = ? WHERE job_id = ?",
     ).bind(now, reason, jobID),
     env.DB.prepare("UPDATE capture_targets SET next_due_at = ?, last_error = ? WHERE capture_id = ?")
       .bind(at, reason, captureID),
+    decisionObservationStatement(env.DB, { capture_id: captureID, scheduled_due_at: scheduledDueAt }, "budget_deferred", now),
   ]);
 }
 
@@ -356,12 +398,12 @@ async function handleCaptureFailure(env, message, job, error, now) {
     message.retry({ delaySeconds: RETRY_DELAYS_SECONDS[Math.min(attempts - 1, RETRY_DELAYS_SECONDS.length - 1)] });
     return;
   }
-  await markJobFinished(env, job.job_id, job.capture_id, "failed", errorMessage, now, job.capture_interval_seconds);
+  await markJobFinished(env, job.job_id, job.capture_id, "failed", errorMessage, now, job.capture_interval_seconds, job.scheduled_due_at);
   message.ack();
 }
 
 async function markJobFinished(env, jobID, captureID, status, error, now,
-  intervalSeconds = DEFAULT_CAPTURE_INTERVAL_SECONDS) {
+  intervalSeconds = DEFAULT_CAPTURE_INTERVAL_SECONDS, scheduledDueAt = null) {
   await env.DB.batch([
     env.DB.prepare(
       "UPDATE capture_jobs SET status = ?, finished_at = ?, lease_until = NULL, error = ? WHERE job_id = ?",
@@ -369,6 +411,8 @@ async function markJobFinished(env, jobID, captureID, status, error, now,
     env.DB.prepare(
       "UPDATE capture_targets SET last_attempt_at = ?, last_error = ?, failure_count = failure_count + 1, next_due_at = ? WHERE capture_id = ?",
     ).bind(now, error, now + intervalSeconds * 1000, captureID),
+    ...(status === "failed" ? [decisionObservationStatement(env.DB,
+      { capture_id: captureID, scheduled_due_at: scheduledDueAt }, "failed", now)] : []),
   ]);
 }
 
