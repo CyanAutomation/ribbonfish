@@ -31,12 +31,12 @@
 
       <nav class="section-nav" aria-label="Management sections">
         <a href="#overview-section">Overview</a>
+        <a href="#sites-section">Sites</a>
         <a href="#playlist-section">Playlists</a>
         <a href="#device-section">Devices</a>
         <details class="section-nav__more">
           <summary>More</summary>
           <div class="section-nav__more-links">
-            <a href="#capture-targets">Page screenshots</a>
             <a href="#analysis-section">Advisory analysis</a>
             <a href="#activity-section">Recent activity</a>
           </div>
@@ -52,6 +52,18 @@
         <div id="fleet-attention" class="fleet-attention" role="region" aria-label="Needs attention"></div>
       </section>
 
+      <section id="sites-section" class="panel" aria-labelledby="sites-title">
+        <div class="section-heading"><div><p class="eyebrow">Sites</p><h2 id="sites-title">Capture sites</h2></div></div>
+        <p class="muted">Register pages and review their screenshot schedules here. Sites are independent of playlists; only reviewed sites can be added to a playlist. Scheduled captures run when a site is included in the active playlist.</p>
+        <form id="capture-site-form" class="form-grid">
+          <label class="field--wide">Public HTTPS URL <input class="field-control" name="url" type="url" placeholder="https://status.example.com" required></label>
+          <label>Screenshot size <span class="viewport-inputs"><input class="field-control" name="viewport_width" type="number" value="1920" min="320" max="3840" step="1" aria-label="Screenshot width in pixels" required><span aria-hidden="true">×</span><input class="field-control" name="viewport_height" type="number" value="1080" min="240" max="2160" step="1" aria-label="Screenshot height in pixels" required></span></label>
+          <div class="field--wide form-actions"><button class="button button--primary" type="submit">Add site</button></div>
+          <p id="capture-site-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
+        </form>
+        <div id="capture-target-list" class="capture-target-list" role="region" aria-label="Capture sites" aria-live="polite"></div>
+      </section>
+
       <section id="playlist-section" class="panel" aria-labelledby="playlist-title">
         <div class="section-heading">
           <div><p class="eyebrow">Playlists</p><h2 id="playlist-title">Playlist versions</h2></div>
@@ -59,15 +71,10 @@
         <div id="playlist-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="playlist" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss playlist message">Dismiss</button></div>
         <div id="playlists" class="table-scroll desktop-data" role="region" aria-label="Playlist versions" tabindex="0"></div>
         <div id="playlists-mobile" class="mobile-card-list" role="region" aria-label="Playlist versions"></div>
-        <section id="capture-targets" class="capture-targets" aria-labelledby="capture-targets-title">
-          <div class="section-heading"><div><p class="eyebrow">Screenshots</p><h3 id="capture-targets-title">Page screenshots</h3></div></div>
-          <p class="muted">Each page URL is a reusable playlist item with its own screenshot interval. A page’s schedule is shared wherever the same URL and screenshot size are used. A placeholder image appears until its first screenshot is ready. Ribbonfish uses recent screenshot change history to make an advisory skip suggestion. A skip only applies to one due screenshot after an admin confirms it.</p>
-          <div id="capture-target-list" class="capture-target-list" role="region" aria-label="Scheduled page screenshots" aria-live="polite"></div>
-        </section>
         <details id="playlist-editor" class="playlist-editor">
           <summary id="playlist-editor-summary">Create playlist version</summary>
           <form id="playlist-form" class="form-grid">
-          <p id="playlist-form-help" class="field--wide muted">Add PNG images or page URLs. Images and screenshots can be reused across playlists. Saved versions stay available until you delete the playlist.</p>
+          <p id="playlist-form-help" class="field--wide muted">Add PNG images and select reviewed sites from the library. Saved versions stay available until you delete the playlist.</p>
           <label>Playlist ID <input class="field-control" name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" placeholder="e.g. operations"></label>
           <label>Show each item for <select class="field-control" name="rotation_interval" required><option value="90s">90 seconds</option></select><span class="field-hint">Choose a supported display interval.</span></label>
           <fieldset id="playlist-current-assets" class="field--wide asset-selection" hidden>
@@ -75,18 +82,11 @@
             <p class="muted">Clear an image to remove it from the new version.</p>
             <div class="asset-selection__list"></div>
           </fieldset>
-          <fieldset id="playlist-current-captures" class="field--wide asset-selection" hidden>
-            <legend>Page URLs in this version</legend>
-            <p class="muted">Clear a URL to remove it from the new version. Its screenshot schedule stays active while a saved version uses it.</p>
-            <div class="asset-selection__list"></div>
-          </fieldset>
           <label class="field--wide">Add PNG images <input class="field-control file-control" name="assets" type="file" accept="image/png" multiple></label>
-          <label class="field--wide">Add page URLs <textarea class="field-control" name="capture_urls" rows="3" placeholder="https://status.example.com&#10;https://example.com/operations" aria-describedby="page-url-help"></textarea><span id="page-url-help" class="field-hint">Use one public HTTPS URL per line. Set each page’s screenshot interval below. A placeholder image appears until the first screenshot is ready.</span></label>
-          <fieldset id="screenshot-settings" class="field--wide screenshot-settings" disabled hidden>
-            <legend>Screenshot settings for new pages</legend>
-            <div id="new-capture-intervals" class="new-capture-intervals" aria-label="Screenshot interval for each new page"></div>
-            <p class="field--wide field-hint">Schedules are shared when the same page and screenshot size are reused in another playlist. The shortest interval is 15 minutes (up to 96 screenshots per page per day); frequent schedules share the daily browser runtime budget and queue capacity.</p>
-            <label>Screenshot size <span class="viewport-inputs"><input class="field-control" name="viewport_width" type="number" value="1920" min="320" max="3840" step="1" aria-label="Screenshot width in pixels" required><span aria-hidden="true">×</span><input class="field-control" name="viewport_height" type="number" value="1080" min="240" max="2160" step="1" aria-label="Screenshot height in pixels" required></span><span class="field-hint">Width × height in pixels.</span></label>
+          <fieldset id="available-sites" class="field--wide asset-selection">
+            <legend>Capture sites</legend>
+            <p class="muted">Choose from sites whose screenshot schedule has been reviewed in Sites.</p>
+            <div class="asset-selection__list"></div>
           </fieldset>
           <div class="field--wide form-actions">
             <button id="playlist-submit" class="button button--primary" type="submit">Save playlist version</button>

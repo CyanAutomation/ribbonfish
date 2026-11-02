@@ -22,7 +22,15 @@ test("management page starts, renders its data, and dismisses errors", async () 
   const overview = {
     environment: { production: true },
     asset_health: { missing: [] },
-    playlists: [], devices: [], audit: [], capture_targets: [],
+    playlists: [], devices: [], audit: [], capture_targets: [{
+      capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", display_url: "https://status.example/",
+      capture_interval_seconds: 86400, viewport: { width: 1920, height: 1080 }, sha256: "a".repeat(64), size: 4,
+      schedule_reviewed: true,
+    }, {
+      capture_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", display_url: "https://new.example/",
+      capture_interval_seconds: 86400, viewport: { width: 1920, height: 1080 }, sha256: "b".repeat(64), size: 4,
+      schedule_reviewed: false,
+    }],
     active_playlist: null,
   };
   window.fetch = async (path, options = {}) => {
@@ -31,6 +39,7 @@ test("management page starts, renders its data, and dismisses errors", async () 
     return {
       ok: !fail,
       json: async () => fail ? { error: "Refresh failed" } :
+        path === "/admin/api/capture-sites" ? { schedule_reviewed: false } :
         path === "/admin/api/playlists" ? { revision: "revision-1", capture_count: 2 } :
         path === "/admin/api/overview" ? overview : path === "/admin/api/intervals" ? {
           capture: { default: 86400, options: [
@@ -53,30 +62,31 @@ test("management page starts, renders its data, and dismisses errors", async () 
     const rotation = window.document.querySelector("[name=rotation_interval]");
     assert.deepEqual([...rotation.options].map((option) => option.value), ["30s", "60s", "90s", "120s", "5m"]);
     assert.equal(rotation.value, "90s");
-    const pageURLs = window.document.querySelector('[name="capture_urls"]');
-    pageURLs.value = "https://status.example/\nhttps://company.example/";
-    pageURLs.dispatchEvent(new window.Event("input", { bubbles: true }));
-    const captureIntervals = [...window.document.querySelectorAll(".new-capture-interval")];
-    assert.equal(captureIntervals.length, 2);
-    assert.deepEqual([...captureIntervals[0].options].map((option) => option.value), ["900", "1800", "3600", "21600", "86400"]);
-    assert.equal(captureIntervals[0].value, "86400");
-    captureIntervals[0].value = "900";
-    captureIntervals[1].value = "21600";
+    assert.ok(window.document.querySelector("#sites-section"));
+    assert.match(window.document.querySelector("#capture-target-list").textContent, /https:\/\/status.example\//);
+    assert.match(window.document.querySelector("#capture-target-list").textContent, /Schedule review needed/);
+    const scheduleButton = [...window.document.querySelectorAll("#capture-target-list button")]
+      .find((button) => button.textContent === "Confirm schedule");
+    scheduleButton.click();
+    await new Promise((resolve) => setImmediate(resolve));
+    const scheduleRequest = requests.find(({ path }) => path === "/admin/api/captures/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    assert.equal(scheduleRequest.options.method, "PATCH");
+    assert.equal(JSON.parse(scheduleRequest.options.body).capture_interval_seconds, 86400);
+    const siteForm = window.document.querySelector("#capture-site-form");
+    siteForm.elements.namedItem("url").value = "https://added.example/";
+    siteForm.dispatchEvent(new window.SubmitEvent("submit", { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => setImmediate(resolve));
+    const siteRequest = requests.find(({ path }) => path === "/admin/api/capture-sites");
+    assert.deepEqual(JSON.parse(siteRequest.options.body), {
+      url: "https://added.example/", viewport: { width: 1920, height: 1080 },
+    });
     window.document.querySelector('[name="id"]').value = "operations";
+    window.document.querySelector("#available-sites input[data-capture-id]").checked = true;
     window.document.querySelector("#playlist-form").dispatchEvent(new window.SubmitEvent("submit", { bubbles: true, cancelable: true }));
     await new Promise((resolve) => setImmediate(resolve));
     const playlistRequest = requests.find(({ path }) => path === "/admin/api/playlists");
     const playlistBody = JSON.parse(playlistRequest.options.body);
-    assert.deepEqual(playlistBody.captures.map(({ url, capture_interval_seconds }) => [url, capture_interval_seconds]), [
-      ["https://status.example/", 900], ["https://company.example/", 21600],
-    ]);
-    pageURLs.value = "https://status.example\nhttps://status.example/";
-    pageURLs.dispatchEvent(new window.Event("input", { bubbles: true }));
-    const duplicateIntervals = [...window.document.querySelectorAll(".new-capture-interval")];
-    assert.equal(duplicateIntervals.length, 2);
-    duplicateIntervals[0].value = "1800";
-    duplicateIntervals[0].dispatchEvent(new window.Event("change", { bubbles: true }));
-    assert.deepEqual(duplicateIntervals.map((select) => select.value), ["1800", "1800"]);
+    assert.deepEqual(playlistBody.captures, [{ capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }]);
 
     fail = true;
     window.document.querySelector("#reload").click();
