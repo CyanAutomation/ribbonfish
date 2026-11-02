@@ -17,6 +17,7 @@ class FakeDatabase {
       last_seen_at: 200,
     }]]);
     this.enrollments = [];
+    this.enrollmentRequests = [];
     this.playlists = new Map([["welcome:revision-1", {
       playlist_id: "welcome",
       revision: "revision-1",
@@ -127,6 +128,15 @@ class FakeDatabase {
       const [enabled, device_id] = values;
       const row = this.devices.get(device_id);
       if (row) row.enabled = enabled;
+    } else if (sql.startsWith("UPDATE enrollment_requests")) {
+      const [decided_at, actor_id, device_id] = values;
+      let changed = 0;
+      for (const request of this.enrollmentRequests) {
+        if (request.device_id !== device_id || request.status !== "pending") continue;
+        Object.assign(request, { status: "rejected", decided_at, actor_id });
+        changed += 1;
+      }
+      return changed;
     } else if (sql.startsWith("DELETE FROM devices")) {
       return this.devices.delete(values[0]) ? 1 : 0;
     } else if (sql.startsWith("UPDATE capture_targets SET capture_interval_seconds")) {
@@ -831,6 +841,7 @@ test("device status changes are recorded and token rotation returns the token on
 
 test("a device can be permanently removed through the admin API", async () => {
   const env = testEnvironment();
+  env.DB.enrollmentRequests.push({ device_id: "pi-office", status: "pending" });
 
   const response = await handleAdminRequest(request("/admin/api/devices/pi-office", {
     method: "DELETE",
@@ -841,6 +852,9 @@ test("a device can be permanently removed through the admin API", async () => {
   assert.equal(env.DB.devices.has("pi-office"), false);
   assert.equal(env.DB.auditEvents.at(-1).event_type, "device.deleted");
   assert.equal(env.DB.auditEvents.at(-1).subject_id, "pi-office");
+  assert.equal(env.DB.enrollmentRequests[0].status, "rejected");
+  assert.equal(env.DB.enrollmentRequests[0].actor_id, "anonymous");
+  assert.equal(Number.isSafeInteger(env.DB.enrollmentRequests[0].decided_at), true);
 });
 
 test("removing an unknown device returns not found", async () => {

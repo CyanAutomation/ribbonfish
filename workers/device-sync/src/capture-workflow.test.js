@@ -735,6 +735,13 @@ test("removing a capture site disables future captures and preserves saved playl
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_jobs WHERE capture_id = ? AND status IN ('queued', 'running')").get(captureID).count, 0);
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'capture.site_removed' AND subject_id = ?").get(captureID).count, 1);
 
+    const repeatedRemoval = await handleAdminRequest(await request(`/admin/api/captures/${captureID}`, {
+      method: "DELETE",
+    }), env);
+    assert.equal(repeatedRemoval.status, 200);
+    assert.deepEqual(await repeatedRemoval.json(), { capture_id: captureID, removed: false });
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'capture.site_removed' AND subject_id = ?").get(captureID).count, 1);
+
     const overview = await handleAdminRequest(await request("/admin/api/overview"), env);
     assert.deepEqual((await overview.json()).capture_targets, []);
     const run = await handleAdminRequest(await request(`/admin/api/captures/${captureID}/run`, {

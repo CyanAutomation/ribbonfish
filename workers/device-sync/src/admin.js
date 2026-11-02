@@ -811,7 +811,7 @@ async function removeCaptureSite(captureID, env, actorID) {
     "SELECT capture_id FROM capture_targets WHERE capture_id = ?",
   ).bind(captureID).first();
   if (!target) throw new HTTPError(404, "That webpage capture could not be found.");
-  await env.DB.batch([
+  const results = await env.DB.batch([
     env.DB.prepare("UPDATE capture_targets SET enabled = 0 WHERE capture_id = ? AND enabled = 1").bind(captureID),
     auditStatement(env, actorID, "capture.site_removed", "capture", captureID, {}, { onlyWhenPreviousChanged: true }),
     env.DB.prepare(
@@ -819,7 +819,7 @@ async function removeCaptureSite(captureID, env, actorID) {
       "WHERE capture_id = ? AND status = 'queued'",
     ).bind(Date.now(), "Capture site removed.", captureID),
   ]);
-  return jsonResponse({ capture_id: captureID, removed: true });
+  return jsonResponse({ capture_id: captureID, removed: results?.[0]?.meta?.changes === 1 });
 }
 
 async function readPlaylistRevision(playlistID, revision, env) {
