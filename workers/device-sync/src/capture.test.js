@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import {
   captureScreenshot,
   normalizeCaptureURL,
+  validateCaptureTargetURL,
   validateCaptureSettings,
 } from "./capture.js";
 
@@ -23,6 +24,15 @@ test("capture URLs require canonical public HTTPS hostnames", () => {
   ]) {
     assert.throws(() => normalizeCaptureURL(url), /public HTTPS URL/i, url);
   }
+});
+
+test("capture host allowlist is optional and enforces exact hostnames when populated", () => {
+  for (const allowedHosts of [undefined, "", "  ,  "]) {
+    assert.equal(validateCaptureTargetURL("https://Example.com/page", allowedHosts), "https://example.com/page");
+    assert.throws(() => validateCaptureTargetURL("https://127.0.0.1/", allowedHosts), /public HTTPS URL/i);
+  }
+  assert.equal(validateCaptureTargetURL("https://example.com/", " OTHER.example, Example.com "), "https://example.com/");
+  assert.throws(() => validateCaptureTargetURL("https://www.example.com/", "example.com"), /allowlist/i);
 });
 
 test("capture settings accept only the supported capture intervals and bounded viewport", () => {

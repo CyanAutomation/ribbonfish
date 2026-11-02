@@ -31,12 +31,12 @@ Set the allowlist on the management Worker before enabling admin access:
 npx wrangler secret put ADMIN_ALLOWED_EMAILS --config wrangler.management.toml
 ```
 
-Capture targets also fail closed unless their exact hostnames are listed in
-`CAPTURE_ALLOWED_HOSTS` in `wrangler.management.toml` (comma-separated, with no
-wildcards). The checked hostname is revalidated immediately before Browser Run
-starts. The list is empty by default. Browser navigation can also follow
-redirects and load subresources; this Worker code cannot constrain those later
-browser requests, so allowlisted sites still need to be safe for the configured
+`CAPTURE_ALLOWED_HOSTS` in `wrangler.management.toml` is empty by default, allowing
+any hostname that passes the public HTTPS URL checks. Set it to a comma-separated
+list of exact hostnames (no wildcards) to restrict capture targets. The hostname
+is revalidated immediately before Browser Run starts. Browser navigation can also
+follow redirects and load subresources; this Worker code cannot constrain those
+later browser requests, so captured sites still need to be safe for the configured
 Browser Run network. Confirm that the deployed Browser Run environment blocks
 private and metadata addresses across redirects and subresources before
 enabling capture.
