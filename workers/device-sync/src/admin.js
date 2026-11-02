@@ -7,7 +7,7 @@ import {
 } from "./intervals.js";
 import { deriveDeviceHealth } from "./device-health.js";
 import { isPNG, MAX_ASSET_BYTES, storePngAsset } from "./asset-store.js";
-import { validateCaptureSettings, validateCaptureTargetURL } from "./capture.js";
+import { normalizeCaptureSelector, validateCaptureSettings, validateCaptureTargetURL } from "./capture.js";
 import { CaptureTargetNotAllowedError, dispatchDueCaptures, enqueueCapture } from "./capture-workflow.js";
 import { AssetDeletionInProgressError, markAssetLiveStatement } from "./asset-registry.js";
 import { callJevDecision, JEVRequestError } from "./jev.js";
@@ -83,7 +83,7 @@ export async function handleAdminRequest(request, env, ctx) {
     if (url.pathname === "/admin/api/capture-decisions") {
       if (request.method !== "GET") return methodNotAllowed("GET");
       const rows = await env.DB.prepare(
-        "SELECT d.capture_id, d.due_at, d.assessed_at, d.action, d.reason FROM capture_decisions d " +
+        "SELECT d.capture_id, d.due_at, d.assessed_at, d.action, d.reason, d.observed_at, d.observed_result, d.observed_delay_ms FROM capture_decisions d " +
         "JOIN capture_targets t ON t.capture_id = d.capture_id " +
         "WHERE t.enabled = 1 AND d.action != 'pending' AND d.due_at = (SELECT MAX(d2.due_at) FROM capture_decisions d2 WHERE d2.capture_id = d.capture_id AND d2.action != 'pending') " +
         "LIMIT 1000",
@@ -169,6 +169,12 @@ export async function handleAdminRequest(request, env, ctx) {
       }
       await confirmCaptureSkip(captureSkipMatch[1].toLowerCase(), data.due_at, env, actorID);
       return jsonResponse({ confirmed: true, due_at: data.due_at }, 202);
+    }
+
+    const captureReadinessMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/readiness$/i);
+    if (captureReadinessMatch) {
+      if (request.method !== "PATCH") return methodNotAllowed("PATCH");
+      return await updateCaptureReadiness(request, captureReadinessMatch[1].toLowerCase(), env, actorID);
     }
 
     const captureIntervalMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})$/i);
@@ -260,7 +266,7 @@ async function readCaptureAssessmentTarget(captureID, env) {
   if (!target) return null;
   const [history, image] = await Promise.all([
     env.DB.prepare(
-      "SELECT browser_ms, sha256, captured_at FROM capture_history WHERE capture_id = ? ORDER BY captured_at DESC LIMIT 10",
+      "SELECT browser_ms, browser_ms_source, sha256, captured_at FROM capture_history WHERE capture_id = ? ORDER BY captured_at DESC LIMIT 10",
     ).bind(captureID).all(),
     target.current_sha256 ? env.ASSETS.head(`assets/${target.current_sha256}`) : Promise.resolve(null),
   ]);
@@ -380,7 +386,8 @@ function matchesAssetETag(header, etag) {
 
 async function readOverview(env) {
   const now = Date.now();
-  const [devices, playlists, active, audit, captureTargets, integrityIssues] = await Promise.all([
+  const windowStart = now - 30 * 24 * 60 * 60 * 1000;
+  const [devices, playlists, active, audit, captureTargets, integrityIssues, captureJobs, captureHistory, captureUsage, captureDecisions] = await Promise.all([
     env.DB.prepare(
       "SELECT d.device_id, d.enabled, d.created_at, d.last_seen_at, " +
       "CASE WHEN d.public_key IS NULL THEN 'token' ELSE 'key' END AS auth_type, " +
@@ -406,7 +413,7 @@ async function readOverview(env) {
       "FROM audit_events ORDER BY occurred_at DESC LIMIT ?",
     ).bind(20).all(),
     env.DB.prepare(
-      "SELECT t.capture_id, t.url, t.capture_interval_seconds, t.viewport_width, t.viewport_height, " +
+      "SELECT t.capture_id, t.url, t.capture_interval_seconds, t.viewport_width, t.viewport_height, t.wait_for_selector, " +
       "CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
       "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size, " +
       "t.last_success_at, " +
@@ -414,11 +421,44 @@ async function readOverview(env) {
       "(SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued', 'running') " +
       "ORDER BY j.created_at DESC LIMIT 1) AS job_status FROM capture_targets t " +
       "WHERE t.enabled = 1 ORDER BY t.next_due_at, t.created_at LIMIT 1000",
-    ).bind(Date.now() - 30 * 24 * 60 * 60 * 1000, Date.now() - 30 * 24 * 60 * 60 * 1000).all(),
+    ).bind(now - 30 * 24 * 60 * 60 * 1000, now - 30 * 24 * 60 * 60 * 1000).all(),
     env.DB.prepare(
       "SELECT sha256, issue_type, first_seen_at, last_seen_at FROM asset_integrity_issues " +
       "WHERE resolved_at IS NULL ORDER BY last_seen_at DESC LIMIT 100",
     ).all(),
+    env.DB.prepare(
+      "SELECT " +
+      "SUM(CASE WHEN status = 'succeeded' AND result_kind = 'screenshot' THEN 1 ELSE 0 END) AS successful_screenshots, " +
+      "SUM(CASE WHEN status = 'succeeded' AND result_kind = 'validator_unchanged' THEN 1 ELSE 0 END) AS validator_unchanged, " +
+      "SUM(CASE WHEN status = 'succeeded' AND result_kind = 'unknown' THEN 1 ELSE 0 END) AS successful_unclassified, " +
+      "SUM(CASE WHEN validator_outcome = 'disabled' THEN 1 ELSE 0 END) AS validator_disabled, " +
+      "SUM(CASE WHEN validator_outcome = 'changed' THEN 1 ELSE 0 END) AS validator_changed, " +
+      "SUM(CASE WHEN validator_outcome = 'no_stored_validator' THEN 1 ELSE 0 END) AS validator_no_stored_validator, " +
+      "SUM(CASE WHEN validator_outcome = 'unavailable' THEN 1 ELSE 0 END) AS validator_unavailable, " +
+      "SUM(CASE WHEN validator_outcome = 'cached_asset_missing' THEN 1 ELSE 0 END) AS validator_cached_asset_missing, " +
+      "SUM(CASE WHEN validator_outcome = 'unknown' THEN 1 ELSE 0 END) AS validator_unknown, " +
+      "SUM(browser_ms_response_header) AS browser_ms_response_header, " +
+      "SUM(browser_ms_reserve) AS browser_ms_reserve, " +
+      "SUM(browser_ms_legacy_unknown) AS browser_ms_unclassified_jobs " +
+      "FROM capture_jobs WHERE created_at >= ?",
+    ).bind(windowStart).first(),
+    env.DB.prepare(
+      "SELECT " +
+      "SUM(CASE WHEN browser_ms_source = 'response_header' THEN 1 ELSE 0 END) AS response_header, " +
+      "SUM(CASE WHEN browser_ms_source = 'reserve' THEN 1 ELSE 0 END) AS reserve, " +
+      "SUM(CASE WHEN browser_ms_source = 'unknown' THEN 1 ELSE 0 END) AS unknown " +
+      "FROM capture_history WHERE captured_at >= ?",
+    ).bind(windowStart).first(),
+    env.DB.prepare("SELECT usage_day, browser_ms FROM capture_usage WHERE singleton = 1").first(),
+    env.DB.prepare(
+      "SELECT COUNT(*) AS assessments, " +
+      "SUM(CASE WHEN action = 'defer_once' THEN 1 ELSE 0 END) AS candidate_deferrals, " +
+      "SUM(CASE WHEN action = 'defer_once' AND observed_result = 'changed' THEN 1 ELSE 0 END) AS candidate_changed, " +
+      "SUM(CASE WHEN action = 'defer_once' AND observed_result = 'unchanged' THEN 1 ELSE 0 END) AS candidate_unchanged, " +
+      "SUM(CASE WHEN action = 'defer_once' AND (observed_result IN ('validator_unchanged', 'failed', 'budget_deferred') OR observed_result IS NULL) THEN 1 ELSE 0 END) AS candidate_unverified, " +
+      "SUM(CASE WHEN action = 'error' THEN 1 ELSE 0 END) AS errors " +
+      "FROM capture_decisions WHERE assessed_at >= ? AND action != 'pending'",
+    ).bind(windowStart).first(),
   ]);
 
   let missing = [];
@@ -442,6 +482,10 @@ async function readOverview(env) {
     }));
     missing = missing.filter(Boolean);
   }
+  const budgetValue = Number(env.DAILY_BROWSER_BUDGET_MS);
+  const budgetMs = Number.isSafeInteger(budgetValue) && budgetValue >= 0 ? budgetValue : 600_000;
+  const accountedMs = captureUsage?.usage_day === new Date(now).toISOString().slice(0, 10)
+    ? captureUsage.browser_ms : 0;
 
   return {
     environment: env.ADMIN_ACCESS_REQUIRED === "true" ? "production" : "development",
@@ -454,6 +498,7 @@ async function readOverview(env) {
         capture_id: target.capture_id,
         display_url: source.origin + source.pathname,
         capture_interval_seconds: target.capture_interval_seconds,
+        wait_for_selector: target.wait_for_selector,
         viewport: { width: target.viewport_width, height: target.viewport_height },
         sha256: target.sha256,
         size: target.size,
@@ -464,6 +509,43 @@ async function readOverview(env) {
         schedule_reviewed: target.schedule_reviewed_at != null,
       };
     }),
+    capture_efficiency: {
+      daily_usage: {
+        day: captureUsage?.usage_day ?? null,
+        accounted_ms: accountedMs,
+        budget_ms: budgetMs,
+        remaining_ms: Math.max(0, budgetMs - accountedMs),
+      },
+      last_30_days: {
+        successful_screenshots: captureJobs?.successful_screenshots ?? 0,
+        validator_unchanged: captureJobs?.validator_unchanged ?? 0,
+        successful_unclassified: captureJobs?.successful_unclassified ?? 0,
+        jev_shadow_assessments: captureDecisions?.assessments ?? 0,
+        jev_candidate_deferrals: captureDecisions?.candidate_deferrals ?? 0,
+        jev_candidate_changed: captureDecisions?.candidate_changed ?? 0,
+        jev_candidate_unchanged: captureDecisions?.candidate_unchanged ?? 0,
+        jev_candidate_unverified: captureDecisions?.candidate_unverified ?? 0,
+        jev_errors: captureDecisions?.errors ?? 0,
+        validator_outcomes: {
+          disabled: captureJobs?.validator_disabled ?? 0,
+          changed: captureJobs?.validator_changed ?? 0,
+          no_stored_validator: captureJobs?.validator_no_stored_validator ?? 0,
+          unavailable: captureJobs?.validator_unavailable ?? 0,
+          cached_asset_missing: captureJobs?.validator_cached_asset_missing ?? 0,
+          unknown: captureJobs?.validator_unknown ?? 0,
+        },
+        browser_run_ms: {
+          response_header: captureJobs?.browser_ms_response_header ?? 0,
+          reserve: captureJobs?.browser_ms_reserve ?? 0,
+          unclassified_jobs: captureJobs?.browser_ms_unclassified_jobs ?? 0,
+        },
+        browser_ms_sources: {
+          response_header: captureHistory?.response_header ?? 0,
+          reserve: captureHistory?.reserve ?? 0,
+          unknown: captureHistory?.unknown ?? 0,
+        },
+      },
+    },
     asset_health: {
       missing,
       integrity_issues: integrityIssues.results ?? [],
@@ -804,6 +886,28 @@ async function updateCaptureInterval(request, captureID, env, actorID) {
   ]);
   if (batch[0]?.meta?.changes !== 1) throw new HTTPError(404, "That webpage capture is not available.");
   return jsonResponse({ capture_id: captureID, capture_interval_seconds: data.capture_interval_seconds });
+}
+
+async function updateCaptureReadiness(request, captureID, env, actorID) {
+  const data = await readJSON(request);
+  if (!hasExactKeys(data, ["wait_for_selector"])) {
+    throw new HTTPError(400, "request body must contain only wait_for_selector");
+  }
+  let selector;
+  try { selector = normalizeCaptureSelector(data.wait_for_selector); }
+  catch (error) { throw new HTTPError(400, error.message); }
+  const existing = await env.DB.prepare(
+    "SELECT capture_id FROM capture_targets WHERE capture_id = ? AND enabled = 1",
+  ).bind(captureID).first();
+  if (!existing) throw new HTTPError(404, "That webpage capture is not available.");
+  const batch = await env.DB.batch([
+    env.DB.prepare("UPDATE capture_targets SET wait_for_selector = ? WHERE capture_id = ? AND enabled = 1")
+      .bind(selector, captureID),
+    auditStatement(env, actorID, "capture.readiness_updated", "capture", captureID,
+      { wait_for_selector: selector }, { onlyWhenPreviousChanged: true }),
+  ]);
+  if (batch[0]?.meta?.changes !== 1) throw new HTTPError(404, "That webpage capture is not available.");
+  return jsonResponse({ capture_id: captureID, wait_for_selector: selector });
 }
 
 async function removeCaptureSite(captureID, env, actorID) {

@@ -124,9 +124,9 @@ test("capture assessment state includes only allowlisted metadata and no private
     last_error: "Raw stack trace",
     job_status: "queued",
     history: [
-      { browser_ms: 1000, sha256: "a", captured_at: 8000 },
-      { browser_ms: 3000, sha256: "a", captured_at: 9000 },
-      { browser_ms: 2000, sha256: "b", captured_at: 9500 },
+      { browser_ms: 1000, browser_ms_source: "reserve", sha256: "a", captured_at: 8000 },
+      { browser_ms: 3000, browser_ms_source: "response_header", sha256: "a", captured_at: 9000 },
+      { browser_ms: 2000, browser_ms_source: "response_header", sha256: "b", captured_at: 9500 },
     ],
   }, 10_000);
   assert.deepEqual(JSON.parse(state), {
@@ -137,7 +137,8 @@ test("capture assessment state includes only allowlisted metadata and no private
     recent_job: "queued",
     recent_error_present: true,
     recent_capture_count: 3,
-    median_browser_ms: 2000,
+    browser_duration_sample_count: 2,
+    median_browser_ms: 2500,
     recent_content_change_count: 1,
     unchanged_capture_streak: 1,
   });
