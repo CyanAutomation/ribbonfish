@@ -716,6 +716,66 @@ test("deleting an inactive playlist removes its capture-slot references", async 
   }
 });
 
+test("removing a capture site disables future captures and preserves saved playlist snapshots", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    assert.equal(created.response.status, 201);
+    const captureID = created.body.captures[0].capture_id;
+
+    const removed = await handleAdminRequest(await request(`/admin/api/captures/${captureID}`, {
+      method: "DELETE",
+    }), env);
+
+    assert.equal(removed.status, 200, await removed.clone().text());
+    assert.deepEqual(await removed.json(), { capture_id: captureID, removed: true });
+    assert.equal(sqlite.prepare("SELECT enabled FROM capture_targets WHERE capture_id = ?").get(captureID).enabled, 0);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM playlist_capture_items WHERE capture_id = ?").get(captureID).count, 1);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_jobs WHERE capture_id = ? AND status IN ('queued', 'running')").get(captureID).count, 0);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'capture.site_removed' AND subject_id = ?").get(captureID).count, 1);
+
+    const repeatedRemoval = await handleAdminRequest(await request(`/admin/api/captures/${captureID}`, {
+      method: "DELETE",
+    }), env);
+    assert.equal(repeatedRemoval.status, 200);
+    assert.deepEqual(await repeatedRemoval.json(), { capture_id: captureID, removed: false });
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'capture.site_removed' AND subject_id = ?").get(captureID).count, 1);
+
+    const overview = await handleAdminRequest(await request("/admin/api/overview"), env);
+    assert.deepEqual((await overview.json()).capture_targets, []);
+    const run = await handleAdminRequest(await request(`/admin/api/captures/${captureID}/run`, {
+      method: "POST", body: {},
+    }), env);
+    assert.equal(run.status, 404);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("registering a removed capture site restores it with its existing schedule", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env } = environment(sqlite);
+    const created = await registerCaptureSite(env, "https://example.com/removed", 3600);
+    const captureID = created.body.capture_id;
+    await handleAdminRequest(await request(`/admin/api/captures/${captureID}`, { method: "DELETE" }), env);
+
+    const restored = await handleAdminRequest(await request("/admin/api/capture-sites", {
+      method: "POST",
+      body: { url: "https://example.com/removed", viewport: { width: 1280, height: 720 } },
+    }), env);
+
+    assert.equal(restored.status, 200, await restored.clone().text());
+    assert.equal((await restored.json()).capture_id, captureID);
+    assert.equal(sqlite.prepare("SELECT enabled, capture_interval_seconds FROM capture_targets WHERE capture_id = ?").get(captureID).enabled, 1);
+    assert.equal(sqlite.prepare("SELECT capture_interval_seconds FROM capture_targets WHERE capture_id = ?").get(captureID).capture_interval_seconds, 3600);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'capture.site_restored' AND subject_id = ?").get(captureID).count, 1);
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("Browser Run failures use bounded delayed retries and leave the holding image active", async () => {
   const sqlite = await freshDatabase();
   try {
