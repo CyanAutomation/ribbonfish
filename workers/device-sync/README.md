@@ -200,12 +200,21 @@ in Wrangler's local mode.
 capture values are 900, 1800, 3600, 21600, and 86400 seconds (default 86400);
 rotation values are `30s`, `60s`, `90s`, `120s`, and `5m` (default `90s`).
 Playlist staging accepts `rotation_interval` and defaults it to `90s` when
-omitted. New webpage targets accept `capture_interval_seconds` and default it
-to 86400 when omitted. Use `PATCH /admin/api/captures/{capture_id}` to update a
-saved target; the target is shared by every playlist revision that references
-it. To change rotation, stage a new playlist revision with the desired value
-and activate it with `PUT /admin/api/active-playlist`. Read current values
-through the overview, playlist revision, or device playlist APIs.
+omitted. Each new webpage target accepts its own `capture_interval_seconds`
+and defaults it to 86400 when omitted. Use `PATCH /admin/api/captures/{capture_id}`
+to update a saved target; the target is shared by every playlist revision that
+references the same canonical URL and screenshot size, so changing its interval
+changes that shared schedule. The shortest supported interval is 15 minutes
+(up to 96 captures per target per day); frequent schedules share the daily
+browser runtime budget and queue capacity. To change rotation, stage a new
+playlist revision with the desired value and activate it with
+`PUT /admin/api/active-playlist`. Read current values through the overview,
+playlist revision, or device playlist APIs.
+
+The management editor provides a separate interval selector for every new page
+URL. Existing page targets retain their saved shared interval when selected in
+the editor; adjust a saved target from Page screenshots to change its schedule
+across all playlists that use it.
 
 Playlist staging verifies every referenced object exists in R2 with the declared
 size. A webpage slot references a reusable URL/viewport capture target and

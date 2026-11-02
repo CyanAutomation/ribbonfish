@@ -61,7 +61,7 @@
         <div id="playlists-mobile" class="mobile-card-list" role="region" aria-label="Playlist versions"></div>
         <section id="capture-targets" class="capture-targets" aria-labelledby="capture-targets-title">
           <div class="section-heading"><div><p class="eyebrow">Screenshots</p><h3 id="capture-targets-title">Page screenshots</h3></div></div>
-          <p class="muted">Each page URL is a reusable playlist item. A placeholder image appears until its first screenshot is ready. Ribbonfish uses recent screenshot change history to make an advisory skip suggestion. A skip only applies to one due screenshot after an admin confirms it.</p>
+          <p class="muted">Each page URL is a reusable playlist item with its own screenshot interval. A page’s schedule is shared wherever the same URL and screenshot size are used. A placeholder image appears until its first screenshot is ready. Ribbonfish uses recent screenshot change history to make an advisory skip suggestion. A skip only applies to one due screenshot after an admin confirms it.</p>
           <div id="capture-target-list" class="capture-target-list" role="region" aria-label="Scheduled page screenshots" aria-live="polite"></div>
         </section>
         <details id="playlist-editor" class="playlist-editor">
@@ -81,10 +81,11 @@
             <div class="asset-selection__list"></div>
           </fieldset>
           <label class="field--wide">Add PNG images <input class="field-control file-control" name="assets" type="file" accept="image/png" multiple></label>
-          <label class="field--wide">Add page URLs <textarea class="field-control" name="capture_urls" rows="3" placeholder="https://status.example.com&#10;https://example.com/operations" aria-describedby="page-url-help"></textarea><span id="page-url-help" class="field-hint">Use one public HTTPS URL per line. A placeholder image appears until the first screenshot is ready.</span></label>
+          <label class="field--wide">Add page URLs <textarea class="field-control" name="capture_urls" rows="3" placeholder="https://status.example.com&#10;https://example.com/operations" aria-describedby="page-url-help"></textarea><span id="page-url-help" class="field-hint">Use one public HTTPS URL per line. Set each page’s screenshot interval below. A placeholder image appears until the first screenshot is ready.</span></label>
           <fieldset id="screenshot-settings" class="field--wide screenshot-settings" disabled hidden>
-            <legend>Screenshot settings</legend>
-            <label>Screenshot interval <select class="field-control" name="capture_interval_seconds" required><option value="86400">24 hours</option></select><span class="field-hint">Choose a supported screenshot interval.</span></label>
+            <legend>Screenshot settings for new pages</legend>
+            <div id="new-capture-intervals" class="new-capture-intervals" aria-label="Screenshot interval for each new page"></div>
+            <p class="field--wide field-hint">Schedules are shared when the same page and screenshot size are reused in another playlist. The shortest interval is 15 minutes (up to 96 screenshots per page per day); frequent schedules share the daily browser runtime budget and queue capacity.</p>
             <label>Screenshot size <span class="viewport-inputs"><input class="field-control" name="viewport_width" type="number" value="1920" min="320" max="3840" step="1" aria-label="Screenshot width in pixels" required><span aria-hidden="true">×</span><input class="field-control" name="viewport_height" type="number" value="1080" min="240" max="2160" step="1" aria-label="Screenshot height in pixels" required></span><span class="field-hint">Width × height in pixels.</span></label>
           </fieldset>
           <div class="field--wide form-actions">
