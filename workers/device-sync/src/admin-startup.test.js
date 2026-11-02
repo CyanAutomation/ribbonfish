@@ -5,6 +5,14 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { JSDOM } from "jsdom";
 
+async function waitFor(condition, timeoutMs = 1000) {
+  const start = Date.now();
+  while (!condition()) {
+    if (Date.now() - start >= timeoutMs) throw new Error("Timed out waiting for condition");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 test("management page starts, renders its data, and dismisses errors", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const bundle = await build({
@@ -66,22 +74,22 @@ test("management page starts, renders its data, and dismisses errors", async () 
     assert.ok(window.document.querySelector("#sites-section"));
     assert.equal(window.document.querySelector("#sites-section").hidden, true);
     window.document.querySelector('a[href="#sites-section"]').click();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(() => window.document.querySelector("#sites-section").hidden === false);
     assert.equal(window.document.querySelector("#sites-section").hidden, false);
     assert.equal(window.document.querySelector("#device-section").hidden, true);
     window.document.querySelector("#dashboard-home").click();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(() => window.document.querySelector("#sites-section").hidden === true);
     assert.equal(window.document.querySelector("#sites-section").hidden, true);
     const analysisLink = window.document.querySelector('a[href="#analysis-section"]');
     const analysisDialog = window.document.querySelector("#analysis-dialog");
     analysisLink.focus();
     analysisLink.click();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(() => analysisDialog.open === true);
     assert.equal(analysisDialog.open, true);
     assert.equal(window.document.querySelector("#dashboard-tiles").hidden, true);
     assert.equal(window.document.activeElement.id, "close-analysis");
     analysisDialog.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(() => analysisDialog.open === false);
     assert.equal(analysisDialog.open, false);
     assert.equal(window.document.activeElement, analysisLink);
     assert.match(window.document.querySelector("#capture-target-list").textContent, /https:\/\/status.example\//);
