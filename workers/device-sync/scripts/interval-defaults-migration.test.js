@@ -9,6 +9,7 @@ test("interval migration defaults current capture schedules and playlist rotatio
   const database = new DatabaseSync(":memory:");
   try {
     database.exec(`
+      PRAGMA foreign_keys = ON;
       CREATE TABLE capture_targets (capture_id TEXT PRIMARY KEY, capture_interval_seconds INTEGER NOT NULL,
         next_due_at INTEGER NOT NULL, created_at INTEGER NOT NULL, last_success_at INTEGER);
       CREATE TABLE playlists (playlist_id TEXT NOT NULL, revision TEXT NOT NULL, rotation_interval TEXT NOT NULL,
@@ -16,7 +17,9 @@ test("interval migration defaults current capture schedules and playlist rotatio
       CREATE TABLE playlist_assets (playlist_id TEXT NOT NULL, revision TEXT NOT NULL, position INTEGER NOT NULL,
         sha256 TEXT NOT NULL, size INTEGER NOT NULL, PRIMARY KEY (playlist_id, revision, position));
       CREATE TABLE playlist_capture_items (playlist_id TEXT NOT NULL, revision TEXT NOT NULL, position INTEGER NOT NULL,
-        capture_id TEXT NOT NULL, PRIMARY KEY (playlist_id, revision, position));
+        capture_id TEXT NOT NULL, PRIMARY KEY (playlist_id, revision, position),
+        FOREIGN KEY (playlist_id, revision) REFERENCES playlists(playlist_id, revision),
+        FOREIGN KEY (capture_id) REFERENCES capture_targets(capture_id));
       CREATE TABLE active_playlist (singleton INTEGER PRIMARY KEY, playlist_id TEXT NOT NULL, revision TEXT NOT NULL);
       INSERT INTO capture_targets VALUES ('capture-1', 300, 20, 10, 15);
       INSERT INTO capture_targets VALUES ('capture-never-succeeded', 300, 20, ${Date.now()}, NULL);
@@ -26,7 +29,12 @@ test("interval migration defaults current capture schedules and playlist rotatio
       INSERT INTO playlist_capture_items VALUES ('welcome', 'old-active', 1, 'capture-1');
       INSERT INTO active_playlist VALUES (1, 'welcome', 'old-active');
     `);
+    // D1 applies each migration as a transaction with foreign keys enabled.
+    database.exec("BEGIN");
     database.exec(migration);
+    database.exec("COMMIT");
+    assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
+    assert.equal(database.prepare("SELECT count(*) AS count FROM sqlite_master WHERE name = 'interval_active_revision'").get().count, 0);
 
     assert.equal(database.prepare("SELECT capture_interval_seconds FROM capture_targets WHERE capture_id = 'capture-1'").get().capture_interval_seconds, 86400);
     const playlists = database.prepare("SELECT revision, rotation_interval FROM playlists ORDER BY revision").all();
@@ -44,4 +52,8 @@ test("interval migration defaults current capture schedules and playlist rotatio
   } finally {
     database.close();
   }
+});
+
+test("interval migration avoids temporary tables unsupported by remote D1", () => {
+  assert.doesNotMatch(migration, /\bCREATE\s+TEMP(?:ORARY)?\s+TABLE\b/i);
 });
