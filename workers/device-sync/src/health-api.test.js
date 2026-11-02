@@ -19,6 +19,7 @@ const report = {
 
 async function environment() {
   const sqlite = new DatabaseSync(":memory:");
+  sqlite.exec("PRAGMA foreign_keys = ON");
   sqlite.exec(await readFile(new URL("../schema.sql", import.meta.url), "utf8"));
   sqlite.prepare("INSERT INTO devices (device_id, token_hash, public_key, enabled, created_at) VALUES (?, ?, NULL, 1, ?)")
     .run(deviceID, await sha256Hex(token), Date.now());
@@ -74,6 +75,31 @@ test("authenticated reports update latest state, five-minute samples, and transi
     assert.equal(env.sqlite.prepare("SELECT COUNT(*) AS count FROM device_health_events").get().count, 1);
     await fetchHandler(postReport(report), env);
     assert.equal(env.sqlite.prepare("SELECT COUNT(*) AS count FROM device_health_events").get().count, 1);
+  } finally { env.sqlite.close(); }
+});
+
+test("deleting a device revokes access, removes health data, and retains an audit record", async () => {
+  const env = await environment();
+  try {
+    await fetchHandler(postReport(report), env);
+    env.sqlite.prepare(
+      "INSERT INTO enrollment_requests (request_id, device_id, public_key, fingerprint, created_at, last_seen_at, expires_at, status) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
+    ).run("request-1", deviceID, "public-key", "fingerprint", 1, 1, Date.now() + 60_000);
+
+    const response = await handleAdminRequest(new Request(`https://worker.test/admin/api/devices/${deviceID}`, {
+      method: "DELETE",
+    }), env);
+
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.equal(env.sqlite.prepare("SELECT COUNT(*) AS count FROM devices WHERE device_id = ?").get(deviceID).count, 0);
+    assert.equal(env.sqlite.prepare("SELECT COUNT(*) AS count FROM device_health_latest WHERE device_id = ?").get(deviceID).count, 0);
+    assert.equal(env.sqlite.prepare("SELECT COUNT(*) AS count FROM device_health_samples WHERE device_id = ?").get(deviceID).count, 0);
+    assert.equal(env.sqlite.prepare("SELECT COUNT(*) AS count FROM device_health_events WHERE device_id = ?").get(deviceID).count, 0);
+    const enrollment = env.sqlite.prepare("SELECT status, actor_id FROM enrollment_requests WHERE request_id = ?").get("request-1");
+    assert.equal(enrollment.status, "rejected");
+    assert.equal(enrollment.actor_id, "anonymous");
+    assert.equal(env.sqlite.prepare("SELECT event_type FROM audit_events WHERE subject_id = ?").get(deviceID).event_type, "device.deleted");
   } finally { env.sqlite.close(); }
 });
 

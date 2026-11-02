@@ -583,6 +583,9 @@ test("audit events and metadata are presented as readable labels", () => {
   assert.equal(formatAuditEventType("capture.interval_updated"), "Updated screenshot interval");
   assert.equal(formatAuditEventType("capture.schedule_reviewed"), "Reviewed screenshot schedule");
   assert.equal(formatAuditEventType("capture.site_created"), "Added capture site");
+  assert.equal(formatAuditEventType("capture.site_removed"), "Removed capture site");
+  assert.equal(formatAuditEventType("capture.site_restored"), "Restored capture site");
+  assert.equal(formatAuditEventType("device.deleted"), "Deleted device");
   assert.equal(formatAuditEventType("development.bootstrap"), "Created initial playlist");
   assert.equal(formatAuditEventType("device.disabled"), "Disabled device");
   assert.deepEqual(formatAuditDetails({

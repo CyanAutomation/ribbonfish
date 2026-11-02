@@ -576,6 +576,26 @@ function renderCaptureTargets(targets, decisions = []) {
       finally { capture.disabled = false; }
     });
     actions.append(capture);
+    const removeSite = button("Remove capture site", "danger");
+    removeSite.addEventListener("click", async () => {
+      const description = `Remove ${target.display_url} from managed capture sites? Future screenshots will stop. Existing playlist versions will keep their last saved image.`;
+      try {
+        const confirmed = await confirmBeforeAction(
+          (text) => showConfirmDialog({
+            title: "Remove capture site?",
+            description: text,
+            confirmLabel: "Remove site",
+            destructive: true,
+          }),
+          description,
+          () => api(`/admin/api/captures/${encodeURIComponent(target.capture_id)}`, { method: "DELETE" }),
+        );
+        if (!confirmed) return;
+        showMessage(`${target.display_url} was removed. Future screenshots have stopped.`, false, "global");
+        await refresh();
+      } catch (error) { showMessage(error.message, true, "global"); }
+    });
+    actions.append(removeSite);
     const assessmentDisclosure = node("details", undefined, "capture-target__assessment");
     assessmentDisclosure.append(node("summary", "Assess screenshot schedule"));
     const assess = button("Run advisory assessment", "secondary");
@@ -661,6 +681,25 @@ function deviceActionButtons(device, layout) {
   });
 
   const buttons = [toggle];
+  const remove = button("Delete device", "danger");
+  remove.addEventListener("click", async () => {
+    try {
+      const confirmed = await confirmBeforeAction(
+        (text) => showConfirmDialog({
+          title: "Delete device?",
+          description: text,
+          confirmLabel: "Delete device",
+          destructive: true,
+        }),
+        `Permanently delete ${device.device_id}? It will no longer be able to sync. Its health history will also be deleted.`,
+        () => api(`/admin/api/devices/${encodeURIComponent(device.device_id)}`, { method: "DELETE" }),
+      );
+      if (!confirmed) return;
+      showMessage(`Device ${device.device_id} was deleted.`, false, "device");
+      await refresh();
+    } catch (error) { showMessage(error.message, true, "device"); }
+  });
+  buttons.push(remove);
   if (device.auth_type !== "key") {
     const rotate = button("Rotate device token", "danger");
     rotate.addEventListener("click", async () => {
