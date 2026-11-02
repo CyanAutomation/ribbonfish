@@ -603,6 +603,21 @@ test("capture target interval API rejects values outside the supported set", asy
   assert.equal(response.status, 400);
 });
 
+test("capture interval and manual-run routes reject methods for the other route", async () => {
+  const capturePath = `/admin/api/captures/${captureID}`;
+  for (const method of ["GET", "DELETE"]) {
+    const response = await handleAdminRequest(request(capturePath, { method }), testEnvironment());
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("Allow"), "PATCH");
+  }
+
+  const runResponse = await handleAdminRequest(request(`${capturePath}/run`, {
+    method: "PATCH", body: {},
+  }), testEnvironment());
+  assert.equal(runResponse.status, 405);
+  assert.equal(runResponse.headers.get("Allow"), "POST");
+});
+
 test("playlist revision details return ordered asset references for editing", async () => {
   const env = testEnvironment();
   env.DB.playlists.set("operations:r-edit", {
