@@ -268,6 +268,27 @@ test("reviewed sites do not schedule captures until a playlist uses them", async
   }
 });
 
+test("capture site registration returns 201 only for a new site", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env } = environment(sqlite);
+    const body = { url: "https://example.com/pending", viewport: { width: 1280, height: 720 } };
+    const first = await handleAdminRequest(await request("/admin/api/capture-sites", { method: "POST", body }), env);
+    const firstSite = await first.json();
+    assert.equal(first.status, 201);
+    assert.equal(firstSite.schedule_reviewed, false);
+
+    const duplicate = await handleAdminRequest(await request("/admin/api/capture-sites", { method: "POST", body }), env);
+    const duplicateSite = await duplicate.json();
+    assert.equal(duplicate.status, 200);
+    assert.equal(duplicateSite.capture_id, firstSite.capture_id);
+    assert.equal(duplicateSite.schedule_reviewed, false);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_targets").get().count, 1);
+  } finally {
+    sqlite.close();
+  }
+});
+
 function addDevice(sqlite) {
   const token = "device-token-for-capture-workflow-test";
   const tokenHash = createHash("sha256").update(token).digest("hex");

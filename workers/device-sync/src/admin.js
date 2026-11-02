@@ -848,6 +848,7 @@ async function resolveCaptureTarget(input, env, actorID, { preserveExistingSched
       viewport: { width: existing.viewport_width, height: existing.viewport_height },
       placeholder_sha256: existing.placeholder_sha256,
       placeholder_size: existing.placeholder_size,
+      created: false,
     };
   }
   if (!hasOnlyKeys(input, ["url", "capture_interval_seconds", "viewport"]) ||
@@ -898,6 +899,7 @@ async function resolveCaptureTarget(input, env, actorID, { preserveExistingSched
       placeholder_sha256: existing.placeholder_sha256,
       placeholder_size: existing.placeholder_size,
       schedule_reviewed_at: existing.schedule_reviewed_at,
+      created: false,
     };
   }
 
@@ -915,7 +917,7 @@ async function resolveCaptureTarget(input, env, actorID, { preserveExistingSched
   }
   const captureID = crypto.randomUUID();
   const now = Date.now();
-  await env.DB.batch([
+  const insertBatch = await env.DB.batch([
     markAssetLiveStatement(env.DB, placeholderAsset.sha256, placeholderAsset.size, now),
     env.DB.prepare(
       "INSERT OR IGNORE INTO capture_targets (capture_id, variant_key, url, capture_interval_seconds, viewport_width, viewport_height, " +
@@ -940,6 +942,7 @@ async function resolveCaptureTarget(input, env, actorID, { preserveExistingSched
     placeholder_sha256: target.placeholder_sha256,
     placeholder_size: target.placeholder_size,
     schedule_reviewed_at: target.schedule_reviewed_at,
+    created: insertBatch[1]?.meta?.changes === 1,
   };
 }
 
@@ -953,7 +956,11 @@ async function createCaptureSite(request, env, actorID) {
     capture_interval_seconds: DEFAULT_CAPTURE_INTERVAL_SECONDS,
     viewport: data.viewport,
   }, env, actorID, { preserveExistingSchedule: true });
-  return jsonResponse({ ...site, schedule_reviewed: site.schedule_reviewed_at != null }, 201);
+  const { created, ...existingProperties } = site;
+  return jsonResponse(
+    { ...existingProperties, schedule_reviewed: site.schedule_reviewed_at != null },
+    created ? 201 : 200,
+  );
 }
 
 async function activatePlaylist(request, env, actorID) {

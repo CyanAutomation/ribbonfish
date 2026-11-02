@@ -598,7 +598,7 @@ test("capture target interval can be changed through the API", async () => {
   assert.ok(Number.isSafeInteger(env.DB.captureTarget.schedule_reviewed_at));
 });
 
-test("a site can be registered independently with the default unreviewed schedule", async () => {
+test("an existing pending site can be retrieved with the default unreviewed schedule", async () => {
   const env = testEnvironment();
   env.CAPTURE_ALLOWED_HOSTS = "example.com";
   env.DB.captureTarget = {
@@ -609,7 +609,7 @@ test("a site can be registered independently with the default unreviewed schedul
   const response = await handleAdminRequest(request("/admin/api/capture-sites", {
     method: "POST", body: { url: "https://example.com/", viewport: { width: 1920, height: 1080 } },
   }), env);
-  assert.equal(response.status, 201);
+  assert.equal(response.status, 200);
   const site = await response.json();
   assert.equal(site.capture_id, captureID);
   assert.equal(site.capture_interval_seconds, 86400);
