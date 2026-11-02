@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { isValidPositiveDuration } from "../src/duration.js";
+import { isSupportedRotationInterval } from "../src/intervals.js";
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MAX_ASSET_BYTES = 32 * 1024 * 1024;
@@ -33,9 +33,9 @@ while (args.length) {
 const sourcePath = resolve(filename);
 const input = JSON.parse(await readFile(sourcePath, "utf8"));
 if (!input || !ID_PATTERN.test(input.id ?? "") ||
-    !isValidPositiveDuration(input.rotation_interval) || !Array.isArray(input.assets) ||
+    !isSupportedRotationInterval(input.rotation_interval) || !Array.isArray(input.assets) ||
     input.assets.length < 1 || input.assets.length > 256) {
-  throw new Error("playlist must have a valid id, positive rotation_interval, and 1-256 assets");
+  throw new Error("playlist must have a valid id, supported rotation_interval, and 1-256 assets");
 }
 
 const assets = [];

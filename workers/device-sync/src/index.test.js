@@ -352,11 +352,20 @@ test("playlist validation rejects durations the Go agent cannot parse", async ()
   }
 });
 
+test("playlist validation rejects positive rotation values outside the supported set", async () => {
+  const { env, db } = testEnvironment({ playlistValue: { ...playlist, rotation_interval: "15s" } });
+  await authorize(db);
+  const response = await fetchHandler(new Request("https://worker.test/v2/playlist", {
+    headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office" },
+  }), env);
+  assert.equal(response.status, 502);
+});
+
 test("default Worker playlist assets match the bundled images", async () => {
   const defaultPlaylist = JSON.parse(await readFile(new URL("../defaults/default-playlist.json", import.meta.url), "utf8"));
   const profile = JSON.parse(await readFile(new URL("../../../agent/defaults/pi3a-plus.json", import.meta.url), "utf8"));
   assert.equal(defaultPlaylist.id, "default");
-  assert.equal(defaultPlaylist.rotation_interval, "15s");
+  assert.equal(defaultPlaylist.rotation_interval, "90s");
   assert.equal(profile.playlist.id, defaultPlaylist.id);
   assert.equal(profile.playlist.rotation_interval, defaultPlaylist.rotation_interval);
   assert.equal(profile.playlist.assets.length, defaultPlaylist.assets.length);

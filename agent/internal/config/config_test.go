@@ -16,7 +16,7 @@ func validConfig() Config {
 		LogLevel: "info",
 		Cache:    CacheConfig{Directory: "cache", MaxBytes: 1024},
 		Output:   OutputConfig{Directory: "frames"},
-		Playlist: PlaylistConfig{ID: "default", RotationInterval: "5s", Assets: []AssetConfig{{Path: "assets/one.png"}}},
+		Playlist: PlaylistConfig{ID: "default", RotationInterval: "90s", Assets: []AssetConfig{{Path: "assets/one.png"}}},
 		Displays: []DisplayConfig{{ID: "display-left"}},
 	}
 }
@@ -79,7 +79,7 @@ func TestValidateRejectsInvalidContracts(t *testing.T) {
 		{name: "invalid asset digest", wantError: "sha256 must be a 64-character hexadecimal SHA-256 digest", mutate: func(c *Config) { c.Playlist.Assets[0].SHA256 = "abc" }},
 		{name: "duplicate display", wantError: `display id "display-left" is duplicated`, mutate: func(c *Config) { c.Displays = append(c.Displays, c.Displays[0]) }},
 		{name: "unsafe display id", wantError: "displays[0].id contains unsupported characters", mutate: func(c *Config) { c.Displays[0].ID = "../left" }},
-		{name: "invalid interval", wantError: "rotation_interval must be greater than zero", mutate: func(c *Config) { c.Playlist.RotationInterval = "0s" }},
+		{name: "unsupported interval", wantError: "rotation_interval must be one of", mutate: func(c *Config) { c.Playlist.RotationInterval = "15s" }},
 		{name: "DRM display requires connector", wantError: `display "display-left" requires connector when output.backend is drm`, mutate: func(c *Config) { c.Output.Backend = "drm"; c.Output.Device = "/dev/dri/card1" }},
 		{name: "duplicate DRM connector", wantError: `connector "HDMI-A-1" is assigned to more than one display`, mutate: func(c *Config) {
 			c.Output.Backend = "drm"
@@ -151,7 +151,7 @@ func TestLoadResolvesPathsRelativeToConfig(t *testing.T) {
 		"log_level": "info",
 		"cache": {"directory": "cache", "max_bytes": 1024},
 		"output": {"directory": "frames"},
-		"playlist": {"id":"default","rotation_interval":"5s","assets":[{"path":"assets/one.png"}]},
+		"playlist": {"id":"default","rotation_interval":"90s","assets":[{"path":"assets/one.png"}]},
 		"displays": [{"id":"display-left"}]
 	}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -171,15 +171,31 @@ func TestLoadResolvesPathsRelativeToConfig(t *testing.T) {
 		t.Errorf("asset path = %q", got)
 	}
 	interval, err := cfg.Playlist.Interval()
-	if err != nil || interval != 5*time.Second {
+	if err != nil || interval != 90*time.Second {
 		t.Errorf("Interval() = %v, %v", interval, err)
+	}
+}
+
+func TestLoadMigratesUnsupportedRotationIntervalToDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old-config.json")
+	body := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"directory":"frames"},"playlist":{"id":"default","rotation_interval":"15s","assets":[{"path":"asset.png"}]},"displays":[{"id":"display-left"}]}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Playlist.RotationInterval != DefaultRotationInterval {
+		t.Fatalf("rotation interval = %q, want migrated default %q", cfg.Playlist.RotationInterval, DefaultRotationInterval)
 	}
 }
 
 func TestLoadAppliesHardwareEnvironmentOverridesBeforeValidation(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hardware.json")
-	body := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"backend":"drm","fit":"contain"},"playlist":{"id":"default","rotation_interval":"5s","assets":[{"path":"assets/one.png"}]},"displays":[{"id":"display-left","connector":"HDMI-A-1","mode":"preferred"}]}`
+	body := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"backend":"drm","fit":"contain"},"playlist":{"id":"default","rotation_interval":"90s","assets":[{"path":"assets/one.png"}]},"displays":[{"id":"display-left","connector":"HDMI-A-1","mode":"preferred"}]}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +217,7 @@ func TestLoadAppliesHardwareEnvironmentOverridesBeforeValidation(t *testing.T) {
 func TestLoadIgnoresDRMDeviceOverrideForSimulator(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "simulator.json")
-	if err := os.WriteFile(path, []byte(`{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"directory":"frames"},"playlist":{"id":"default","rotation_interval":"5s","assets":[{"path":"asset.png"}]},"displays":[{"id":"display-left"}]}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"directory":"frames"},"playlist":{"id":"default","rotation_interval":"90s","assets":[{"path":"asset.png"}]},"displays":[{"id":"display-left"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("RIBBONFISH_DRM_DEVICE", "/dev/dri/card1")

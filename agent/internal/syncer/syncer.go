@@ -320,6 +320,9 @@ func validatePlaylistSnapshot(snapshot PlaylistSnapshot, hardware config.Config)
 	if !validID(snapshot.ID) {
 		return fmt.Errorf("invalid playlist id %q", snapshot.ID)
 	}
+	if !config.IsSupportedRotationInterval(snapshot.RotationInterval) {
+		return fmt.Errorf("playlist %q rotation interval must be one of 30s, 60s, 90s, 120s, or 5m", snapshot.ID)
+	}
 	interval, err := time.ParseDuration(snapshot.RotationInterval)
 	if err != nil {
 		return fmt.Errorf("playlist %q has invalid rotation interval: %w", snapshot.ID, err)

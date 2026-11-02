@@ -1,8 +1,7 @@
 import { MAX_ASSET_BYTES, isPNG, storePngAsset } from "./asset-store.js";
 import { ASSET_WRITE_LEASE_MS } from "./asset-registry.js";
+import { isSupportedCaptureInterval } from "./intervals.js";
 
-export const MIN_CAPTURE_INTERVAL_SECONDS = 60;
-export const MAX_CAPTURE_INTERVAL_SECONDS = 30 * 24 * 60 * 60;
 export const MAX_CAPTURE_TIMEOUT_MS = 45_000;
 export const MAX_CAPTURE_PIXELS = 3840 * 2160;
 
@@ -53,8 +52,8 @@ export function validateCaptureTargetURL(value, allowedHosts) {
 export function validateCaptureSettings(value) {
   const interval = value?.capture_interval_seconds;
   const viewport = value?.viewport;
-  if (!Number.isSafeInteger(interval) || interval < MIN_CAPTURE_INTERVAL_SECONDS || interval > MAX_CAPTURE_INTERVAL_SECONDS) {
-    throw new Error("Capture interval must be between 60 seconds and 30 days.");
+  if (!isSupportedCaptureInterval(interval)) {
+    throw new Error("Capture interval must be one of the supported values: 15m, 30m, 1h, 6h, or 24h.");
   }
   if (!viewport || !Number.isSafeInteger(viewport.width) || !Number.isSafeInteger(viewport.height) ||
       viewport.width < 320 || viewport.width > 3840 || viewport.height < 240 || viewport.height > 2160 ||

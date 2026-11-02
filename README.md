@@ -100,7 +100,7 @@ flowchart TD
 
 ## Scheduling Constraint
 
-Ribbonfish deliberately supports **no screenshot capture interval shorter than 60 seconds**. A single once-per-minute Cloudflare Cron Trigger dispatches due work using D1 scheduling state and Queues. This avoids sub-minute timers, delayed-message scheduling loops, and Durable Objects. Capture intervals are configuration values, not promises of exact wall-clock execution; browser rendering and device synchronisation add further freshness latency. Reject capture intervals below `60s` at the API and configuration-validation boundaries.
+Ribbonfish supports five browser capture intervals: **15 minutes, 30 minutes, 1 hour, 6 hours, and 24 hours**. The default is 24 hours. Agent display rotation supports **30, 60, 90, or 120 seconds, or 5 minutes**; the default is 90 seconds. A once-per-minute Cloudflare Cron Trigger dispatches due screenshot work using D1 scheduling state and Queues. Capture intervals are configuration values, not promises of exact wall-clock execution; browser rendering and device synchronisation add further freshness latency.
 
 **Durable Objects are explicitly out of scope**, including for device presence, push commands, and display coordination. Devices poll for configuration and the globally active playlist, and all playlist rotation is local. Reconsidering this decision requires a new, demonstrated product requirement rather than speculative extensibility.
 
@@ -135,7 +135,7 @@ Wrangler's local D1/R2 emulation.
 See [`workers/device-sync/README.md`](workers/device-sync/README.md) for
 deployment and API details.
 
-The current management Worker uses screenshot Quick Actions, not persistent browser sessions. Capture targets accept public HTTPS URLs without credentials, capture intervals from 60 seconds to 30 days, and bounded viewport sizes. Its production config caps Browser Run time at 9 minutes per UTC day, reserves 45 seconds before each request when usage is unavailable, and spaces requests by at least 10 seconds. These are application limits; confirm the account's plan and Browser Run quotas before enabling production capture. Authenticated pages, cookies, and arbitrary browser interaction are not supported.
+The current management Worker uses screenshot Quick Actions, not persistent browser sessions. Capture targets accept public HTTPS URLs without credentials, one of the five supported capture intervals, and bounded viewport sizes. Its production config caps Browser Run time at 9 minutes per UTC day, reserves 45 seconds before each request when usage is unavailable, and spaces requests by at least 10 seconds. These are application limits; confirm the account's plan and Browser Run quotas before enabling production capture. Authenticated pages, cookies, and arbitrary browser interaction are not supported.
 
 ---
 
@@ -175,17 +175,17 @@ A **site** identifies a source URL; a **render variant** identifies a particular
 
 ### Capture Interval
 
-How frequently Cloudflare creates a fresh screenshot of a site/variant. **Minimum supported interval: 60 seconds.** Intervals must be at least one minute and should be expressed as whole-minute multiples; longer intervals (such as `24h`) are supported. Capture timing is best-effort, not a real-time guarantee.
+How frequently Cloudflare creates a fresh screenshot of a site/variant. Supported values are `15m`, `30m`, `1h`, `6h`, and `24h`; the default is `24h`. Capture timing is best-effort, not a real-time guarantee.
 
 ### Rotation Duration
 
-How long an image remains visible before each output advances to the next item in the globally active playlist. The interval is part of the playlist and is shared by all devices.
+How long an image remains visible before each output advances to the next item in the globally active playlist. Supported values are `30s`, `60s`, `90s`, `120s`, and `5m`; the default is `90s`. The interval is part of the playlist and is shared by all devices.
 
 ### Device Sync Interval
 
 How frequently the agent checks for an updated active playlist snapshot. The Go agent defaults to one minute; Compose can override this with `RIBBONFISH_SYNC_INTERVAL`.
 
-These are separate settings. A display can rotate between two cached screenshots every 20 seconds even when one screenshot is captured daily and another every 60 seconds. The 60-second minimum applies **only to screenshot capture**, not to local playlist dwell times or device synchronisation.
+These are separate settings. A display can rotate between cached screenshots every 30 seconds while screenshots are captured daily.
 
 ---
 
@@ -205,7 +205,7 @@ sites:
     url: https://status.example.com
     variants:
       - id: uptime-landscape
-        capture_interval: 60s
+        capture_interval: 15m
         viewport: { width: 1920, height: 1080 }
         wait_strategy: selector-or-timeout
 
@@ -230,7 +230,7 @@ active_playlist: office-rotation
 
 > This is an illustrative product schema, not an implemented configuration format.
 
-Physical connector names and stable display identification will be validated against actual devices. The shortest supported capture interval is `60s`; captures and delivery are best-effort and may be delayed by scheduler, queue, and rendering latency.
+Physical connector names and stable display identification will be validated against actual devices. The shortest supported capture interval is `15m`; captures and delivery are best-effort and may be delayed by scheduler, queue, and rendering latency.
 
 ---
 
@@ -259,7 +259,7 @@ The consumer processes one message and awaits the full browser capture and image
 - Transient Browser Run errors retry at most twice after the first attempt, with 60-second and 180-second delays. Terminal errors leave the previous screenshot in place. Failed jobs do not block other targets.
 - The console reports each target's last success, active queue status, and most recent error. Queue-depth and aggregate budget dashboards remain future work. The last valid image stays available subject to the screenshot retention policy.
 
-**Trade-off:** with a single capture slot, requested 60-second intervals are a minimum *configuration* interval, not guaranteed freshness. If aggregate render time exceeds capacity or the daily browser budget, some captures will be late or skipped. Design for predictable degradation rather than unbounded work accumulation.
+**Trade-off:** with a single capture slot, requested 15-minute intervals are a minimum *configuration* interval, not guaranteed freshness. If aggregate render time exceeds capacity or the daily browser budget, some captures will be late or skipped. Design for predictable degradation rather than unbounded work accumulation.
 
 ---
 
@@ -275,7 +275,7 @@ The optimiser sits **after deterministic eligibility checks and before the singl
 
 ### Decision scope
 
-- **Adaptive scheduling:** consider change history, prior capture durations, recent failures, cached-image age, available browser-time budget and queue pressure to choose whether to capture now or defer. Respect the configured freshness ceiling and never schedule captures more frequently than 60 seconds.
+- **Adaptive scheduling:** consider change history, prior capture durations, recent failures, cached-image age, available browser-time budget and queue pressure to choose whether to capture now or defer. Respect the configured freshness ceiling and never schedule captures more frequently than the supported 15-minute minimum.
 - **Cache reuse:** prefer inexpensive deterministic checks first, such as trusted `ETag`/`Last-Modified` validators or a suitable lightweight source probe. A static HTML response or cached screenshot **cannot prove** a dynamic dashboard is unchanged; do not infer freshness from it.
 - **Failure recovery:** classify bounded next actions such as `retry`, `defer`, `use_cache` or `escalate`, using error category, recent failures, cache age and quota state.
 - **Queue prioritisation:** rank eligible variants when serial capture capacity or browser budget is scarce, without starving other sites or violating hard freshness requirements.
@@ -284,7 +284,7 @@ The optimiser sits **after deterministic eligibility checks and before the singl
 ### Hard constraints and safe fallback
 
 - **The configured interval is a freshness requirement by default**, not permission to defer indefinitely. Adaptive scheduling is explicitly opt-in per variant, with a user-defined maximum screenshot age and a bounded forced-refresh policy. If a site must refresh every minute, JEV cannot skip that capture merely to save money; budget exhaustion may still make the requirement unattainable and must be reported.
-- Deterministic validation and provider quotas **always override** JEV. JEV must not bypass the global one-at-a-time queue, 60-second minimum, retention limits, authorisation boundaries or the daily browser-time budget.
+- Deterministic validation and provider quotas **always override** JEV. JEV must not bypass the global one-at-a-time queue, 15-minute minimum, retention limits, authorisation boundaries or the daily browser-time budget.
 - Validate JEV outputs against a small typed decision schema; reject invalid, stale, low-confidence or timed-out recommendations. Keep strict limits on JEV request frequency, token usage, latency and total spend so optimisation does not cost more than it saves.
 - **Fail open to deterministic scheduling**, subject to hard quota and safety limits, when JEV is unavailable. A JEV outage must not stop device playback or prevent otherwise permitted captures.
 - Do not send authenticated/private screenshot pixels or sensitive dashboard content to JEV without explicit opt-in and appropriate data-handling controls. Prefer metadata-only decisions.
@@ -409,7 +409,7 @@ Ribbonfish retains **at most the 10 most recent successful screenshots per rende
 
 - On successful capture, write a new immutable screenshot to R2, update its D1 metadata and the current manifest, then prune excess captures so no more than 10 remain for that variant.
 - A scheduled cleanup pass deletes captures older than 30 days even if fewer than 10 exist, and reconciles orphaned R2 objects or D1 records after interrupted writes/deletions. The reconciler scans the complete `assets/` prefix in restartable R2 pages and checks playlist revisions, holding/current images, and capture history in D1. It claims an asset before deleting it, blocks new references while deletion is in progress, and retries failed R2 deletes.
-- Treat retention as a **hard upper bound**, not a promise that 10 captures or a full 30 days of history will always be available. At a 60-second capture interval, the 10-capture limit represents roughly the latest 10 minutes; at a daily interval, it represents up to 10 days.
+- Treat retention as a **hard upper bound**, not a promise that 10 captures or a full 30 days of history will always be available. At a 15-minute capture interval, the 10-capture limit represents roughly the latest 2.5 hours; at a daily interval, it represents up to 10 days.
 - Avoid deleting an object while it is still referenced by a current manifest. Update pointers atomically where feasible, then delete superseded objects; retry failed cleanup safely.
 - Once the latest screenshot ages beyond 30 days without a successful replacement, it must be removed from cloud retention and no longer advertised as current. Device-local cached images have a separate offline-availability policy, which must not be misrepresented as cloud retention.
 - Do not retain duplicate copies, thumbnails, backups, or other screenshot-derived assets beyond these limits unless a separately documented retention policy explicitly covers them. Keep D1 metadata, audit records and logs free of image content.
@@ -438,10 +438,10 @@ Capture costs must be modelled using actual browser time, capture frequency, the
 
 For example:
 
-- One site captured every 60 seconds requires up to **1,440 captures/day** before retries.
+- One site captured every 15 minutes requires up to **96 captures/day** before retries.
 - One site captured daily requires **1 capture/day**.
 
-Device count should not multiply rendering work when assets can be safely shared. For illustration, capturing one variant every minute requires 1,440 captures/day; even 1 second of browser usage per capture would consume 24 browser-minutes/day. Validate the active plan's current daily allowance and price model before claiming Free-plan compatibility.
+Device count should not multiply rendering work when assets can be safely shared. For illustration, capturing one variant every 15 minutes requires 96 captures/day; even 1 second of browser usage per capture would consume 1.6 browser-minutes/day. Validate the active plan's current daily allowance and price model before claiming Free-plan compatibility.
 
 ---
 
@@ -576,7 +576,7 @@ The repository should ultimately include:
    Authenticated devices receive the same active playlist and managed assets;
    credential rotation is available through the production management API.
 6. Image format, compression, scaling, storage retention, and delivery method.
-7. Whether a shared 60-second screenshot is sufficiently fresh for operational monitoring.
+7. Whether a shared 15-minute screenshot is sufficiently fresh for operational monitoring.
 8. Container permissions and DRM master ownership on Pi 3B and Pi 4.
 9. Capture concurrency limits, missed-job reconciliation, and capture cost ceilings.
 10. The production management API uses Cloudflare Access and records the

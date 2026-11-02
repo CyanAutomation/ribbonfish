@@ -4,7 +4,8 @@ import { readFile } from "node:fs/promises";
 import { handleAdminRequest, sha256Hex } from "./admin.js";
 
 const digest = "a".repeat(64);
-const rotation = "30s";
+const rotation = "90s";
+const captureID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 class FakeDatabase {
   constructor() {
@@ -37,7 +38,7 @@ class FakeDatabase {
       bind(...boundValues) { values = boundValues; return this; },
       get values() { return values; },
       async first() {
-        if (sql.includes("FROM capture_targets t")) return database.captureTarget ?? null;
+        if (sql.includes("FROM capture_targets")) return database.captureTarget ?? null;
         if (sql.includes("FROM active_playlist")) return database.activePlaylist;
         if (sql.includes("FROM playlists WHERE playlist_id")) {
           const row = database.playlists.get(values[0] + ":" + values[1]);
@@ -94,7 +95,7 @@ class FakeDatabase {
       async run() {
         database.mutationCalls++;
         await database.apply(sql, values);
-        return { meta: { changes: 1 } };
+        return { meta: { changes: sql.startsWith("UPDATE capture_targets") && !database.captureTarget ? 0 : 1 } };
       },
     };
   }
@@ -126,6 +127,11 @@ class FakeDatabase {
       const [enabled, device_id] = values;
       const row = this.devices.get(device_id);
       if (row) row.enabled = enabled;
+    } else if (sql.startsWith("UPDATE capture_targets SET capture_interval_seconds")) {
+      if (this.captureTarget?.capture_id === values[2]) {
+        this.captureTarget.capture_interval_seconds = values[0];
+        this.captureTarget.next_due_at = values[1];
+      }
     } else if (sql.startsWith("UPDATE devices SET token_hash")) {
       const [token_hash, device_id] = values;
       const row = this.devices.get(device_id);
@@ -530,7 +536,7 @@ test("playlist revisions are staged, then explicitly activated", async () => {
   env.objects.set("assets/" + digest, new Uint8Array([1, 2, 3, 4]));
   const staged = await handleAdminRequest(request("/admin/api/playlists", {
     method: "POST",
-    body: { id: "operations", rotation_interval: "45s", assets: [{ sha256: digest, size: 4 }] },
+    body: { id: "operations", rotation_interval: "90s", assets: [{ sha256: digest, size: 4 }] },
   }), env);
   assert.equal(staged.status, 201);
   const revision = (await staged.json()).revision;
@@ -545,12 +551,79 @@ test("playlist revisions are staged, then explicitly activated", async () => {
   assert.equal(env.DB.auditEvents.some((event) => event.event_type === "playlist.activated"), true);
 });
 
+test("playlist API rejects rotation intervals outside the published set", async () => {
+  const env = testEnvironment();
+  env.objects.set("assets/" + digest, new Uint8Array([1, 2, 3, 4]));
+  const response = await handleAdminRequest(request("/admin/api/playlists", {
+    method: "POST", body: { id: "operations", rotation_interval: "45s", assets: [{ sha256: digest, size: 4 }] },
+  }), env);
+  assert.equal(response.status, 400);
+});
+
+test("playlist API defaults omitted rotation intervals to 90 seconds", async () => {
+  const env = testEnvironment();
+  env.objects.set("assets/" + digest, new Uint8Array([1, 2, 3, 4]));
+  const response = await handleAdminRequest(request("/admin/api/playlists", {
+    method: "POST", body: { id: "operations", assets: [{ sha256: digest, size: 4 }] },
+  }), env);
+  assert.equal(response.status, 201);
+  assert.equal((await response.json()).rotation_interval, "90s");
+});
+
+test("interval API exposes the supported choices and defaults", async () => {
+  const response = await handleAdminRequest(request("/admin/api/intervals"), testEnvironment());
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    capture: { unit: "seconds", default: 86400, options: [
+      { value: 900, label: "15 minutes" }, { value: 1800, label: "30 minutes" },
+      { value: 3600, label: "1 hour" }, { value: 21600, label: "6 hours" }, { value: 86400, label: "24 hours" },
+    ] },
+    rotation: { unit: "duration", default: "90s", options: [
+      { value: "30s", label: "30 seconds" }, { value: "60s", label: "60 seconds" },
+      { value: "90s", label: "90 seconds" }, { value: "120s", label: "120 seconds" }, { value: "5m", label: "5 minutes" },
+    ] },
+  });
+});
+
+test("capture target interval can be changed through the API", async () => {
+  const env = testEnvironment();
+  env.DB.captureTarget = { capture_id: captureID, capture_interval_seconds: 3600, next_due_at: 123 };
+  const response = await handleAdminRequest(request(`/admin/api/captures/${captureID}`, {
+    method: "PATCH", body: { capture_interval_seconds: 21600 },
+  }), env);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { capture_id: captureID, capture_interval_seconds: 21600 });
+  assert.equal(env.DB.captureTarget.capture_interval_seconds, 21600);
+});
+
+test("capture target interval API rejects values outside the supported set", async () => {
+  const response = await handleAdminRequest(request(`/admin/api/captures/${captureID}`, {
+    method: "PATCH", body: { capture_interval_seconds: 300 },
+  }), testEnvironment());
+  assert.equal(response.status, 400);
+});
+
+test("capture interval and manual-run routes reject methods for the other route", async () => {
+  const capturePath = `/admin/api/captures/${captureID}`;
+  for (const method of ["GET", "DELETE"]) {
+    const response = await handleAdminRequest(request(capturePath, { method }), testEnvironment());
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("Allow"), "PATCH");
+  }
+
+  const runResponse = await handleAdminRequest(request(`${capturePath}/run`, {
+    method: "PATCH", body: {},
+  }), testEnvironment());
+  assert.equal(runResponse.status, 405);
+  assert.equal(runResponse.headers.get("Allow"), "POST");
+});
+
 test("playlist revision details return ordered asset references for editing", async () => {
   const env = testEnvironment();
   env.DB.playlists.set("operations:r-edit", {
     playlist_id: "operations",
     revision: "r-edit",
-    rotation_interval: "45s",
+    rotation_interval: "60s",
     created_at: 200,
     assets: [
       { sha256: digest, size: 4 },
@@ -564,7 +637,7 @@ test("playlist revision details return ordered asset references for editing", as
   assert.deepEqual(await response.json(), {
     playlist_id: "operations",
     revision: "r-edit",
-    rotation_interval: "45s",
+    rotation_interval: "60s",
     assets: [
       { sha256: digest, size: 4 },
       { sha256: "b".repeat(64), size: 8 },
@@ -587,7 +660,7 @@ test("playlist editing can remove an image, add an upload and stage a new revisi
   env.DB.playlists.set("operations:r-edit", {
     playlist_id: "operations",
     revision: "r-edit",
-    rotation_interval: "45s",
+    rotation_interval: "60s",
     created_at: 200,
     assets: [
       { sha256: digest, size: 4 },
@@ -599,7 +672,7 @@ test("playlist editing can remove an image, add an upload and stage a new revisi
     method: "POST",
     body: {
       id: "operations",
-      rotation_interval: "60s",
+      rotation_interval: "120s",
       assets: [
         { sha256: secondDigest, size: 4 },
         uploadedAsset,
@@ -610,7 +683,7 @@ test("playlist editing can remove an image, add an upload and stage a new revisi
   assert.equal(edited.status, 201);
   const result = await edited.json();
   assert.equal(result.id, "operations");
-  assert.equal(result.rotation_interval, "60s");
+  assert.equal(result.rotation_interval, "120s");
   assert.equal(result.asset_count, 2);
   assert.deepEqual(env.DB.playlists.get(`operations:${result.revision}`).assets, [
     { sha256: secondDigest, size: 4 },
@@ -638,7 +711,7 @@ test("inactive playlists and their revisions can be deleted without changing the
   env.DB.playlists.set("operations:revision-2", {
     playlist_id: "operations",
     revision: "revision-2",
-    rotation_interval: "45s",
+      rotation_interval: "60s",
     created_at: 200,
     assets: [{ sha256: digest, size: 4 }],
   });

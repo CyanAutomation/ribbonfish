@@ -582,6 +582,7 @@ test("audit events and metadata are presented as readable labels", () => {
   assert.equal(formatAuditEventType("device.credential_rotated"), "Rotated device token");
   assert.equal(formatAuditEventType("capture.skip_once_confirmed"), "Confirmed one screenshot skip");
   assert.equal(formatAuditEventType("capture.skip_once_applied"), "Skipped one scheduled screenshot");
+  assert.equal(formatAuditEventType("capture.interval_updated"), "Updated screenshot interval");
   assert.equal(formatAuditEventType("development.bootstrap"), "Created initial playlist");
   assert.equal(formatAuditEventType("device.disabled"), "Disabled device");
   assert.deepEqual(formatAuditDetails({
