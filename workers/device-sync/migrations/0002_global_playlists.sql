@@ -3,7 +3,7 @@ ALTER TABLE devices DROP COLUMN manifest_key;
 CREATE TABLE IF NOT EXISTS playlists (
   playlist_id TEXT NOT NULL,
   revision TEXT NOT NULL,
-  rotation_interval TEXT NOT NULL,
+  rotation_interval TEXT NOT NULL CHECK (rotation_interval IN ('30s', '60s', '90s', '120s', '5m')),
   created_at INTEGER NOT NULL,
   PRIMARY KEY (playlist_id, revision)
 );

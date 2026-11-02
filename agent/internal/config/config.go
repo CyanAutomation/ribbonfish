@@ -77,6 +77,9 @@ func (c OutputConfig) EffectiveFit() string {
 
 // Interval parses the globally active playlist's rotation interval.
 func (p PlaylistConfig) Interval() (time.Duration, error) {
+	if !IsSupportedRotationInterval(p.RotationInterval) {
+		return 0, fmt.Errorf("playlist %q rotation_interval must be one of 30s, 60s, 90s, 120s, or 5m", p.ID)
+	}
 	interval, err := time.ParseDuration(p.RotationInterval)
 	if err != nil {
 		return 0, fmt.Errorf("playlist %q rotation_interval: %w", p.ID, err)
@@ -85,6 +88,26 @@ func (p PlaylistConfig) Interval() (time.Duration, error) {
 		return 0, fmt.Errorf("playlist %q rotation_interval must be greater than zero", p.ID)
 	}
 	return interval, nil
+}
+
+const (
+	RotationInterval30Seconds  = "30s"
+	RotationInterval60Seconds  = "60s"
+	RotationInterval90Seconds  = "90s"
+	RotationInterval120Seconds = "120s"
+	RotationInterval5Minutes   = "5m"
+)
+
+const DefaultRotationInterval = "90s"
+
+func IsSupportedRotationInterval(value string) bool {
+	switch value {
+	case RotationInterval30Seconds, RotationInterval60Seconds, RotationInterval90Seconds,
+		RotationInterval120Seconds, RotationInterval5Minutes:
+		return true
+	default:
+		return false
+	}
 }
 
 // Validate checks the complete local configuration contract. Asset files are
@@ -221,6 +244,10 @@ func Load(path string) (Config, error) {
 		if value := strings.TrimSpace(os.Getenv("RIBBONFISH_DRM_DEVICE")); value != "" {
 			cfg.Output.Device = value
 		}
+	}
+	if parsed, parseErr := time.ParseDuration(cfg.Playlist.RotationInterval); parseErr == nil && parsed > 0 &&
+		!IsSupportedRotationInterval(cfg.Playlist.RotationInterval) {
+		cfg.Playlist.RotationInterval = DefaultRotationInterval
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, fmt.Errorf("validate config: %w", err)

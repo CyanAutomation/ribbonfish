@@ -105,6 +105,10 @@ before deploying a Worker with this mode enabled. Shadow suggestions are not
 validated incident detection, and should not be used to suppress captures until
 representative, labelled histories have been evaluated.
 
+Migration `0011_interval_defaults.sql` sets existing capture targets to 24 hours
+and playlist rotations to 90 seconds. It assigns the active playlist a new
+revision token so agents fetch the migrated rotation interval.
+
 `init:local` is only for a fresh local database. It applies `schema.sql` and
 records the migrations already represented by that schema. Production schema
 changes use `npm run migrate:management`.
@@ -155,8 +159,8 @@ npx wrangler queues create ribbonfish-capture-dead-letter --config wrangler.mana
 ```
 
 Then apply migrations `0005_webpage_capture.sql`, `0006_asset_reconciliation.sql`,
-and `0007_capture_validators.sql` with `npm run migrate:management` before
-deploying the corresponding code. This implementation has not been deployed to
+`0007_capture_validators.sql`, and `0011_interval_defaults.sql` with
+`npm run migrate:management` before deploying the corresponding code. This implementation has not been deployed to
 production; enable capture only after the Browser Run binding and account quotas
 are available.
 
@@ -173,6 +177,7 @@ in Wrangler's local mode.
 | --- | --- |
 | `GET /admin/` | Browser management panel |
 | `GET /admin/api/overview` | Devices, playlist revisions, current pointer, missing active assets, unresolved asset integrity issues, and recent audit events |
+| `GET /admin/api/intervals` | Supported screenshot and rotation interval values and defaults |
 | `GET /admin/api/devices/{device_id}/health` | Latest validated report, current derived health status, and up to 50 recent health transitions |
 | `GET /admin/api/devices/{device_id}/health-history?limit=100&since={unix_ms}` | Five-minute health samples and health transitions; default window is 30 days, maximum 500 rows per stream |
 | `GET /admin/api/enrollment-requests` | List unexpired pending device requests, including the physical fingerprint |
@@ -185,17 +190,29 @@ in Wrangler's local mode.
 | `GET /admin/api/assets/{sha256}` | Preview a PNG that is referenced by a playlist revision |
 | `POST /admin/api/playlists` | Stage an immutable playlist revision with PNG assets and/or webpage captures |
 | `POST /admin/api/captures/{capture_id}/run` | Queue a capture now; normal queue, rate, and budget controls still apply |
+| `PATCH /admin/api/captures/{capture_id}` | Change a target interval; body: `{"capture_interval_seconds":21600}` |
 | `GET /admin/api/playlists/{playlist_id}/{revision}` | Read a revision and its ordered image and capture references for editing |
 | `DELETE /admin/api/playlists/{playlist_id}` | Delete all revisions of an inactive playlist and its D1 image references; the active playlist is protected |
 | `PUT /admin/api/active-playlist` | Activate or roll back to an existing revision; body: `{"playlist_id":"operations","revision":"r-…"}` |
 | `GET /healthz` | Minimal readiness check; returns 503 if the active playlist or any referenced R2 object is missing |
+
+`GET /admin/api/intervals` returns the five supported values and defaults:
+capture values are 900, 1800, 3600, 21600, and 86400 seconds (default 86400);
+rotation values are `30s`, `60s`, `90s`, `120s`, and `5m` (default `90s`).
+Playlist staging accepts `rotation_interval` and defaults it to `90s` when
+omitted. New webpage targets accept `capture_interval_seconds` and default it
+to 86400 when omitted. Use `PATCH /admin/api/captures/{capture_id}` to update a
+saved target; the target is shared by every playlist revision that references
+it. To change rotation, stage a new playlist revision with the desired value
+and activate it with `PUT /admin/api/active-playlist`. Read current values
+through the overview, playlist revision, or device playlist APIs.
 
 Playlist staging verifies every referenced object exists in R2 with the declared
 size. A webpage slot references a reusable URL/viewport capture target and
 starts with a bundled holding PNG. The first scheduled capture runs after the
 playlist is activated. The Worker only schedules targets referenced by the
 active playlist. Capture settings accept public HTTPS URLs without embedded
-credentials, intervals from 60 seconds to 30 days, and viewports up to
+credentials, intervals of 900, 1800, 3600, 21600, or 86400 seconds, and viewports up to
 3840×2160. Authenticated pages and browser interaction are not supported.
 
 Activation updates the single global pointer only after a revision exists.

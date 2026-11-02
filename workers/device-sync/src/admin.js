@@ -1,4 +1,10 @@
-import { isValidPositiveDuration } from "./duration.js";
+import {
+  DEFAULT_CAPTURE_INTERVAL_SECONDS,
+  DEFAULT_ROTATION_INTERVAL,
+  intervalCatalog,
+  isSupportedCaptureInterval,
+  isSupportedRotationInterval,
+} from "./intervals.js";
 import { deriveDeviceHealth } from "./device-health.js";
 import { isPNG, MAX_ASSET_BYTES, storePngAsset } from "./asset-store.js";
 import { validateCaptureSettings, validateCaptureTargetURL } from "./capture.js";
@@ -67,6 +73,11 @@ export async function handleAdminRequest(request, env, ctx) {
     if (url.pathname === "/admin/api/overview") {
       if (request.method !== "GET") return methodNotAllowed("GET");
       return jsonResponse(await readOverview(env));
+    }
+
+    if (url.pathname === "/admin/api/intervals") {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      return jsonResponse(intervalCatalog());
     }
 
     if (url.pathname === "/admin/api/capture-decisions") {
@@ -153,6 +164,12 @@ export async function handleAdminRequest(request, env, ctx) {
       }
       await confirmCaptureSkip(captureSkipMatch[1].toLowerCase(), data.due_at, env, actorID);
       return jsonResponse({ confirmed: true, due_at: data.due_at }, 202);
+    }
+
+    const captureIntervalMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})$/i);
+    if (captureIntervalMatch) {
+      if (request.method !== "PATCH") return methodNotAllowed("PATCH");
+      return await updateCaptureInterval(request, captureIntervalMatch[1].toLowerCase(), env, actorID);
     }
 
     const captureRunMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/run$/i);
@@ -677,9 +694,10 @@ async function createPlaylist(request, env, actorID, ctx) {
   const data = await readJSON(request);
   const assets = data?.assets ?? [];
   const captures = data?.captures ?? [];
+  const rotationInterval = Object.hasOwn(data ?? {}, "rotation_interval") ? data.rotation_interval : DEFAULT_ROTATION_INTERVAL;
   if (!hasOnlyKeys(data, ["id", "rotation_interval", "assets", "captures"]) ||
-      !Object.hasOwn(data, "id") || !Object.hasOwn(data, "rotation_interval") ||
-      !ID_PATTERN.test(data.id ?? "") || !isValidPositiveDuration(data.rotation_interval) ||
+      !Object.hasOwn(data, "id") ||
+      !ID_PATTERN.test(data.id ?? "") || !isSupportedRotationInterval(rotationInterval) ||
       !Array.isArray(assets) || !Array.isArray(captures) || assets.length + captures.length < 1 ||
       assets.length + captures.length > 256) {
     throw new HTTPError(400, "Add a playlist ID, a valid rotation interval and at least one image or webpage (up to 256 items).");
@@ -697,12 +715,12 @@ async function createPlaylist(request, env, actorID, ctx) {
   }
 
   const captureTargets = [];
-  for (const capture of captures) captureTargets.push(await resolveCaptureTarget(capture, env));
+  for (const capture of captures) captureTargets.push(await resolveCaptureTarget(capture, env, actorID));
 
   const revision = "r-" + crypto.randomUUID().replaceAll("-", "");
   const statements = [env.DB.prepare(
     "INSERT INTO playlists (playlist_id, revision, rotation_interval, created_at) VALUES (?, ?, ?, ?)",
-  ).bind(data.id, revision, data.rotation_interval, Date.now())];
+  ).bind(data.id, revision, rotationInterval, Date.now())];
   for (const [position, asset] of assets.entries()) {
     statements.push(markAssetLiveStatement(env.DB, asset.sha256, asset.size, Date.now()));
     statements.push(env.DB.prepare(
@@ -740,11 +758,34 @@ async function createPlaylist(request, env, actorID, ctx) {
   return jsonResponse({
     id: data.id,
     revision,
-    rotation_interval: data.rotation_interval,
+    rotation_interval: rotationInterval,
     asset_count: assets.length,
     capture_count: captureTargets.length,
     ...(captureTargets.length ? { captures: captureTargets } : {}),
   }, 201);
+}
+
+async function updateCaptureInterval(request, captureID, env, actorID) {
+  const data = await readJSON(request);
+  if (!hasExactKeys(data, ["capture_interval_seconds"]) || !isSupportedCaptureInterval(data.capture_interval_seconds)) {
+    throw new HTTPError(400, "capture_interval_seconds must be one of the supported values: 900, 1800, 3600, 21600, or 86400.");
+  }
+  const existing = await env.DB.prepare(
+    "SELECT capture_id, last_success_at FROM capture_targets WHERE capture_id = ? AND enabled = 1",
+  ).bind(captureID).first();
+  if (!existing) throw new HTTPError(404, "That webpage capture is not available.");
+  const now = Date.now();
+  const nextDueAt = existing.last_success_at == null
+    ? now : Math.max(now, existing.last_success_at + data.capture_interval_seconds * 1000);
+  const batch = await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE capture_targets SET capture_interval_seconds = ?, next_due_at = ? WHERE capture_id = ? AND enabled = 1",
+    ).bind(data.capture_interval_seconds, nextDueAt, captureID),
+    auditStatement(env, actorID, "capture.interval_updated", "capture", captureID,
+      { capture_interval_seconds: data.capture_interval_seconds }, { onlyWhenPreviousChanged: true }),
+  ]);
+  if (batch[0]?.meta?.changes !== 1) throw new HTTPError(404, "That webpage capture is not available.");
+  return jsonResponse({ capture_id: captureID, capture_interval_seconds: data.capture_interval_seconds });
 }
 
 async function readPlaylistRevision(playlistID, revision, env) {
@@ -779,7 +820,7 @@ async function readPlaylistRevision(playlistID, revision, env) {
   return jsonResponse(result);
 }
 
-async function resolveCaptureTarget(input, env) {
+async function resolveCaptureTarget(input, env, actorID) {
   if (hasExactKeys(input, ["capture_id"])) {
     const existing = await env.DB.prepare(
       "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size " +
@@ -800,7 +841,8 @@ async function resolveCaptureTarget(input, env) {
       placeholder_size: existing.placeholder_size,
     };
   }
-  if (!hasExactKeys(input, ["url", "capture_interval_seconds", "viewport"])) {
+  if (!hasOnlyKeys(input, ["url", "capture_interval_seconds", "viewport"]) ||
+      !Object.hasOwn(input ?? {}, "url") || !Object.hasOwn(input ?? {}, "viewport")) {
     throw new HTTPError(400, "A webpage capture needs a URL, capture interval and viewport.");
   }
 
@@ -808,7 +850,11 @@ async function resolveCaptureTarget(input, env) {
   let settings;
   try {
     url = validateCaptureTargetURL(input.url, env.CAPTURE_ALLOWED_HOSTS);
-    settings = validateCaptureSettings(input);
+    const captureSettings = { ...input };
+    if (!Object.hasOwn(input, "capture_interval_seconds")) {
+      captureSettings.capture_interval_seconds = DEFAULT_CAPTURE_INTERVAL_SECONDS;
+    }
+    settings = validateCaptureSettings(captureSettings);
   } catch (error) {
     throw new HTTPError(400, error.message);
   }
@@ -819,14 +865,21 @@ async function resolveCaptureTarget(input, env) {
     wait_until: "domcontentloaded",
   }));
   const existing = await env.DB.prepare(
-    "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size " +
+    "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, last_success_at " +
     "FROM capture_targets WHERE variant_key = ?",
   ).bind(variantKey).first();
   if (existing) {
-    const interval = Math.min(existing.capture_interval_seconds, settings.capture_interval_seconds);
+    const interval = settings.capture_interval_seconds;
     if (interval !== existing.capture_interval_seconds) {
-      await env.DB.prepare("UPDATE capture_targets SET capture_interval_seconds = ? WHERE capture_id = ?")
-        .bind(interval, existing.capture_id).run();
+      const now = Date.now();
+      const nextDueAt = existing.last_success_at == null
+        ? now : Math.max(now, existing.last_success_at + interval * 1000);
+      await env.DB.batch([
+        env.DB.prepare("UPDATE capture_targets SET capture_interval_seconds = ?, next_due_at = ? WHERE capture_id = ?")
+          .bind(interval, nextDueAt, existing.capture_id),
+        auditStatement(env, actorID, "capture.interval_updated", "capture", existing.capture_id,
+          { capture_interval_seconds: interval }, { onlyWhenPreviousChanged: true }),
+      ]);
     }
     return {
       capture_id: existing.capture_id,

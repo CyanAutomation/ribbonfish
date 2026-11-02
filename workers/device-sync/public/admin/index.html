@@ -69,7 +69,7 @@
           <form id="playlist-form" class="form-grid">
           <p id="playlist-form-help" class="field--wide muted">Add PNG images or page URLs. Images and screenshots can be reused across playlists. Saved versions stay available until you delete the playlist.</p>
           <label>Playlist ID <input class="field-control" name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" placeholder="e.g. operations"></label>
-          <label>Show each item for <input class="field-control" name="rotation_interval" required value="15s" placeholder="15s"><span class="field-hint">Use a duration such as 15s or 2m.</span></label>
+          <label>Show each item for <select class="field-control" name="rotation_interval" required><option value="90s">90 seconds</option></select><span class="field-hint">Choose a supported display interval.</span></label>
           <fieldset id="playlist-current-assets" class="field--wide asset-selection" hidden>
             <legend>Images in this version</legend>
             <p class="muted">Clear an image to remove it from the new version.</p>
@@ -84,7 +84,7 @@
           <label class="field--wide">Add page URLs <textarea class="field-control" name="capture_urls" rows="3" placeholder="https://status.example.com&#10;https://example.com/operations" aria-describedby="page-url-help"></textarea><span id="page-url-help" class="field-hint">Use one public HTTPS URL per line. A placeholder image appears until the first screenshot is ready.</span></label>
           <fieldset id="screenshot-settings" class="field--wide screenshot-settings" disabled hidden>
             <legend>Screenshot settings</legend>
-            <label>Screenshot interval (seconds) <input class="field-control" name="capture_interval_seconds" type="number" value="300" min="60" max="2592000" step="1" required><span class="field-hint">Choose at least 60 seconds.</span></label>
+            <label>Screenshot interval <select class="field-control" name="capture_interval_seconds" required><option value="86400">24 hours</option></select><span class="field-hint">Choose a supported screenshot interval.</span></label>
             <label>Screenshot size <span class="viewport-inputs"><input class="field-control" name="viewport_width" type="number" value="1920" min="320" max="3840" step="1" aria-label="Screenshot width in pixels" required><span aria-hidden="true">×</span><input class="field-control" name="viewport_height" type="number" value="1080" min="240" max="2160" step="1" aria-label="Screenshot height in pixels" required></span><span class="field-hint">Width × height in pixels.</span></label>
           </fieldset>
           <div class="field--wide form-actions">

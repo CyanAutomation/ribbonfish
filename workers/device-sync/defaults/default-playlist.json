@@ -1,6 +1,6 @@
 {
   "id": "default",
-  "rotation_interval": "15s",
+  "rotation_interval": "90s",
   "assets": [
     { "path": "../../../agent/defaults/assets/deployment-pipeline.png", "sha256": "8497f6aeb8d5ad107929ca4d84ea5ed7508811411cb709412e2ff2c5dabff519", "size": 18107 },
     { "path": "../../../agent/defaults/assets/operations-overview.png", "sha256": "790214944b6c953c38acb0b7b0bb7e380546303e9e9a85ed0133b4dab22c6a67", "size": 18816 },

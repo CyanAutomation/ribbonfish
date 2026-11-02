@@ -172,6 +172,31 @@ test("manual capture run normalizes uppercase UUIDs before the database lookup",
   }
 });
 
+test("capture interval API updates a stored target, next due time, and audit record", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const captureID = created.body.captures[0].capture_id;
+    sqlite.prepare("UPDATE capture_targets SET last_success_at = ? WHERE capture_id = ?").run(Date.now() - 1000, captureID);
+    const response = await handleAdminRequest(await request(`/admin/api/captures/${captureID}`, {
+      method: "PATCH", body: { capture_interval_seconds: 21600 },
+    }), env);
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.deepEqual(await response.json(), { capture_id: captureID, capture_interval_seconds: 21600 });
+    const target = sqlite.prepare("SELECT capture_interval_seconds, next_due_at FROM capture_targets WHERE capture_id = ?")
+      .get(captureID);
+    assert.equal(target.capture_interval_seconds, 21600);
+    assert.ok(target.next_due_at >= Date.now() + 21_590_000);
+    const event = sqlite.prepare("SELECT event_type, metadata_json FROM audit_events WHERE subject_id = ?")
+      .get(captureID);
+    assert.equal(event.event_type, "capture.interval_updated");
+    assert.deepEqual(JSON.parse(event.metadata_json), { capture_interval_seconds: 21600 });
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("a skip approval for a stale due time cannot suppress a screenshot", async () => {
   const sqlite = await freshDatabase();
   try {
@@ -200,16 +225,16 @@ test("a skip approval for a stale due time cannot suppress a screenshot", async 
   }
 });
 
-async function createCapturePlaylist(env, url = "https://example.com/status", ctx) {
+async function createCapturePlaylist(env, url = "https://example.com/status", ctx, captureInterval = 900) {
   const response = await handleAdminRequest(await request("/admin/api/playlists", {
     method: "POST",
     body: {
       id: "operations",
-      rotation_interval: "15s",
+      rotation_interval: "90s",
       assets: [],
       captures: [{
         url,
-        capture_interval_seconds: 60,
+        ...(captureInterval === null ? {} : { capture_interval_seconds: captureInterval }),
         viewport: { width: 1280, height: 720 },
       }],
     },
@@ -235,9 +260,10 @@ test("saving a staged webpage queues its first capture and activation serves the
         });
       },
     });
-    const created = await createCapturePlaylist(env);
+    const created = await createCapturePlaylist(env, undefined, undefined, null);
     assert.equal(created.response.status, 201, JSON.stringify(created.body));
     assert.equal(created.body.capture_count, 1);
+    assert.equal(sqlite.prepare("SELECT capture_interval_seconds FROM capture_targets").get().capture_interval_seconds, 86400);
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM playlist_capture_items").get().count, 1);
     assert.equal(messages.length, 1, "saving a playlist should queue the initial capture before activation");
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM active_playlist").get().count, 0);
@@ -340,11 +366,11 @@ test("initial capture dispatch respects the pending limit and drains staged work
       method: "POST",
       body: {
         id: "operations",
-        rotation_interval: "15s",
+        rotation_interval: "90s",
         assets: [],
         captures: [
-          { url: "https://example.com/one", capture_interval_seconds: 60, viewport: { width: 1280, height: 720 } },
-          { url: "https://example.com/two", capture_interval_seconds: 60, viewport: { width: 1280, height: 720 } },
+          { url: "https://example.com/one", capture_interval_seconds: 900, viewport: { width: 1280, height: 720 } },
+          { url: "https://example.com/two", capture_interval_seconds: 900, viewport: { width: 1280, height: 720 } },
         ],
       },
     }), env);
@@ -382,7 +408,7 @@ test("saving another revision reuses a recent screenshot without queueing a dupl
       method: "POST",
       body: {
         id: "operations-copy",
-        rotation_interval: "15s",
+        rotation_interval: "90s",
         assets: [],
         captures: [{ capture_id: first.body.captures[0].capture_id }],
       },

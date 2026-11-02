@@ -62,7 +62,7 @@ func TestRunStopsActivePlaybackOnCancellation(t *testing.T) {
 	dir := t.TempDir()
 	writeMainPNG(t, filepath.Join(dir, "asset.png"), color.RGBA{G: 180, A: 255})
 	configPath := filepath.Join(dir, "config.json")
-	body := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"directory":"frames"},"playlist":{"id":"p","rotation_interval":"1h","assets":[{"path":"asset.png"}]},"displays":[{"id":"left"}]}`
+	body := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"directory":"frames"},"playlist":{"id":"p","rotation_interval":"5m","assets":[{"path":"asset.png"}]},"displays":[{"id":"left"}]}`
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestRunUsesConfiguredSimulatorMode(t *testing.T) {
 	dir := t.TempDir()
 	writeMainPNG(t, filepath.Join(dir, "asset.png"), color.RGBA{G: 180, A: 255})
 	configPath := filepath.Join(dir, "config.json")
-	body := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"backend":"simulator","directory":"frames","fit":"contain"},"playlist":{"id":"p","rotation_interval":"1h","assets":[{"path":"asset.png"}]},"displays":[{"id":"left","mode":"4x2@60"}]}`
+	body := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"backend":"simulator","directory":"frames","fit":"contain"},"playlist":{"id":"p","rotation_interval":"5m","assets":[{"path":"asset.png"}]},"displays":[{"id":"left","mode":"4x2@60"}]}`
 	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestCheckDRMDisplaysMatchesConnectedConfiguredConnector(t *testing.T) {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(dir, "config.json")
-	configBody := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"backend":"drm","device":"DEVICE_PATH","fit":"contain"},"playlist":{"id":"default","rotation_interval":"15s","assets":[{"path":"asset.png"}]},"displays":[{"id":"display-main","connector":"HDMI-A-1","mode":"1920x1080@60"}]}`
+	configBody := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"backend":"drm","device":"DEVICE_PATH","fit":"contain"},"playlist":{"id":"default","rotation_interval":"90s","assets":[{"path":"asset.png"}]},"displays":[{"id":"display-main","connector":"HDMI-A-1","mode":"1920x1080@60"}]}`
 	configBody = strings.Replace(configBody, "DEVICE_PATH", devicePath, 1)
 	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
 		t.Fatal(err)
@@ -395,7 +395,7 @@ func TestCheckDRMDisplaysAcceptsStableByPathAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(dir, "config.json")
-	configBody := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"backend":"drm","device":"DEVICE_PATH","fit":"contain"},"playlist":{"id":"default","rotation_interval":"15s","assets":[{"path":"asset.png"}]},"displays":[{"id":"display-main","connector":"HDMI-A-1","mode":"preferred"}]}`
+	configBody := `{"version":2,"log_level":"info","cache":{"directory":"cache","max_bytes":1024},"output":{"backend":"drm","device":"DEVICE_PATH","fit":"contain"},"playlist":{"id":"default","rotation_interval":"90s","assets":[{"path":"asset.png"}]},"displays":[{"id":"display-main","connector":"HDMI-A-1","mode":"preferred"}]}`
 	configBody = strings.Replace(configBody, "DEVICE_PATH", devicePath, 1)
 	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
 		t.Fatal(err)
@@ -447,7 +447,7 @@ func TestRunSyncLoopPersistsAndActivatesVerifiedContent(t *testing.T) {
 		LogLevel: "info",
 		Cache:    config.CacheConfig{Directory: filepath.Join(dir, "cache"), MaxBytes: 1 << 20},
 		Output:   config.OutputConfig{Backend: "simulator", Directory: filepath.Join(dir, "frames"), Fit: "contain"},
-		Playlist: config.PlaylistConfig{ID: "welcome", RotationInterval: "1h", Assets: []config.AssetConfig{{Path: oldPath}}},
+		Playlist: config.PlaylistConfig{ID: "welcome", RotationInterval: "5m", Assets: []config.AssetConfig{{Path: oldPath}}},
 		Displays: []config.DisplayConfig{{ID: "screen-main", Mode: "4x4"}},
 	}
 	store, err := cache.NewFileStore(cfg.Cache.Directory, cfg.Cache.MaxBytes)
@@ -482,12 +482,12 @@ func TestRunSyncLoopPersistsAndActivatesVerifiedContent(t *testing.T) {
 		t.Fatalf("cache digest = %q, want calculated digest", asset.SHA256)
 	}
 	candidate := cfg
-	candidate.Playlist = config.PlaylistConfig{ID: "welcome", RotationInterval: "1h", Assets: []config.AssetConfig{{Path: asset.Path, SHA256: asset.SHA256}}}
+	candidate.Playlist = config.PlaylistConfig{ID: "welcome", RotationInterval: "5m", Assets: []config.AssetConfig{{Path: asset.Path, SHA256: asset.SHA256}}}
 	snapshot := syncer.PlaylistSnapshot{
 		Version:          2,
 		Revision:         "remote-3",
 		ID:               "welcome",
-		RotationInterval: "1h",
+		RotationInterval: "5m",
 		Assets:           []syncer.PlaylistAsset{{SHA256: asset.SHA256, Size: asset.Bytes}},
 	}
 	snapshotPath := filepath.Join(cfg.Cache.Directory, "last-good.json")
@@ -845,8 +845,8 @@ func TestBundledProfilesLoadWithVerifiedSharedOfflinePlaylist(t *testing.T) {
 			}
 		})
 	}
-	if sharedPlaylist == nil || sharedPlaylist.ID != "default" || sharedPlaylist.RotationInterval != "15s" {
-		t.Fatalf("bundled playlist = %#v, want id default and 15s rotation", sharedPlaylist)
+	if sharedPlaylist == nil || sharedPlaylist.ID != "default" || sharedPlaylist.RotationInterval != "90s" {
+		t.Fatalf("bundled playlist = %#v, want id default and 90s rotation", sharedPlaylist)
 	}
 }
 

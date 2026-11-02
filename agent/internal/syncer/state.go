@@ -124,6 +124,10 @@ func LoadSnapshot(filename string, hardware config.Config, store cache.Store) (U
 	if saved.Version != 2 || saved.ETag != `"`+saved.Snapshot.Revision+`"` {
 		return Update{}, errors.New("last-good snapshot has an unsupported state version or ETag")
 	}
+	rotationMigrated := !config.IsSupportedRotationInterval(saved.Snapshot.RotationInterval)
+	if rotationMigrated {
+		saved.Snapshot.RotationInterval = config.DefaultRotationInterval
+	}
 	if err := validatePlaylistSnapshot(saved.Snapshot, hardware); err != nil {
 		return Update{}, fmt.Errorf("validate last-good snapshot: %w", err)
 	}
@@ -146,7 +150,13 @@ func LoadSnapshot(filename string, hardware config.Config, store cache.Store) (U
 	if err != nil {
 		return Update{}, err
 	}
-	return Update{Config: candidate, Snapshot: saved.Snapshot, ETag: saved.ETag, Changed: true}, nil
+	update := Update{Config: candidate, Snapshot: saved.Snapshot, ETag: saved.ETag, Changed: true}
+	if rotationMigrated {
+		if err := SaveSnapshot(filename, update); err != nil {
+			return Update{}, fmt.Errorf("migrate last-good rotation interval: %w", err)
+		}
+	}
+	return update, nil
 }
 
 func decodeLastGoodSnapshot(data []byte, hardware config.Config) (savedSnapshot, error) {
@@ -218,6 +228,9 @@ func migrateLegacyManifest(data []byte, saved legacySavedSnapshot, hardware conf
 		}
 		if _, exists := playlists[display.PlaylistID]; !exists {
 			return PlaylistSnapshot{}, fmt.Errorf("legacy display %q references unknown playlist %q", display.ID, display.PlaylistID)
+		}
+		if !config.IsSupportedRotationInterval(display.RotationInterval) {
+			display.RotationInterval = config.DefaultRotationInterval
 		}
 		interval, err := time.ParseDuration(display.RotationInterval)
 		if err != nil {

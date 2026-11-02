@@ -287,7 +287,7 @@ test("approved physical identity can immediately read the active playlist with i
     sqlite.prepare(
       "INSERT INTO enrollment_requests (request_id, device_id, public_key, fingerprint, created_at, last_seen_at, expires_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
     ).run(requestID, "pi-office", publicKeyText, fingerprint, 100, 200, Date.now() + 60_000);
-    sqlite.prepare("INSERT INTO playlists VALUES (?, ?, ?, ?)").run("welcome", "r-welcome", "15s", 10);
+    sqlite.prepare("INSERT INTO playlists VALUES (?, ?, ?, ?)").run("welcome", "r-welcome", "90s", 10);
     sqlite.prepare("INSERT INTO playlist_assets VALUES (?, ?, ?, ?, ?)").run("welcome", "r-welcome", 0, digest, 4);
     sqlite.prepare("INSERT INTO active_playlist VALUES (1, ?, ?)").run("welcome", "r-welcome");
 
