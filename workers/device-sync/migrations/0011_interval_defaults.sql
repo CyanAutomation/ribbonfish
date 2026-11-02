@@ -1,3 +1,6 @@
+-- The active playlist revision and its capture items change together.
+PRAGMA defer_foreign_keys = true;
+
 -- Rebase stored configuration onto the supported five-value interval contract.
 UPDATE capture_targets
 SET capture_interval_seconds = 86400,
@@ -10,7 +13,7 @@ UPDATE playlists SET rotation_interval = '90s';
 
 -- A changed active rotation interval must produce a new revision token so devices
 -- cannot receive a stale 304 response for their previously cached playlist.
-CREATE TEMP TABLE interval_active_revision AS
+CREATE TABLE interval_active_revision AS
 SELECT playlist_id, revision AS old_revision,
        'r-' || lower(hex(randomblob(16))) AS new_revision
 FROM active_playlist WHERE singleton = 1;
