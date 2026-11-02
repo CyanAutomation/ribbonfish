@@ -275,7 +275,7 @@ export async function probeCaptureValidator(target, env, fetcher = globalThis.fe
     let unchanged = response.status === 304 && hasStoredValidator;
     let outcome;
     if (response.status === 304) {
-      outcome = hasStoredValidator ? "changed" : "no_stored_validator";
+      outcome = hasStoredValidator ? "unchanged" : "no_stored_validator";
     } else if (response.status >= 200 && response.status < 300 && hasStoredValidator) {
       const hasComparable = Boolean((target.validator_etag && etag) || (target.validator_last_modified && lastModified));
       unchanged = hasComparable &&
