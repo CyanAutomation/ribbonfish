@@ -63,6 +63,26 @@ test("management page starts, renders its data, and dismisses errors", async () 
     assert.deepEqual([...rotation.options].map((option) => option.value), ["30s", "60s", "90s", "120s", "5m"]);
     assert.equal(rotation.value, "90s");
     assert.ok(window.document.querySelector("#sites-section"));
+    assert.equal(window.document.querySelector("#sites-section").hidden, true);
+    window.document.querySelector('a[href="#sites-section"]').click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(window.document.querySelector("#sites-section").hidden, false);
+    assert.equal(window.document.querySelector("#device-section").hidden, true);
+    window.document.querySelector("#dashboard-home").click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(window.document.querySelector("#sites-section").hidden, true);
+    const analysisLink = window.document.querySelector('a[href="#analysis-section"]');
+    const analysisDialog = window.document.querySelector("#analysis-dialog");
+    analysisLink.focus();
+    analysisLink.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(analysisDialog.open, true);
+    assert.equal(window.document.querySelector("#dashboard-tiles").hidden, true);
+    assert.equal(window.document.activeElement.id, "close-analysis");
+    analysisDialog.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(analysisDialog.open, false);
+    assert.equal(window.document.activeElement, analysisLink);
     assert.match(window.document.querySelector("#capture-target-list").textContent, /https:\/\/status.example\//);
     assert.match(window.document.querySelector("#capture-target-list").textContent, /Schedule review needed/);
     const scheduleButton = [...window.document.querySelectorAll("#capture-target-list button")]
