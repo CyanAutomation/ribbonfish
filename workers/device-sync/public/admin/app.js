@@ -286,11 +286,48 @@ function playlistVersionKey(playlist) {
   return JSON.stringify([playlist.playlist_id, playlist.revision]);
 }
 
+function captureURLKey(url) {
+  try { return new URL(url).href; } catch { return url.trim(); }
+}
+
 function syncScreenshotSettings() {
   const settings = document.querySelector("#screenshot-settings");
-  const visible = hasPageURLs(document.querySelector('[name="capture_urls"]').value);
+  const urls = parsePageURLs(document.querySelector('[name="capture_urls"]').value);
+  const visible = urls.length > 0;
   settings.hidden = !visible;
   settings.disabled = !visible;
+  const intervalContainer = document.querySelector("#new-capture-intervals");
+  const selectedByURL = new Map();
+  [...intervalContainer.querySelectorAll("select")].forEach((select) => {
+    if (!selectedByURL.has(select.dataset.urlKey)) selectedByURL.set(select.dataset.urlKey, select.value);
+  });
+  intervalContainer.replaceChildren();
+  urls.forEach((url, index) => {
+    const row = node("div", undefined, "new-capture-interval-option");
+    const label = node("label", undefined, "new-capture-interval-option__label");
+    label.append(node("span", url));
+    const select = node("select");
+    select.className = "field-control new-capture-interval";
+    select.dataset.urlIndex = String(index);
+    select.dataset.urlKey = captureURLKey(url);
+    select.setAttribute("aria-label", `Screenshot interval for ${url}`);
+    const options = intervalDefinitions?.capture.options ?? [];
+    for (const option of options) {
+      const item = node("option", option.label);
+      item.value = String(option.value);
+      select.append(item);
+    }
+    const selected = selectedByURL.get(select.dataset.urlKey) ?? String(intervalDefinitions?.capture.default ?? 86400);
+    select.value = options.some((option) => String(option.value) === selected)
+      ? selected : String(intervalDefinitions?.capture.default ?? 86400);
+    select.addEventListener("change", () => {
+      intervalContainer.querySelectorAll("select").forEach((other) => {
+        if (other.dataset.urlKey === select.dataset.urlKey) other.value = select.value;
+      });
+    });
+    row.append(label, select);
+    intervalContainer.append(row);
+  });
 }
 
 function resetPlaylistEditor() {
@@ -367,7 +404,7 @@ async function startPlaylistEdit(playlist) {
       preview.loading = "lazy";
       preview.decoding = "async";
       preview.addEventListener("error", () => { preview.hidden = true; }, { once: true });
-      const caption = node("span", `Keep page ${index + 1} · ${capture.url}`);
+      const caption = node("span", `Keep page ${index + 1} · ${capture.url} · ${formatCaptureInterval(capture.capture_interval_seconds)}; schedule shared wherever this page and screenshot size are used`);
       label.append(checkbox, preview, caption);
       captureList.append(label);
     });
@@ -548,6 +585,7 @@ function renderCaptureTargets(targets, decisions = []) {
     const metadata = node("details", undefined, "capture-target__details");
     metadata.append(node("summary", "Schedule and screenshot details"));
     metadata.append(node("p", `${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`, "muted"));
+    metadata.append(node("p", "This schedule is shared by every playlist that uses this page at the same screenshot size.", "field-hint"));
     const intervalLabel = node("label", "Screenshot interval ");
     const intervalSelect = node("select");
     intervalSelect.className = "field-control";
@@ -989,8 +1027,7 @@ async function refresh() {
   intervalDefinitions = intervals;
   populateIntervalSelect(document.querySelector("#playlist-form [name=rotation_interval]"), intervals.rotation.options,
     intervals.rotation.default, (option) => option.value);
-  populateIntervalSelect(document.querySelector("#playlist-form [name=capture_interval_seconds]"), intervals.capture.options,
-    intervals.capture.default, (option) => option.value);
+  syncScreenshotSettings();
   latestOverview = overview;
   renderEnvironment(overview.environment);
   renderHealth(overview.asset_health);
@@ -1023,7 +1060,7 @@ function populateIntervalSelect(select, options, selectedValue, getValue) {
 function resetIntervalSelections(form) {
   if (!intervalDefinitions) return;
   form.elements.namedItem("rotation_interval").value = intervalDefinitions.rotation.default;
-  form.elements.namedItem("capture_interval_seconds").value = String(intervalDefinitions.capture.default);
+  syncScreenshotSettings();
 }
 
 function renderEnvironment(environment) {
@@ -1226,7 +1263,8 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
     capture_id: input.dataset.captureId,
   }));
   const newURLs = parsePageURLs(form.get("capture_urls"));
-  const captureInterval = Number(form.get("capture_interval_seconds"));
+  const newCaptureIntervals = new Map([...document.querySelectorAll(".new-capture-interval")]
+    .map((select) => [Number(select.dataset.urlIndex), Number(select.value)]));
   const viewport = {
     width: Number(form.get("viewport_width")),
     height: Number(form.get("viewport_height")),
@@ -1250,9 +1288,9 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
         id: form.get("id"),
         rotation_interval: form.get("rotation_interval"),
         assets,
-        captures: captures.concat(newURLs.map((url) => ({
+        captures: captures.concat(newURLs.map((url, index) => ({
           url,
-          capture_interval_seconds: captureInterval,
+          capture_interval_seconds: newCaptureIntervals.get(index) ?? intervalDefinitions.capture.default,
           viewport,
         }))),
       }),
