@@ -135,7 +135,7 @@ Wrangler's local D1/R2 emulation.
 See [`workers/device-sync/README.md`](workers/device-sync/README.md) for
 deployment and API details.
 
-The current management Worker uses screenshot Quick Actions, not persistent browser sessions. Capture targets accept public HTTPS URLs without credentials, one of the five supported capture intervals, and bounded viewport sizes. Its production config caps Browser Run time at 9 minutes per UTC day, reserves 45 seconds before each request when usage is unavailable, and spaces requests by at least 10 seconds. These are application limits; confirm the account's plan and Browser Run quotas before enabling production capture. Authenticated pages, cookies, and arbitrary browser interaction are not supported.
+The current management Worker uses screenshot Quick Actions, not persistent browser sessions. Capture targets accept public HTTPS URLs without credentials, one of the five supported capture intervals, and bounded viewport sizes. Its production config caps Browser Run time at 10 minutes per UTC day, matching the Workers Free daily allowance, reserves 60 seconds before each request when usage is unavailable, and spaces requests by at least 10 seconds. The allowance is account-level, so other Browser Run workloads can use part of it first. Authenticated pages, cookies, and arbitrary browser interaction are not supported.
 
 ---
 
@@ -253,7 +253,7 @@ The consumer processes one message and awaits the full browser capture and image
 
 ### Budget and quota controls
 
-- The worker stores observed Browser Run time in D1 and checks the configurable daily budget before starting work. The configured 9-minute daily budget leaves margin below the Browser Run free-plan daily allowance cited during design; verify current account limits before use.
+- The worker stores observed Browser Run time in D1 and checks the configurable daily budget before starting work. Its 10-minute UTC-day cap matches the current Workers Free Browser Run allowance, with a 60-second reserve before each request. Other Browser Run workloads in the account share the allowance.
 - A minimum 10-second request gap protects the Quick Action rate limit. Budget/rate deferrals move jobs to a deferred state until a later Cron tick; queue messages are acknowledged rather than held until the next time window.
 - Pending work is capped at 100 jobs and coalesced to one open job per target. The once-per-minute dispatcher only schedules targets referenced by the active playlist.
 - Transient Browser Run errors retry at most twice after the first attempt, with 60-second and 180-second delays. Terminal errors leave the previous screenshot in place. Failed jobs do not block other targets.
