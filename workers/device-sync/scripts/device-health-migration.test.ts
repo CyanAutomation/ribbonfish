@@ -36,9 +36,9 @@ test("device health migration creates bounded-history tables linked to enrolled 
       .run("event-2", "ribbonfish-1", "instance-1", 2000, "raw.log.line", "ready", null, "{}"), /CHECK constraint failed/);
 
     database.prepare("DELETE FROM devices WHERE device_id = ?").run("ribbonfish-1");
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM device_health_latest").get().count, 0);
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM device_health_samples").get().count, 0);
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM device_health_events").get().count, 0);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM device_health_latest").get()?.count, 0);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM device_health_samples").get()?.count, 0);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM device_health_events").get()?.count, 0);
   } finally {
     database.close();
   }

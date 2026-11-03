@@ -10,6 +10,7 @@ test("site names migration preserves existing capture sites", async () => {
     db.exec("INSERT INTO capture_targets VALUES ('existing', 'https://example.com/');");
     db.exec(await readFile(new URL("../migrations/0014_capture_site_names.sql", import.meta.url), "utf8"));
     const row = db.prepare("SELECT url, name FROM capture_targets WHERE capture_id = ?").get("existing");
+    assert.ok(row);
     assert.equal(row.url, "https://example.com/");
     assert.equal(row.name, null);
   } finally { db.close(); }
