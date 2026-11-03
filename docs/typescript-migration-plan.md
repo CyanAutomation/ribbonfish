@@ -1,6 +1,6 @@
 # TypeScript migration plan
 
-Baseline: `origin/main` at `ee9d8db` (3 November 2026). This plan covers remaining handwritten JavaScript in the device-sync Worker, management UI, and tests. Preserve existing HTTP, database, queue, authentication, and asset contracts. The Go agent, SQL, and generated browser bundle are outside the conversion.
+Planning snapshot: `origin/main` at `e9c4a48` (3 November 2026). This plan covers remaining handwritten JavaScript in the device-sync Worker, management UI, and tests. Preserve existing HTTP, database, queue, authentication, and asset contracts. The Go agent, SQL, and generated browser bundle are outside the conversion.
 
 ## Starting point
 
@@ -8,19 +8,19 @@ The migration is already underway. Shared Worker modules, capture orchestration,
 
 The remaining tracked JavaScript comprises:
 
-- Worker: `src/admin.js` (1,332 lines) and `src/index.js` (552 lines). Both Wrangler configurations use `src/index.js`.
-- Browser: `public/admin/app.js` (1,437 lines). OpenUI integration and the other extracted UI modules are already TypeScript. The esbuild source entry is `app.js`; the published `/admin/app.js` URL and R2 key must remain stable.
+- Worker: `src/admin.js` (1,286 lines) and `src/index.js` (507 lines). Both Wrangler configurations use `src/index.js`.
+- Browser: `public/admin/app.js` (1,431 lines). OpenUI integration and the other extracted UI modules are already TypeScript. The esbuild source entry is `app.js`; the published `/admin/app.js` URL and R2 key must remain stable.
 - Nine `src/*.test.js` files covering the admin UI and API, entry point, capture workflow, enrollment, health, and asset maintenance. JEV tests are already TypeScript.
 
 `npm run typecheck` checks converted tests against declarations emitted from the Worker via `scripts/typecheck-tests.ts`, separating Node globals from Worker globals. Browser-related tests and tests importing the remaining entry points need particular attention when extending this arrangement. The existing `.mts` automation is included by the scripts project; it does not need a second migration.
 
 ## Implementation progress
 
-The shared HTTP error and object-key validators are now typed and used by both JavaScript Worker entry points. The management API client is extracted into TypeScript with focused tests. The three JavaScript entry points and nine JavaScript tests below still require conversion.
+The shared HTTP error, object-key validators, request body, and cryptographic primitives are typed and used by the JavaScript Worker entry points. The management API client is extracted into TypeScript with focused tests. The three JavaScript entry points and nine JavaScript tests below still require conversion.
 
 ## Proposed sequence
 
-1. **Record a reproducible baseline.** With Node 24, run `npm ci`, `npm run typecheck`, `npm run build:admin`, `npm test`, and `npm run check:config` in `workers/device-sync`; also run the `.github/scripts` test commands from their workflows. Record failures and test counts. On 3 November 2026, the baseline passed under Node 24.22.2: 210 Worker tests and seven workflow tests passed, along with typechecking, the admin build, skill validation, and both Wrangler dry-runs. Confirm the working tree is clean after checks and preserve the current test discovery count during each conversion.
+1. **Record a reproducible baseline.** At `e9c4a48`, Node 24.21.0 passed `npm ci`, `npm run typecheck`, `npm run build:admin`, `npm test` (217 tests), `npm run check:config`, and the seven `.github/scripts` tests. Preserve test discovery and record any failures during each conversion. Confirm that checks leave no unintended tracked changes.
 2. **Convert the Worker entry points.** Convert `admin.js` and `index.js` in reviewable slices, starting with explicit types for bindings, request context, route inputs, D1 results, queue and scheduled handlers. Reuse existing domain types and generated management bindings, and narrow untrusted JSON and errors at boundaries. Update imports, both Wrangler `main` paths, and references in tests and documentation. Keep management access checks and `ADMIN_ENABLED` behavior unchanged. Verify the typecheck and both dry-runs, plus the existing admin, enrollment, health, capture, and entry-point tests.
 3. **Convert the browser sources.** Convert `app.js` using the existing strict browser project and existing typed UI modules. Type OpenUI payloads, DOM elements and event handling, API responses, and UI state without changing behavior. Update the esbuild input and source-reading/importing tests; retain the output filename, published URL, and asset key. Run the admin build, UI and startup tests, and exercise representative navigation and management interactions locally.
 4. **Convert remaining tests in batches.** Migrate the nine JavaScript tests by area, updating imports and source paths. Adapt the declaration-based test typecheck or add appropriately scoped projects for browser and Worker-facing tests; ensure every converted test is actually checked without mixing incompatible runtime globals. Run `node --test` under Node 24 and compare discovery and test counts against the baseline. Keep meaningful fixtures and runtime assertions intact; do not weaken contracts merely to satisfy types.
