@@ -32,7 +32,7 @@ test("capture efficiency migration adds readiness and audit fields without relab
       browser_ms_response_header: null,
       browser_ms_reserve: null,
     });
-    assert.equal(database.prepare("SELECT browser_ms_legacy_unknown FROM capture_jobs WHERE job_id = ?").get("existing-job").browser_ms_legacy_unknown, 1);
+    assert.equal(database.prepare("SELECT browser_ms_legacy_unknown FROM capture_jobs WHERE job_id = ?").get("existing-job")?.browser_ms_legacy_unknown, 1);
     assert.deepEqual({ ...database.prepare("SELECT browser_ms, browser_ms_source FROM capture_history WHERE job_id = ?").get("existing-job") }, {
       browser_ms: 45000,
       browser_ms_source: "unknown",

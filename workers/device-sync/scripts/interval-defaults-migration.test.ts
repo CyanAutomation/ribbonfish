@@ -34,20 +34,24 @@ test("interval migration defaults current capture schedules and playlist rotatio
     database.exec(migration);
     database.exec("COMMIT");
     assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
-    assert.equal(database.prepare("SELECT count(*) AS count FROM sqlite_master WHERE name = 'interval_active_revision'").get().count, 0);
+    assert.equal(database.prepare("SELECT count(*) AS count FROM sqlite_master WHERE name = 'interval_active_revision'").get()?.count, 0);
 
-    assert.equal(database.prepare("SELECT capture_interval_seconds FROM capture_targets WHERE capture_id = 'capture-1'").get().capture_interval_seconds, 86400);
+    assert.equal(database.prepare("SELECT capture_interval_seconds FROM capture_targets WHERE capture_id = 'capture-1'").get()?.capture_interval_seconds, 86400);
     const playlists = database.prepare("SELECT revision, rotation_interval FROM playlists ORDER BY revision").all();
     assert.ok(playlists.every((row) => row.rotation_interval === "90s"));
     const active = database.prepare(`SELECT a.revision, p.rotation_interval FROM active_playlist a
       JOIN playlists p ON p.playlist_id = a.playlist_id AND p.revision = a.revision WHERE a.singleton = 1`).get();
+    assert.ok(active);
     assert.equal(active.rotation_interval, "90s");
+    assert.ok(typeof active.revision === "string");
     assert.notEqual(active.revision, "old-active", "active revision changes so devices do not reuse the old ETag");
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM playlist_assets WHERE revision = ?").get(active.revision).count, 1);
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM playlist_capture_items WHERE revision = ?").get(active.revision).count, 1);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM playlist_assets WHERE revision = ?").get(active.revision)?.count, 1);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM playlist_capture_items WHERE revision = ?").get(active.revision)?.count, 1);
     const target = database.prepare("SELECT next_due_at FROM capture_targets WHERE capture_id = 'capture-1'").get();
+    assert.ok(target && typeof target.next_due_at === "number");
     assert.ok(target.next_due_at >= Date.now() - 5000, "a stale target is due promptly after migration");
     const firstCapture = database.prepare("SELECT next_due_at FROM capture_targets WHERE capture_id = 'capture-never-succeeded'").get();
+    assert.ok(firstCapture && typeof firstCapture.next_due_at === "number");
     assert.ok(firstCapture.next_due_at <= Date.now() + 5000, "a target without a successful capture stays due immediately");
   } finally {
     database.close();

@@ -22,6 +22,7 @@ test("pending enrollment migration preserves legacy devices and enforces unique 
 
     database.exec(migration);
     const legacy = database.prepare("SELECT * FROM devices WHERE device_id = 'pi-existing'").get();
+    assert.ok(legacy);
     assert.equal(legacy.token_hash, "legacy-hash");
     assert.equal(legacy.public_key, null);
     assert.equal(legacy.last_seen_at, 20);
