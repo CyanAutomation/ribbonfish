@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { encodeBase64Url, decodeBase64Url, verifyDeviceSignature, constantTimeEqual } from "./device-signature.ts";
+import { encodeBase64Url, decodeBase64Url, verifyDeviceSignature, equalSha256Digests } from "./device-signature.ts";
 import { sha256HexBytes } from "./crypto-primitives.ts";
 
 test("base64url and token comparison handle malformed inputs", () => {
@@ -8,9 +8,16 @@ test("base64url and token comparison handle malformed inputs", () => {
   assert.equal(encodeBase64Url(bytes), "APv_");
   assert.deepEqual(decodeBase64Url("APv_"), bytes);
   assert.deepEqual(decodeBase64Url("!"), new Uint8Array());
-  assert.equal(constantTimeEqual("abc", "abc"), true);
-  assert.equal(constantTimeEqual("abc", "abd"), false);
-  assert.equal(constantTimeEqual("abc", null), false);
+});
+
+test("SHA-256 digest comparison rejects malformed values and compares fixed-length hashes", () => {
+  const hash = "a".repeat(64);
+  assert.equal(equalSha256Digests(hash, hash), true);
+  assert.equal(equalSha256Digests(hash, "a".repeat(63) + "b"), false);
+  for (const invalid of [null, 42, "a".repeat(63), "a".repeat(65), "z".repeat(64), "A".repeat(64)]) {
+    assert.equal(equalSha256Digests(hash, invalid), false);
+  }
+  assert.equal(equalSha256Digests("invalid", hash), false);
 });
 
 test("device signatures bind method, path, query, identity, timestamp, ETag and body", async () => {
