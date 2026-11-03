@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isValidPositiveDuration } from "./duration.js";
+import { isValidPositiveDuration } from "./duration.ts";
 
 test("accepts positive Go durations within the time.Duration range", () => {
   for (const value of ["1ns", "0.5s", "1h30m", "9223372036854775807ns"]) {

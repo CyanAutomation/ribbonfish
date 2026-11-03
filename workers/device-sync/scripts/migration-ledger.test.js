@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
-import { migrationLedgerSQL } from "./migration-ledger.js";
+import { migrationLedgerSQL } from "./migration-ledger.ts";
 
 // Contract source: ../README.md#local-development (fresh local D1 bootstrap).
 

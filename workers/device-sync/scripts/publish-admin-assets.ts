@@ -24,17 +24,17 @@ for (let index = 0; index < args.length; index += 1) {
     seenOptions.add(option);
     const value = args[index + 1];
     if (!value || value.startsWith("--")) {
-      throw new Error("usage: publish-admin-assets.mjs [--config wrangler.management.toml] [--bucket bucket-name] [--local|--remote]");
+      throw new Error("usage: publish-admin-assets.ts [--config wrangler.management.toml] [--bucket bucket-name] [--local|--remote]");
     }
     if (option === "--config") config = value;
     else bucket = value;
     index += 1;
     continue;
   }
-  throw new Error("usage: publish-admin-assets.mjs [--config wrangler.management.toml] [--bucket bucket-name] [--local|--remote]");
+  throw new Error("usage: publish-admin-assets.ts [--config wrangler.management.toml] [--bucket bucket-name] [--local|--remote]");
 }
 
-execFileSync(process.execPath, [resolve(scriptDirectory, "build-admin.mjs")], {
+execFileSync(process.execPath, [resolve(scriptDirectory, "build-admin.ts")], {
   cwd: workerDirectory,
   stdio: "inherit",
 });

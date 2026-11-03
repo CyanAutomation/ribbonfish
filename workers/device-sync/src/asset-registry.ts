@@ -14,11 +14,11 @@ export class AssetDeletionInProgressError extends Error {
   }
 }
 
-export async function hasAssetReference(db, sha256) {
+export async function hasAssetReference(db: D1Database, sha256: string) {
   return Boolean(await db.prepare(HAS_ASSET_REFERENCE_SQL).bind(sha256, sha256, sha256, sha256).first());
 }
 
-export async function beginAssetWrite(db, sha256, size, now) {
+export async function beginAssetWrite(db: D1Database, sha256: string, size: number, now: number) {
   await db.prepare(
     `INSERT INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
      VALUES (?, ?, 'pending', ?, ?, ?)
@@ -33,7 +33,7 @@ export async function beginAssetWrite(db, sha256, size, now) {
   if (row?.state === "deleting") throw new AssetDeletionInProgressError();
 }
 
-export async function finishAssetWrite(db, sha256, size, now, stagingMs = ASSET_STAGING_MS) {
+export async function finishAssetWrite(db: D1Database, sha256: string, size: number, now: number, stagingMs = ASSET_STAGING_MS) {
   const referenced = await hasAssetReference(db, sha256);
   const result = await db.prepare(
     `UPDATE managed_assets SET size = ?, state = ?, expires_at = ?, write_lease_until = NULL, updated_at = ?
@@ -42,7 +42,7 @@ export async function finishAssetWrite(db, sha256, size, now, stagingMs = ASSET_
   if (result.meta?.changes !== 1) throw new AssetDeletionInProgressError();
 }
 
-export function markAssetLiveStatement(db, sha256, size, now) {
+export function markAssetLiveStatement(db: D1Database, sha256: string, size: number, now: number) {
   return db.prepare(
     `INSERT INTO managed_assets (sha256, size, state, expires_at, updated_at)
      VALUES (?, ?, 'live', NULL, ?)

@@ -1,6 +1,6 @@
 const MIGRATION_PATTERN = /^\d+_[A-Za-z0-9._-]+\.sql$/;
 
-export function migrationLedgerSQL(names) {
+export function migrationLedgerSQL(names: string[]) {
   const ordered = [...new Set(names)].sort();
   if (ordered.some((name) => !MIGRATION_PATTERN.test(name))) {
     throw new Error("migration names must be SQL migration filenames");
@@ -15,6 +15,6 @@ export function migrationLedgerSQL(names) {
   return statements.join("\n") + "\n";
 }
 
-function sqlString(value) {
+function sqlString(value: string) {
   return "'" + value.replaceAll("'", "''") + "'";
 }

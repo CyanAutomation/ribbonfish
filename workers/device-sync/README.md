@@ -53,6 +53,7 @@ checks:
 
 ```sh
 npm ci
+npm run typecheck
 npm test
 npm run check:config
 ```
@@ -367,7 +368,7 @@ The panel can stage and activate playlist revisions. A trusted Wrangler script
 is also available for scripted releases:
 
 ```sh
-node scripts/publish-playlist.mjs defaults/default-playlist.json --activate \
+node scripts/publish-playlist.ts defaults/default-playlist.json --activate \
   --config wrangler.management.toml \
   --database ribbonfish-devices \
   --bucket ribbonfish-assets
