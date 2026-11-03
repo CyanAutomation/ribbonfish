@@ -1,10 +1,10 @@
+import { markAssetLiveStatement } from "./asset-registry.ts";
+import { storePngAsset } from "./asset-store.ts";
+
 type AssetEnv = Pick<ManagementBindings, "DB" | "ASSETS" | "ASSET_RECONCILIATION_INTERVAL_SECONDS"> & { ASSET_RECONCILIATION_PAGE_SIZE?: string };
 type AssetReference = { sha256: string; size: number };
 type AssetSnapshot = { state: string | null; expires_at: number | null; write_lease_until: number | null; referenceSize: number | null; has_playlist: boolean; has_placeholder: boolean; has_current: boolean; has_history: boolean };
 type SnapshotRow = { sha256: string; state: string | null; expires_at: number | null; write_lease_until: number | null; kind: "playlist" | "placeholder" | "current" | "history" | null; size: number | null };
-
-import { markAssetLiveStatement } from "./asset-registry.ts";
-import { storePngAsset } from "./asset-store.ts";
 
 export const ASSET_RECONCILIATION_PAGE_SIZE = 40;
 export const LEGACY_ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;

@@ -26,10 +26,12 @@ const REQUEST_TIMEOUT_MS = 8_000;
 
 export class JEVRequestError extends Error {
   status: number;
-  constructor(message: string, status = 502) {
+  upstreamStatus?: number;
+  constructor(message: string, status = 502, upstreamStatus?: number) {
     super(message);
     this.name = "JEVRequestError";
     this.status = status;
+    this.upstreamStatus = upstreamStatus;
   }
 }
 
@@ -65,7 +67,7 @@ export async function callJevDecision(env: { OPENROUTER_API_KEY?: string } | nul
       body: JSON.stringify({ model: PINNED_MODEL, state: structuredState, questions }),
       signal: controller.signal,
     });
-    if (!response.ok) throw new JEVRequestError("JEV provider request failed.");
+    if (!response.ok) throw new JEVRequestError("JEV provider request failed.", 502, response.status);
     const raw = await readBoundedResponse(response, MAX_RESPONSE_BYTES);
     let payload: unknown;
     try { payload = JSON.parse(raw); } catch { throw new JEVRequestError("JEV provider returned invalid JSON."); }
