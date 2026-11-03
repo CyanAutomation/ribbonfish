@@ -58,6 +58,8 @@ npm test
 npm run check:config
 ```
 
+The type check emits temporary Worker declarations and checks TypeScript tests against Node globals, so Worker-only globals do not silently appear in the Node test environment. Worker sources are checked separately against Cloudflare bindings.
+
 The type check verifies that the generated management Worker bindings match `wrangler.management.toml`. After changing those bindings, regenerate them with `npx wrangler types src/management-bindings.d.ts --config wrangler.management.toml --env-interface ManagementBindings --include-runtime=false --strict-vars=false`.
 
 Initialize local D1, then start the local Worker:

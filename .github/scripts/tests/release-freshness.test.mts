@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isCurrentTree, treeEntry } from '../release-freshness.mjs';
+import { isCurrentTree, treeEntry } from '../release-freshness.mts';
 test('only matching release trees are current', () => {
   assert.equal(isCurrentTree('abc', 'abc'), true);
   assert.equal(isCurrentTree('abc', 'def'), false);
@@ -22,7 +22,7 @@ test('stale release input is reported and can be safely skipped for promotion', 
     writeFileSync(join(dir, 'gh'), '#!/bin/sh\ncase "$2" in */commits/main) echo \'{"sha":"head","commit":{"tree":{"sha":"root"}}}\' ;; *) echo \'{"tree":[{"path":"agent","type":"tree","sha":"new"}]}\' ;; esac\n', { mode: 0o755 });
     const output = join(dir, 'output');
     const env = { ...process.env, PATH: dir + delimiter + process.env.PATH, GITHUB_OUTPUT: output, GITHUB_REPOSITORY: 'owner/repo' };
-    const script = new URL('../release-freshness.mjs', import.meta.url).pathname;
+    const script = new URL('../release-freshness.mts', import.meta.url).pathname;
     const stale = spawnSync(process.execPath, [script, 'agent'], { env });
     assert.equal(stale.status, 1, stale.stderr.toString());
     assert.match(readFileSync(output, 'utf8'), /current=false/);

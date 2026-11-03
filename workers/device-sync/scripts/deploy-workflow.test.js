@@ -57,6 +57,9 @@ test("container publishers wait for shared validation and avoid promoting stale 
     assert.equal(workflow.jobs.verify.uses, "./.github/workflows/verify-agent.yml");
     assert.ok(publish.needs.includes("verify"));
     assert.match(publish.if, /ref_protected/);
+    const nodeSetup = publish.steps.find((step) => step.uses?.startsWith("actions/setup-node@"));
+    assert.ok(nodeSetup, `${registry} must set up Node for the freshness check`);
+    assert.equal(nodeSetup.with["package-manager-cache"], false, `${registry} must not restore an automatic package cache`);
     const freshness = publish.steps.find((step) => step.id === "freshness");
     assert.ok(freshness, `${registry} freshness check must exist`);
     assert.match(freshness.run, /release-freshness.*--allow-stale/);

@@ -1,5 +1,15 @@
 {
   "extends": "./tsconfig.json",
-  "compilerOptions": { "types": ["node"], "lib": ["ES2022"] },
-  "include": ["scripts/**/*.ts"]
+  "compilerOptions": {
+    "types": [
+      "node"
+    ],
+    "lib": [
+      "ES2022"
+    ]
+  },
+  "include": [
+    "scripts/**/*.ts",
+    "../../.github/scripts/**/*.mts"
+  ]
 }

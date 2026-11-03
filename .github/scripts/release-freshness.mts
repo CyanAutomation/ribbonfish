@@ -2,13 +2,13 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-export function treeEntry(tree, name) {
+export function treeEntry(tree: Array<{ path: string; type: string; sha?: string }>, name: string) {
   const entry = tree.find(item => item.path === name && item.type === 'tree');
   if (!entry?.sha) throw new Error(`Missing tree ${name}`);
   return entry.sha;
 }
 
-export function isCurrentTree(local, remote) {
+export function isCurrentTree(local: string, remote: string) {
   if (!local || !remote) throw new Error('Missing tree SHA');
   return local === remote;
 }
@@ -17,11 +17,11 @@ function main() {
   const path = process.argv[2];
   const allowStale = process.argv[3] === '--allow-stale';
   if (process.argv.length > 4 || (process.argv[3] && !allowStale)) throw new Error('Invalid arguments');
-  if (!['agent', 'workers/device-sync'].includes(path)) throw new Error('Invalid release path');
+  if (!path || !['agent', 'workers/device-sync'].includes(path)) throw new Error('Invalid release path');
   const repo = process.env.GITHUB_REPOSITORY;
   if (!repo) throw new Error('Missing GITHUB_REPOSITORY');
   const local = execFileSync('git', ['rev-parse', `HEAD:${path}`], { encoding: 'utf8' }).trim();
-  const api = endpoint => JSON.parse(execFileSync('gh', ['api', endpoint], { encoding: 'utf8' }));
+  const api = (endpoint: string) => JSON.parse(execFileSync('gh', ['api', endpoint], { encoding: 'utf8' }));
   const head = api(`repos/${repo}/commits/main`);
   let sha = head.commit.tree.sha;
   for (const part of path.split('/')) sha = treeEntry(api(`repos/${repo}/git/trees/${sha}`).tree, part);
