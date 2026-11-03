@@ -3,9 +3,13 @@ export function initModuleNavigation(): void {
   const ids = ["overview-section", "sites-section", "playlist-section", "device-section", "activity-section"];
   const sections = ids.map((id) => document.getElementById(id) as HTMLElement);
   const tiles = document.getElementById("dashboard-tiles") as HTMLElement;
-  const home = document.getElementById("dashboard-home") as HTMLElement;
+  const navigation = document.getElementById("module-navigation") as HTMLElement;
   const analysis = document.getElementById("analysis-dialog") as HTMLDialogElement;
   const analysisLink = tiles.querySelector<HTMLAnchorElement>('a[href="#analysis-section"]')!;
+  let analysisTrigger: HTMLElement = analysisLink;
+  document.querySelectorAll<HTMLAnchorElement>('a[href="#analysis-section"]').forEach((link) => {
+    link.addEventListener("click", () => { analysisTrigger = link; });
+  });
   const closeAnalysis = document.getElementById("close-analysis") as HTMLButtonElement;
   const supportsModal = typeof analysis.showModal === "function";
   const analysisDetails = document.getElementById("analysis-section") as HTMLDetailsElement;
@@ -18,7 +22,11 @@ export function initModuleNavigation(): void {
     const isHome = !section && !showAnalysis;
     sections.forEach((item) => { item.hidden = item !== section; });
     tiles.hidden = !isHome && !(showAnalysis && supportsModal);
-    home.hidden = isHome || (!!showAnalysis && supportsModal);
+    navigation.querySelectorAll<HTMLAnchorElement>("a").forEach((link) => {
+      const active = link.hash === (showAnalysis ? "#analysis-section" : section ? `#${section.id}` : "#dashboard");
+      if (active) link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
+    });
     if (target && section) {
       let parent: HTMLElement | null = target;
       while (parent && parent !== section) {
@@ -38,7 +46,7 @@ export function initModuleNavigation(): void {
     } else if (analysis.open) {
       if (typeof analysis.close === "function") analysis.close();
       else analysis.removeAttribute("open");
-      if (isHome) analysisLink.focus();
+      if (isHome) analysisTrigger.focus();
     }
   }
   closeAnalysis.addEventListener("click", () => { location.hash = "dashboard"; });
@@ -49,6 +57,15 @@ export function initModuleNavigation(): void {
     }
   });
   analysis.addEventListener("cancel", (event) => { event.preventDefault(); location.hash = "dashboard"; });
-  window.addEventListener("hashchange", render);
+  window.addEventListener("hashchange", () => {
+    render();
+    const id = decodeURIComponent(location.hash.slice(1));
+    const section = sections.find((item) => item.id === id);
+    const heading = section?.querySelector<HTMLElement>("h2");
+    if (heading) {
+      heading.tabIndex = -1;
+      heading.focus({ preventScroll: true });
+    }
+  });
   render();
 }

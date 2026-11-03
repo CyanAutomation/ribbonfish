@@ -69,10 +69,13 @@ test("management page starts, renders its data, and dismisses errors", async () 
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(window.document.querySelector("#sites-section").hidden, false);
     assert.equal(window.document.querySelector("#device-section").hidden, true);
-    window.document.querySelector("#dashboard-home").click();
+    assert.equal(window.document.activeElement.id, "sites-title");
+    assert.equal(window.document.querySelector('#module-navigation a[href="#sites-section"]').getAttribute("aria-current"), "page");
+    assert.equal(window.document.querySelector("#capture-site-editor").open, false);
+    window.document.querySelector('#module-navigation a[href="#dashboard"]').click();
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(window.document.querySelector("#sites-section").hidden, true);
-    const analysisLink = window.document.querySelector('a[href="#analysis-section"]');
+    const analysisLink = window.document.querySelector('#dashboard-tiles a[href="#analysis-section"]');
     const analysisDialog = window.document.querySelector("#analysis-dialog");
     analysisLink.focus();
     analysisLink.click();
@@ -109,8 +112,11 @@ test("management page starts, renders its data, and dismisses errors", async () 
     const playlistBody = JSON.parse(playlistRequest.options.body);
     assert.deepEqual(playlistBody.captures, [{ capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }]);
 
-    const removeSiteButton = [...window.document.querySelectorAll("#capture-target-list button")]
+    const siteCard = [...window.document.querySelectorAll("#capture-target-list article")]
+      .find((card) => card.textContent.includes("https://status.example/"));
+    const removeSiteButton = [...siteCard.querySelectorAll("button")]
       .find((button) => button.textContent === "Remove capture site");
+    assert.equal(removeSiteButton.closest("details").open, false);
     assert.ok(removeSiteButton);
     removeSiteButton.click();
     await new Promise((resolve) => setImmediate(resolve));
@@ -123,10 +129,22 @@ test("management page starts, renders its data, and dismisses errors", async () 
     const removeDeviceButton = [...window.document.querySelectorAll("#devices button")]
       .find((button) => button.textContent === "Delete device");
     assert.ok(removeDeviceButton);
+    assert.equal(removeDeviceButton.closest("details").open, false);
     removeDeviceButton.click();
     await new Promise((resolve) => setImmediate(resolve));
     const removeDeviceRequest = requests.find(({ path }) => path === "/admin/api/devices/pi-office");
     assert.equal(removeDeviceRequest.options.method, "DELETE");
+
+    overview.playlists = [
+      { playlist_id: "operations", revision: "rev-one", active: true, rotation_interval: "90s", asset_count: 1, created_at: 1 },
+      { playlist_id: "operations", revision: "rev-two", active: false, rotation_interval: "90s", asset_count: 2, created_at: 2 },
+      { playlist_id: "status", revision: "rev-three", active: false, rotation_interval: "90s", asset_count: 1, created_at: 3 },
+    ];
+    window.document.querySelector("#reload").click();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(window.document.querySelectorAll("#playlists .playlist-group").length, 2);
+    assert.equal(window.document.querySelectorAll("#playlists-mobile .playlist-group").length, 2);
+    assert.equal(window.document.querySelector("#playlists .playlist-group tbody").rows.length, 2);
 
     fail = true;
     window.document.querySelector("#reload").click();

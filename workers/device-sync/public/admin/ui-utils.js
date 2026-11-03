@@ -387,3 +387,20 @@ function humanizeMetadataKey(key) {
     .replace(/\br2\b/gi, "R2");
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
+
+/** Keep urgent capture problems visible without mutating the server's ordering. */
+export function prioritizeCaptureTargets(targets) {
+  const priority = (target) => target.last_error && !["queued", "running"].includes(target.job_status)
+    ? 0 : target.schedule_reviewed === false || target.schedule_reviewed === 0 ? 1 : 2;
+  return [...targets].sort((a, b) => priority(a) - priority(b));
+}
+
+export function summarizeCaptureErrors(targets) {
+  const counts = new Map();
+  targets.forEach((target) => {
+    if (target.last_error && !["queued", "running"].includes(target.job_status)) {
+      counts.set(target.last_error, (counts.get(target.last_error) ?? 0) + 1);
+    }
+  });
+  return [...counts].filter(([, count]) => count > 1).map(([message, count]) => ({ message, count }));
+}
