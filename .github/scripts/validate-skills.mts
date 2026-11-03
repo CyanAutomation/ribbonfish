@@ -4,10 +4,10 @@ import { fileURLToPath } from 'node:url';
 
 const requiredFields = ['name', 'description', 'tags', 'relatedSkills'];
 
-function parseFrontmatter(markdown) {
+function parseFrontmatter(markdown: string) {
   const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
   if (!match) return null;
-  const fields = new Map();
+  const fields = new Map<string, string>();
   for (const line of match[1].split(/\r?\n/)) {
     const field = line.match(/^([A-Za-z][A-Za-z0-9]*):\s*(.*?)\s*$/);
     if (field) fields.set(field[1], field[2]);
@@ -15,7 +15,7 @@ function parseFrontmatter(markdown) {
   return fields;
 }
 
-function parseInlineList(value) {
+function parseInlineList(value: string | undefined) {
   const match = value?.match(/^\[([\s\S]*)\]$/);
   if (!match) return null;
   if (!match[1].trim()) return [];
@@ -23,8 +23,8 @@ function parseInlineList(value) {
     .map((item) => item.replace(/^(?:"([^"]*)"|'([^']*)')$/, (_, doubleQuoted, singleQuoted) => doubleQuoted ?? singleQuoted));
 }
 
-export async function validateSkills(skillsRoot, { statFn = stat } = {}) {
-  const errors = [];
+export async function validateSkills(skillsRoot: string, { statFn = stat }: { statFn?: (filename: string) => Promise<{ isFile(): boolean; isDirectory(): boolean }> } = {}) {
+  const errors: string[] = [];
   const entries = await readdir(skillsRoot, { withFileTypes: true });
   const skills = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
   const skillNames = new Set(skills);

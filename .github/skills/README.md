@@ -37,8 +37,8 @@ Each skill has YAML frontmatter containing `name`, `description`, `tags`, and `r
 Run the repository check with:
 
 ```sh
-node --test .github/scripts/tests/validate-skills.test.mjs
-node .github/scripts/validate-skills.mjs
+node --test .github/scripts/tests/validate-skills.test.mts
+node .github/scripts/validate-skills.mts
 ```
 
 The validator checks required metadata, directory/name agreement, related-skill targets, and local links. See [Copilot repository instructions](../copilot-instructions.md) for shared project constraints.
