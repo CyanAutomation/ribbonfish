@@ -55,7 +55,7 @@ Ribbonfish manages information-only screens on lightweight Linux devices. The Go
 - Go changes: run focused tests, then `cd agent && go test ./...`, `go test -race ./...`, `go vet ./...`, and formatting checks as applicable.
 - Worker changes: from `workers/device-sync/`, run `npm ci`, `npm test`, `npm run build:admin` for panel changes, and `npm run check:config`.
 - Workflow changes: run actionlint; keep third-party actions pinned to full commit SHAs and permissions least-privileged.
-- Skill changes: run `node --test .github/scripts/tests/validate-skills.test.mjs` and `node .github/scripts/validate-skills.mjs`.
+- Skill changes: run `node --test .github/scripts/tests/validate-skills.test.mts` and `node .github/scripts/validate-skills.mts`.
 - Do not describe simulator or emulation checks as hardware acceptance. For actual Pi results, record model, OS/kernel, connector/mode, permissions, and observed output.
 
 Use the focused guides in `.github/skills/` for domain workflows. Use `cloudflare-device-sync-enrollment` for device endpoints, `cloudflare-management-console` for admin UI/API changes, `cloudflare-worker-operations` for migrations and rollout, and `cloudflare-asset-lifecycle` for R2/D1 asset consistency. Use `device-contract-changes` when a change crosses the Go/Worker boundary, `device-fleet-operations` for enrollment and incident triage, and `github-actions-release` for CI or image publication.

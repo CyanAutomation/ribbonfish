@@ -9,7 +9,7 @@ on:
       - ".github/workflows/publish-agent.yml"
       - ".github/workflows/verify-agent.yml"
       - ".github/workflows/arm-container-smoke.yml"
-      - ".github/scripts/release-freshness.mjs"
+      - ".github/scripts/release-freshness.mts"
 
 permissions:
   contents: read
@@ -64,11 +64,14 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: true
           sbom: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
       - name: Check whether agent image tags are current
         id: freshness
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node .github/scripts/release-freshness.mjs agent --allow-stale
+        run: node .github/scripts/release-freshness.mts agent --allow-stale
       - name: Promote current main image to main
         if: steps.freshness.outcome == 'success' && steps.freshness.outputs.current == 'true'
         env:

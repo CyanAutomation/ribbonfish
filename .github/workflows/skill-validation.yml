@@ -6,8 +6,8 @@ on:
       - main
     paths:
       - ".github/skills/**"
-      - ".github/scripts/validate-skills.mjs"
-      - ".github/scripts/tests/validate-skills.test.mjs"
+      - ".github/scripts/validate-skills.mts"
+      - ".github/scripts/tests/validate-skills.test.mts"
       - ".github/workflows/skill-validation.yml"
   # Keep this unfiltered so required checks are reported for every PR.
   pull_request:
@@ -27,6 +27,6 @@ jobs:
         with:
           node-version: 24
       - name: Test the skill validator
-        run: node --test .github/scripts/tests/validate-skills.test.mjs
+        run: node --test .github/scripts/tests/validate-skills.test.mts
       - name: Validate skill metadata and links
-        run: node .github/scripts/validate-skills.mjs
+        run: node .github/scripts/validate-skills.mts
