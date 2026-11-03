@@ -10,6 +10,7 @@ type ValidatorTarget = Pick<CaptureJob, "url" | "current_sha256" | "current_size
 type ValidatorResult = { unchanged: boolean; outcome: string; etag: string | null; lastModified: string | null };
 type JobDecision = Pick<CaptureJob, "capture_id" | "scheduled_due_at">;
 type CaptureMessage = Message<{ job_id?: unknown }>;
+type CaptureFailureDetails = { message?: string; browserMs: number; browserStarted: boolean; retryable: boolean };
 
 export const MAX_CAPTURE_ATTEMPTS = 3;
 export const MAX_CAPTURE_HISTORY = 10;
@@ -393,10 +394,10 @@ async function deferCapture(env: CaptureEnv, jobID: string, captureID: string, a
   ]);
 }
 
-async function handleCaptureFailure(env: CaptureEnv, message: CaptureMessage, job: CaptureJob, error: unknown, now: number) {
+async function handleCaptureFailure(env: CaptureEnv, message: CaptureMessage, job: CaptureJob, error: CaptureFailureDetails, now: number) {
   const attempts = job.attempts + 1;
-  const errorMessage = safeCaptureError(error);
-  if (captureFailureDetails(error).retryable === true && attempts < MAX_CAPTURE_ATTEMPTS) {
+  const errorMessage = error.message?.slice(0, 240) ?? "Browser capture failed.";
+  if (error.retryable && attempts < MAX_CAPTURE_ATTEMPTS) {
     await env.DB.batch([
       env.DB.prepare(
         "UPDATE capture_jobs SET status = 'queued', lease_until = NULL, error = ? WHERE job_id = ?",
@@ -463,15 +464,11 @@ export async function cleanupExpiredCaptures(env: CaptureEnv, now = Date.now()) 
   return expired.results?.length ?? 0;
 }
 
-function captureFailureDetails(error: unknown): { message?: string; browserMs: number; browserStarted: boolean; retryable: boolean } {
+function captureFailureDetails(error: unknown): CaptureFailureDetails {
   const details = error !== null && typeof error === "object" ? error as Record<string, unknown> : {};
   return { message: typeof details.message === "string" ? details.message : undefined,
     browserMs: typeof details.browserMs === "number" ? details.browserMs : 0,
     browserStarted: details.browserStarted === true, retryable: details.retryable === true };
-}
-
-function safeCaptureError(error: unknown) {
-  return captureFailureDetails(error).message?.slice(0, 240) ?? "Browser capture failed.";
 }
 
 function nonNegativeInteger(value: unknown, fallback: number) {
