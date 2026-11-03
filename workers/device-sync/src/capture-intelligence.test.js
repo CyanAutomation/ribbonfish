@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decideCapturePolicy } from './capture-intelligence.js';
+import { decideCapturePolicy } from './capture-intelligence.ts';
 
 const now = 1_000_000;
 const target = { capture_interval_seconds: 60, last_success_at: now - 60_000, next_due_at: now,

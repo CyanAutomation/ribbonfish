@@ -16,7 +16,8 @@
     "publish:admin:production": "node scripts/publish-admin-assets.ts --config wrangler.management.toml --bucket ribbonfish-assets --remote",
     "publish:admin:local": "node scripts/publish-admin-assets.ts --config wrangler.management.toml --bucket ribbonfish-assets --local",
     "migrate:management": "wrangler d1 migrations apply ribbonfish-devices --remote --config wrangler.management.toml",
-    "typecheck": "tsc -p tsconfig.worker.json && tsc -p tsconfig.admin.json && tsc -p tsconfig.scripts.json"
+    "typecheck:bindings": "wrangler types src/management-bindings.d.ts --config wrangler.management.toml --env-interface ManagementBindings --include-runtime=false --strict-vars=false --check",
+    "typecheck": "npm run typecheck:bindings && tsc -p tsconfig.worker.json && tsc -p tsconfig.admin.json && tsc -p tsconfig.scripts.json"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261103.1",
