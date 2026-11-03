@@ -171,6 +171,12 @@ export async function handleAdminRequest(request, env, ctx) {
       return jsonResponse({ confirmed: true, due_at: data.due_at }, 202);
     }
 
+    const captureNameMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/name$/i);
+    if (captureNameMatch) {
+      if (request.method !== "PATCH") return methodNotAllowed("PATCH");
+      return await updateCaptureName(request, captureNameMatch[1].toLowerCase(), env, actorID);
+    }
+
     const captureReadinessMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/readiness$/i);
     if (captureReadinessMatch) {
       if (request.method !== "PATCH") return methodNotAllowed("PATCH");
@@ -413,7 +419,7 @@ async function readOverview(env) {
       "FROM audit_events ORDER BY occurred_at DESC LIMIT ?",
     ).bind(20).all(),
     env.DB.prepare(
-      "SELECT t.capture_id, t.url, t.capture_interval_seconds, t.viewport_width, t.viewport_height, t.wait_for_selector, " +
+      "SELECT t.capture_id, t.url, t.name, t.capture_interval_seconds, t.viewport_width, t.viewport_height, t.wait_for_selector, " +
       "CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
       "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size, " +
       "t.last_success_at, " +
@@ -497,6 +503,7 @@ async function readOverview(env) {
       return {
         capture_id: target.capture_id,
         display_url: source.origin + source.pathname,
+        name: target.name ?? null,
         capture_interval_seconds: target.capture_interval_seconds,
         wait_for_selector: target.wait_for_selector,
         viewport: { width: target.viewport_width, height: target.viewport_height },
@@ -886,6 +893,20 @@ async function updateCaptureInterval(request, captureID, env, actorID) {
   ]);
   if (batch[0]?.meta?.changes !== 1) throw new HTTPError(404, "That webpage capture is not available.");
   return jsonResponse({ capture_id: captureID, capture_interval_seconds: data.capture_interval_seconds });
+}
+
+async function updateCaptureName(request, captureID, env, actorID) {
+  const data = await readJSON(request);
+  if (!hasExactKeys(data, ["name"]) || typeof data.name !== "string" || data.name.trim().length > 120 || /[\u0000-\u001f\u007f]/.test(data.name)) {
+    throw new HTTPError(400, "Name must be text of at most 120 characters on one line.");
+  }
+  const name = data.name.trim() || null;
+  const batch = await env.DB.batch([
+    env.DB.prepare("UPDATE capture_targets SET name = ? WHERE capture_id = ? AND enabled = 1").bind(name, captureID),
+    auditStatement(env, actorID, "capture.name_updated", "capture", captureID, { name }, { onlyWhenPreviousChanged: true }),
+  ]);
+  if (batch[0]?.meta?.changes !== 1) throw new HTTPError(404, "That webpage capture is not available.");
+  return jsonResponse({ capture_id: captureID, name });
 }
 
 async function updateCaptureReadiness(request, captureID, env, actorID) {

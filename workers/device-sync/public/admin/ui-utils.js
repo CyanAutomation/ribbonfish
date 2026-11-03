@@ -3,6 +3,7 @@ const AUDIT_EVENT_LABELS = {
   "capture.skip_once_applied": "Skipped one scheduled screenshot",
   "capture.skip_once_confirmed": "Confirmed one screenshot skip",
   "capture.interval_updated": "Updated screenshot interval",
+  "capture.name_updated": "Updated capture site name",
   "capture.schedule_reviewed": "Reviewed screenshot schedule",
   "capture.site_created": "Added capture site",
   "capture.site_removed": "Removed capture site",
