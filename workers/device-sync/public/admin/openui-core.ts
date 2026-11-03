@@ -9,9 +9,16 @@ import {
   evaluate,
   evaluateElementProps,
   mergeStatements,
+  type ComponentRenderProps,
+  type ElementNode,
+  type OpenUIError,
+  type ParseResult,
 } from "@openuidev/lang-core";
 import { z } from "zod";
 import { compactIdentifier } from "./ui-utils.ts";
+
+type RendererProps = ComponentRenderProps<Record<string, unknown>, Node>;
+type FleetView = { root: ElementNode; errors: OpenUIError[]; loading: boolean; querySnapshot: ReturnType<ReturnType<typeof createQueryManager>["getSnapshot"]>; parseResult: ParseResult };
 
 const READ_ONLY_TOOL = "get_fleet_overview";
 
@@ -19,13 +26,13 @@ const Metric = defineComponent({
   name: "Metric",
   props: z.object({ label: z.string(), value: z.string(), detail: z.string() }),
   description: "Shows one read-only fleet metric, its value, and a short detail.",
-  component: ({ props }) => {
+  component: ({ props }: RendererProps) => {
     const card = document.createElement("article");
     card.className = "fleet-metric";
     const details = document.createElement("details");
     details.className = "fleet-metric__details";
     const summary = document.createElement("summary");
-    summary.textContent = `More about ${props.label.toLowerCase()}`;
+    summary.textContent = `More about ${(props.label as string).toLowerCase()}`;
     details.append(summary, textElement("p", props.detail, "fleet-metric-detail"));
     card.append(
       textElement("p", props.label, "fleet-metric-label"),
@@ -44,7 +51,7 @@ const Notice = defineComponent({
     body: z.string(),
   }),
   description: "Shows a read-only informational or warning notice.",
-  component: ({ props }) => {
+  component: ({ props }: RendererProps) => {
     const notice = document.createElement("section");
     notice.className = `fleet-notice fleet-notice--${props.tone}`;
     notice.append(
@@ -59,10 +66,10 @@ const Dashboard = defineComponent({
   name: "Dashboard",
   props: z.object({ children: z.array(z.union([Metric.ref, Notice.ref])) }),
   description: "Arranges read-only fleet metrics and notices in a responsive dashboard.",
-  component: ({ props, renderNode }) => {
+  component: ({ props, renderNode }: RendererProps) => {
     const grid = document.createElement("div");
     grid.className = "fleet-summary-grid";
-    for (const child of props.children ?? []) grid.append(renderNode(child));
+    for (const child of (props.children as unknown[] ?? [])) grid.append(renderNode(child));
     return grid;
   },
 });
@@ -176,11 +183,11 @@ const functions = [
   }),
 ];
 
-function countDeviceHealth(devices) {
+function countDeviceHealth(devices: Array<{ enabled?: boolean | number; health?: { status?: string } }>) {
   const counts = { healthy: 0, degraded: 0, stale: 0, offline: 0, starting: 0, stopping: 0, unknown: 0, disabled: 0 };
   for (const device of devices) {
     const status = device.enabled === false || device.enabled === 0 ? "disabled" : device.health?.status ?? "unknown";
-    if (Object.hasOwn(counts, status)) counts[status] += 1;
+    if (Object.hasOwn(counts, status)) counts[status as keyof typeof counts] += 1;
     else counts.unknown += 1;
   }
   return counts;
@@ -207,10 +214,10 @@ export const OPENUI_STARTER_SOURCE = [
 ].join("\n");
 
 const librarySpec = openUILibrary.toSpec();
-const componentPrompt = Object.values(librarySpec.components)
+const componentPrompt = Object.values(librarySpec.components ?? {})
   .map(({ signature, description }) => `${signature} — ${description}`)
   .join("\n");
-const functionPrompt = Object.values(librarySpec.functions)
+const functionPrompt = Object.values(librarySpec.functions ?? {})
   .map(({ signature, description }) => `@${signature} — ${description}`)
   .join("\n");
 
@@ -224,14 +231,14 @@ export const OPENUI_SYSTEM_PROMPT = [
   `Data functions:\n${functionPrompt}`,
 ].join("\n\n");
 
-export function createFleetOpenUI({ getOverview }) {
+export function createFleetOpenUI({ getOverview }: { getOverview: () => Promise<unknown> }) {
   if (typeof getOverview !== "function") throw new TypeError("getOverview must be a function");
 
   const store = createStore();
   const streamingParser = createStreamingParser(schema, "Dashboard");
-  const listeners = new Set();
-  const pendingQueryWaiters = new Set();
-  let parseResult = null;
+  const listeners = new Set<(view: FleetView | null) => void>();
+  const pendingQueryWaiters = new Set<() => void>();
+  let parseResult: ParseResult | null = null;
   let disposed = false;
 
   const queryManager = createQueryManager({
@@ -261,13 +268,13 @@ export function createFleetOpenUI({ getOverview }) {
       ]),
     );
     return {
-      getState: (name) => store.get(name),
-      resolveRef: (name) => snapshot[name],
+      getState: (name: string) => store.get(name),
+      resolveRef: (name: string) => snapshot[name],
       functions: runtimeFunctions,
     };
   }
 
-  function queryNodesFor(result) {
+  function queryNodesFor(result: ParseResult) {
     const context = evaluationContext();
     return result.queryStatements.map((statement) => {
       const toolName = statement.toolAST ? evaluate(statement.toolAST, context, { library: openUILibrary }) : null;
@@ -284,13 +291,13 @@ export function createFleetOpenUI({ getOverview }) {
         args: args ?? {},
         defaults: statement.defaultsAST ? evaluate(statement.defaultsAST, context, { library: openUILibrary }) : null,
         deps: statement.deps?.map((name) => store.get(name)),
-        refreshInterval: statement.refreshAST ? evaluate(statement.refreshAST, context, { library: openUILibrary }) : undefined,
+        refreshInterval: statement.refreshAST ? evaluate(statement.refreshAST, context, { library: openUILibrary }) as number : undefined,
         complete: statement.complete,
       };
     });
   }
 
-  function renderProgram(source) {
+  function renderProgram(source: string) {
     const result = parser.parse(String(source));
     const errors = result.meta.errors.filter((error) => error.severity !== "warning");
     if (errors.length) throw new Error(errors.map((error) => error.message).join("\n"));
@@ -310,7 +317,7 @@ export function createFleetOpenUI({ getOverview }) {
 
   function getView() {
     if (!parseResult?.root) return null;
-    const errors = [];
+    const errors: OpenUIError[] = [];
     const root = evaluateElementProps(parseResult.root, {
       ctx: evaluationContext(),
       library: openUILibrary,
@@ -331,7 +338,7 @@ export function createFleetOpenUI({ getOverview }) {
     prompt: OPENUI_SYSTEM_PROMPT,
     renderProgram,
     getView,
-    inspectProgram(source) {
+    inspectProgram(source: string) {
       const partial = streamingParser.set(String(source));
       return {
         incomplete: partial.meta.incomplete,
@@ -340,23 +347,23 @@ export function createFleetOpenUI({ getOverview }) {
         errors: partial.meta.errors,
       };
     },
-    mergePatch(existing, patch) {
+    mergePatch(existing: string, patch: string) {
       return mergeStatements(String(existing), String(patch), "root");
     },
     refresh() {
       queryManager.invalidate();
     },
-    subscribe(listener) {
+    subscribe(listener: (view: FleetView | null) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
     async waitForQueries() {
       if (disposed) throw new Error("OpenUI runtime has been disposed");
       if (!queryManager.isAnyLoading()) return;
-      await new Promise((resolve, reject) => {
+      await new Promise<void>((resolve, reject) => {
         let settled = false;
         let unsubscribe = () => {};
-        const finish = (error) => {
+        const finish = (error?: Error) => {
           if (settled) return;
           settled = true;
           unsubscribe();
@@ -387,22 +394,23 @@ export function createFleetOpenUI({ getOverview }) {
   };
 }
 
-export function renderOpenUIElement(element) {
-  if (!element || element.type !== "element") {
+export function renderOpenUIElement(element: unknown): Node {
+  if (!element || typeof element !== "object" || !("type" in element) || element.type !== "element") {
     return document.createTextNode(element == null ? "" : String(element));
   }
-  const definition = openUILibrary.components[element.typeName];
+  const node = element as ElementNode;
+  const definition = openUILibrary.components[node.typeName];
   if (!definition || typeof definition.component !== "function") {
-    throw new Error(`Unsupported OpenUI component: ${element.typeName}`);
+    throw new Error(`Unsupported OpenUI component: ${node.typeName}`);
   }
   return definition.component({
-    props: element.props,
+    props: node.props,
     renderNode: renderOpenUIElement,
-    statementId: element.statementId,
+    statementId: node.statementId,
   });
 }
 
-function textElement(tag, text, className) {
+function textElement(tag: string, text: unknown, className?: string) {
   const element = document.createElement(tag);
   element.textContent = String(text ?? "");
   if (className) element.className = className;
