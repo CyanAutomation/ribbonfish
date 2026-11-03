@@ -1,3 +1,5 @@
+import { HTTPError } from "./http-error.ts";
+import { hasExactKeys } from "./validation.ts";
 import { assessUpcomingCaptures } from "./capture-intelligence.ts";
 import { isSupportedRotationInterval } from "./intervals.ts";
 import { handleAdminRequest } from "./admin.js";
@@ -14,13 +16,6 @@ const SIGNATURE_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
 const PUBLIC_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-
-class HTTPError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
 
 export default {
   fetch(request, env, ctx) {
@@ -528,11 +523,6 @@ function constantTimeEqual(left, right) {
 
 function matchesETag(header, etag) {
   return (header ?? "").split(",").map((value) => value.trim()).some((value) => value === "*" || value === etag);
-}
-
-function hasExactKeys(value, keys) {
-  return value !== null && typeof value === "object" && !Array.isArray(value) &&
-    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 }
 
 function methodNotAllowed(allowed) {
