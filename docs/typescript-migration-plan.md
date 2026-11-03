@@ -1,0 +1,22 @@
+# TypeScript migration plan
+
+Baseline: `origin/main` at `a16f737e53f15c2dc81509c3603270d51c01ad21`. This plan covers the remaining handwritten JavaScript, including tests and GitHub Actions scripts. The Go agent, SQL, and generated browser JavaScript are outside the conversion. Preserve runtime behavior and public HTTP, database, queue, and asset contracts.
+
+## Current state
+
+The Worker already has strict, no-emit TypeScript configurations for Worker, browser, and Node scripts. Shared Worker modules and operational scripts have been migrated. CI runs binding checks, typechecking, the admin build, tests, and Wrangler dry-runs. Both Worker configurations still enter through `src/index.js`. Remaining application JavaScript is `src/capture-workflow.js`, `src/admin.js`, `src/index.js`, and browser `ui-utils.js`, `openui-core.js`, and `app.js`; tests remain JavaScript. Four `.github/scripts` files are also JavaScript. The browser build emits `app.js`, a published asset URL that should remain stable.
+
+## Sequence
+
+1. **Establish the baseline.** Use the pinned Node 24 (`.nvmrc`), run `npm ci`, `npm run typecheck`, `npm run build:admin`, `npm test`, and `npm run check:config` in `workers/device-sync`; run both `.github/scripts` test suites. Record pre-existing failures. Confirm the intended test discovery behavior for `.test.ts` under the pinned runtime before renaming tests.
+2. **Convert capture orchestration.** Migrate `capture-workflow.js` first, adding explicit types for queue messages, D1 rows, capture state, configuration and error paths. Reuse generated Cloudflare bindings and existing domain types; validate unknown data at external boundaries. Update imports and relevant tests. Preserve queue retries, scheduling and asset lifecycle behavior.
+3. **Convert Worker entry points.** Migrate `admin.js` and then `index.js` in reviewable slices, extracting shared types where useful without changing routes. Type fetch, scheduled and queue handlers, management versus device bindings, authentication, requests and responses. Update both Wrangler `main` paths, generated binding checks, imports, tests and repository skill references. Confirm production management remains disabled in the device Worker.
+4. **Convert the admin UI.** Migrate `ui-utils.js`, `openui-core.js`, then `app.js`; type DOM nullability, API payloads, state and OpenUI integration. Update the esbuild source entry and tests that import or read these files, while retaining the emitted `/admin/app.js` URL and R2 publication contract. Exercise startup and key management interactions using the existing browser tests.
+5. **Convert tests and repository automation.** Move the Worker and script tests to TypeScript in batches and add separate test configurations with appropriate Node, Worker and DOM types so tests are actually typechecked. Keep test discovery explicit if needed; verify the same tests run before and after. Convert `.github/scripts/*.mjs` and their tests to `.mts` or another Node-compatible TypeScript approach, add a root-level Node typecheck setup, and update workflow invocations and path filters. Do not add runtime dependencies to production bundles solely for typing.
+6. **Close the migration.** Search tracked handwritten JS and stale references, document any intentional exceptions, and ensure all TypeScript files (including tests and automation) are in a strict typecheck project. Update developer documentation and CI. Run the baseline suite again, compare test counts and exercise local management startup, representative device enrollment/sync, capture queue/scheduler, and asset publication. Verify both Wrangler dry-runs and generated bindings.
+
+## Delivery and safeguards
+
+Land each phase as a small independently validated change; keep strict checking enabled for converted files and avoid broad `any`, blanket suppressions, or mass behavioral refactors. Give special attention to D1 result shapes, untrusted JSON, Web Crypto types, Cloudflare binding differences, and DOM events. Deployments run automatically after changes reach protected `main`; use local checks and dry-runs during migration, and review deployment readiness before merging. No schema migration should be needed solely for typing.
+
+Done means no unaccounted-for handwritten JavaScript remains, all TypeScript sources and tests are covered by CI typechecking, existing runtime and external contracts remain intact, and the baseline checks and representative local flows pass.

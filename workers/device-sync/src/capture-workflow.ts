@@ -1,7 +1,16 @@
-import { captureScreenshot, validateCaptureTargetURL } from "./capture.ts";
+import { captureScreenshot, validateCaptureTargetURL, type CaptureTarget } from "./capture.ts";
 import { ASSET_RECONCILIATION_PAGE_SIZE, deleteUnreferencedAssets } from "./asset-maintenance.ts";
 import { markAssetLiveStatement } from "./asset-registry.ts";
 import { DEFAULT_CAPTURE_INTERVAL_SECONDS } from "./intervals.ts";
+
+type CaptureEnv = ManagementBindings;
+type DueTarget = { capture_id: string; next_due_at: number };
+type CaptureJob = CaptureTarget & { job_id: string; capture_id: string; status: string; attempts: number; lease_until: number; scheduled_due_at: number | null; enabled: number; capture_interval_seconds: number; current_sha256: string | null; current_size: number | null; validator_etag: string | null; validator_last_modified: string | null };
+type ValidatorTarget = Pick<CaptureJob, "url" | "current_sha256" | "current_size" | "validator_etag" | "validator_last_modified">;
+type ValidatorResult = { unchanged: boolean; outcome: string; etag: string | null; lastModified: string | null };
+type JobDecision = Pick<CaptureJob, "capture_id" | "scheduled_due_at">;
+type CaptureMessage = Message<{ job_id?: unknown }>;
+type CaptureFailureDetails = { message?: string; browserMs: number; browserStarted: boolean; retryable: boolean };
 
 export const MAX_CAPTURE_ATTEMPTS = 3;
 export const MAX_CAPTURE_HISTORY = 10;
@@ -21,13 +30,13 @@ export class CaptureTargetNotAllowedError extends Error {
   }
 }
 
-export async function enqueueCapture(captureID, env, { now = Date.now(), scheduled = false } = {}) {
+export async function enqueueCapture(captureID: string, env: CaptureEnv, { now = Date.now(), scheduled = false } = {}) {
   if (!env.CAPTURE_QUEUE || typeof env.CAPTURE_QUEUE.send !== "function") {
     throw new Error("Capture queue is not configured.");
   }
   const target = await env.DB.prepare(
     "SELECT capture_id, url, capture_interval_seconds, enabled, next_due_at FROM capture_targets WHERE capture_id = ?",
-  ).bind(captureID).first();
+  ).bind(captureID).first<{ enabled: number; url: string; capture_interval_seconds: number; next_due_at: number }>();
   if (!target || target.enabled !== 1) return null;
   try {
     validateCaptureTargetURL(target.url, env.CAPTURE_ALLOWED_HOSTS);
@@ -44,7 +53,7 @@ export async function enqueueCapture(captureID, env, { now = Date.now(), schedul
   if (inserted.meta?.changes !== 1) {
     const existing = await env.DB.prepare(
       "SELECT job_id, status FROM capture_jobs WHERE capture_id = ? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1",
-    ).bind(captureID).first();
+    ).bind(captureID).first<{ job_id: string; status: string }>();
     return existing ? { job_id: existing.job_id, queued: false, status: existing.status } : null;
   }
   if (scheduled) {
@@ -66,11 +75,11 @@ export async function enqueueCapture(captureID, env, { now = Date.now(), schedul
   }
 }
 
-export async function dispatchDueCaptures(env, now = Date.now()) {
+export async function dispatchDueCaptures(env: CaptureEnv, now = Date.now()) {
   if (!env.CAPTURE_QUEUE || typeof env.CAPTURE_QUEUE.send !== "function") return { enqueued: 0, skipped: true };
   const pending = await env.DB.prepare(
     "SELECT COUNT(*) AS count FROM capture_jobs WHERE status IN ('queued', 'running')",
-  ).first();
+  ).first<{ count: number }>();
   const capacity = Math.max(0, Math.min(MAX_PENDING_CAPTURE_JOBS, Number(env.CAPTURE_MAX_PENDING) || MAX_PENDING_CAPTURE_JOBS) - (pending?.count ?? 0));
   if (capacity === 0) return { enqueued: 0, skipped: false };
   // Staged targets receive a first or stale-image warmup; recurring captures stay active-playlist only.
@@ -83,7 +92,7 @@ export async function dispatchDueCaptures(env, now = Date.now()) {
     "AND EXISTS (SELECT 1 FROM playlist_capture_items p WHERE p.capture_id = t.capture_id))) " +
     "AND NOT EXISTS (SELECT 1 FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued', 'running')) " +
     "ORDER BY t.next_due_at, t.created_at LIMIT ?",
-  ).bind(now, now - CAPTURE_RETENTION_MS, capacity).all();
+  ).bind(now, now - CAPTURE_RETENTION_MS, capacity).all<DueTarget>();
   let enqueued = 0;
   for (const target of due.results ?? []) {
     if (await consumeApprovedCaptureSkip(target, env, now)) continue;
@@ -101,10 +110,10 @@ export async function dispatchDueCaptures(env, now = Date.now()) {
   return { enqueued, skipped: false };
 }
 
-async function consumeApprovedCaptureSkip(target, env, now) {
+async function consumeApprovedCaptureSkip(target: DueTarget, env: CaptureEnv, now: number) {
   const approval = await env.DB.prepare(
     "SELECT due_at, expires_at FROM capture_skip_approvals WHERE capture_id = ?",
-  ).bind(target.capture_id).first();
+  ).bind(target.capture_id).first<{ due_at: number; expires_at: number }>();
   if (!approval) return false;
   if (approval.due_at !== target.next_due_at || approval.expires_at < now || approval.due_at > now) {
     await env.DB.prepare("DELETE FROM capture_skip_approvals WHERE capture_id = ?").bind(target.capture_id).run();
@@ -115,7 +124,7 @@ async function consumeApprovedCaptureSkip(target, env, now) {
     "WHERE capture_id = ? AND enabled = 1 AND next_due_at = ? " +
     "AND current_sha256 IS NOT NULL AND failure_count = 0 AND last_error IS NULL " +
     "AND NOT EXISTS (SELECT 1 FROM capture_jobs j WHERE j.capture_id = capture_targets.capture_id AND j.status IN ('queued', 'running'))",
-  ).bind(target.capture_id, approval.due_at).first();
+  ).bind(target.capture_id, approval.due_at).first<{ capture_interval_seconds: number; current_sha256: string; current_size: number; last_success_at: number }>();
   if (!targetRow) {
     await env.DB.prepare("DELETE FROM capture_skip_approvals WHERE capture_id = ?").bind(target.capture_id).run();
     return false;
@@ -128,7 +137,7 @@ async function consumeApprovedCaptureSkip(target, env, now) {
   }
   const recentHistory = await env.DB.prepare(
     "SELECT sha256 FROM capture_history WHERE capture_id = ? ORDER BY captured_at DESC LIMIT 3",
-  ).bind(target.capture_id).all();
+  ).bind(target.capture_id).all<{ sha256: string }>();
   if (recentHistory.results?.length !== 3 ||
       recentHistory.results.some((item) => item.sha256 !== targetRow.current_sha256)) {
     await env.DB.prepare("DELETE FROM capture_skip_approvals WHERE capture_id = ?").bind(target.capture_id).run();
@@ -151,13 +160,13 @@ async function consumeApprovedCaptureSkip(target, env, now) {
   return result[0]?.meta?.changes === 1;
 }
 
-export async function handleCaptureQueue(batch, env, now = Date.now()) {
+export async function handleCaptureQueue(batch: MessageBatch<{ job_id?: unknown }>, env: CaptureEnv, now = Date.now()) {
   for (const message of batch.messages ?? []) {
     await processCaptureMessage(message, env, now);
   }
 }
 
-async function processCaptureMessage(message, env, now) {
+async function processCaptureMessage(message: CaptureMessage, env: CaptureEnv, now: number) {
   const jobID = message.body?.job_id;
   if (typeof jobID !== "string" || !/^[0-9a-f-]{36}$/i.test(jobID)) {
     message.ack();
@@ -168,7 +177,7 @@ async function processCaptureMessage(message, env, now) {
     "t.url, t.capture_interval_seconds, t.viewport_width, t.viewport_height, t.wait_for_selector, t.enabled, " +
     "t.current_sha256, t.current_size, t.validator_etag, t.validator_last_modified " +
     "FROM capture_jobs j JOIN capture_targets t ON t.capture_id = j.capture_id WHERE j.job_id = ?",
-  ).bind(jobID).first();
+  ).bind(jobID).first<CaptureJob>();
   if (!job || ["succeeded", "failed", "deferred"].includes(job.status)) {
     message.ack();
     return;
@@ -211,7 +220,8 @@ async function processCaptureMessage(message, env, now) {
   let result;
   try {
     result = await captureScreenshot(job, env);
-  } catch (error) {
+  } catch (caught) {
+    const error = captureFailureDetails(caught);
     const usedMs = Number.isSafeInteger(error.browserMs) && error.browserMs > 0
       ? error.browserMs
       : error.browserStarted ? nonNegativeInteger(env.CAPTURE_BUDGET_RESERVE_MS, DEFAULT_BUDGET_RESERVE_MS) : 0;
@@ -248,7 +258,7 @@ async function processCaptureMessage(message, env, now) {
   message.ack();
 }
 
-export async function probeCaptureValidator(target, env, fetcher = globalThis.fetch) {
+export async function probeCaptureValidator(target: ValidatorTarget, env: CaptureEnv, fetcher = globalThis.fetch): Promise<ValidatorResult> {
   const approvedHosts = new Set(String(env.CAPTURE_VALIDATOR_HOSTS ?? "")
     .split(",").map((host) => host.trim().toLowerCase()).filter(Boolean));
   let url;
@@ -288,7 +298,7 @@ export async function probeCaptureValidator(target, env, fetcher = globalThis.fe
       outcome = "unavailable";
     }
     if (unchanged) {
-      if (target.current_sha256 && target.current_size > 0) {
+      if (target.current_sha256 && target.current_size !== null && target.current_size > 0) {
         const object = await env.ASSETS.head(`assets/${target.current_sha256}`);
         unchanged = object?.size === target.current_size;
       } else {
@@ -307,7 +317,7 @@ export async function probeCaptureValidator(target, env, fetcher = globalThis.fe
   }
 }
 
-async function completeUnchangedCapture(env, job, validator, now) {
+async function completeUnchangedCapture(env: CaptureEnv, job: CaptureJob, validator: ValidatorResult, now: number) {
   await env.DB.batch([
     env.DB.prepare(
       "UPDATE capture_targets SET last_attempt_at = ?, last_success_at = ?, last_error = NULL, failure_count = 0, " +
@@ -320,20 +330,20 @@ async function completeUnchangedCapture(env, job, validator, now) {
   ]);
 }
 
-function decisionObservationStatement(db, job, outcome, now) {
+function decisionObservationStatement(db: D1Database, job: JobDecision, outcome: string, now: number) {
   return db.prepare(
     "UPDATE capture_decisions SET observed_at = ?, observed_result = ?, observed_delay_ms = ? " +
     "WHERE capture_id = ? AND due_at = ? AND observed_result IS NULL",
   ).bind(now, outcome, Math.max(0, now - (job.scheduled_due_at ?? now)), job.capture_id, job.scheduled_due_at);
 }
 
-async function captureDeferral(env, now) {
+async function captureDeferral(env: CaptureEnv, now: number) {
   const minGap = nonNegativeInteger(env.CAPTURE_MIN_REQUEST_GAP_MS, DEFAULT_REQUEST_GAP_MS);
   const budget = nonNegativeInteger(env.DAILY_BROWSER_BUDGET_MS, DEFAULT_DAILY_BUDGET_MS);
   const reserve = nonNegativeInteger(env.CAPTURE_BUDGET_RESERVE_MS, DEFAULT_BUDGET_RESERVE_MS);
   const usage = await env.DB.prepare(
     "SELECT usage_day, browser_ms, last_started_at FROM capture_usage WHERE singleton = 1",
-  ).first();
+  ).first<{ usage_day: string; browser_ms: number; last_started_at: number | null }>();
   if (usage?.last_started_at && minGap > 0 && now - usage.last_started_at < minGap) {
     return { at: usage.last_started_at + minGap, reason: "Browser Run request rate limit." };
   }
@@ -346,7 +356,7 @@ async function captureDeferral(env, now) {
   return null;
 }
 
-async function markBrowserStart(env, now) {
+async function markBrowserStart(env: CaptureEnv, now: number) {
   const day = new Date(now).toISOString().slice(0, 10);
   await env.DB.prepare(
     "INSERT INTO capture_usage (singleton, usage_day, browser_ms, last_started_at) VALUES (1, ?, 0, ?) " +
@@ -356,7 +366,7 @@ async function markBrowserStart(env, now) {
   ).bind(day, now).run();
 }
 
-async function addBrowserUsage(env, browserMs, now, jobID, source) {
+async function addBrowserUsage(env: CaptureEnv, browserMs: number, now: number, jobID: string, source: "response_header" | "reserve") {
   const day = new Date(now).toISOString().slice(0, 10);
   await env.DB.batch([
     env.DB.prepare(
@@ -373,7 +383,7 @@ async function addBrowserUsage(env, browserMs, now, jobID, source) {
   ]);
 }
 
-async function deferCapture(env, jobID, captureID, at, reason, now, scheduledDueAt = null) {
+async function deferCapture(env: CaptureEnv, jobID: string, captureID: string, at: number, reason: string, now: number, scheduledDueAt: number | null = null) {
   await env.DB.batch([
     env.DB.prepare(
       "UPDATE capture_jobs SET status = 'deferred', finished_at = ?, lease_until = NULL, error = ? WHERE job_id = ?",
@@ -384,10 +394,10 @@ async function deferCapture(env, jobID, captureID, at, reason, now, scheduledDue
   ]);
 }
 
-async function handleCaptureFailure(env, message, job, error, now) {
+async function handleCaptureFailure(env: CaptureEnv, message: CaptureMessage, job: CaptureJob, error: CaptureFailureDetails, now: number) {
   const attempts = job.attempts + 1;
-  const errorMessage = safeCaptureError(error);
-  if (error.retryable === true && attempts < MAX_CAPTURE_ATTEMPTS) {
+  const errorMessage = error.message?.slice(0, 240) ?? "Browser capture failed.";
+  if (error.retryable && attempts < MAX_CAPTURE_ATTEMPTS) {
     await env.DB.batch([
       env.DB.prepare(
         "UPDATE capture_jobs SET status = 'queued', lease_until = NULL, error = ? WHERE job_id = ?",
@@ -402,8 +412,8 @@ async function handleCaptureFailure(env, message, job, error, now) {
   message.ack();
 }
 
-async function markJobFinished(env, jobID, captureID, status, error, now,
-  intervalSeconds = DEFAULT_CAPTURE_INTERVAL_SECONDS, scheduledDueAt = null) {
+async function markJobFinished(env: CaptureEnv, jobID: string, captureID: string, status: string, error: string, now: number,
+  intervalSeconds = DEFAULT_CAPTURE_INTERVAL_SECONDS, scheduledDueAt: number | null = null) {
   await env.DB.batch([
     env.DB.prepare(
       "UPDATE capture_jobs SET status = ?, finished_at = ?, lease_until = NULL, error = ? WHERE job_id = ?",
@@ -416,17 +426,17 @@ async function markJobFinished(env, jobID, captureID, status, error, now,
   ]);
 }
 
-async function pruneCaptureHistory(env, captureID, now) {
+async function pruneCaptureHistory(env: CaptureEnv, captureID: string, now: number) {
   const cutoff = now - CAPTURE_RETENTION_MS;
   const history = await env.DB.prepare(
     "SELECT job_id, sha256, captured_at FROM capture_history WHERE capture_id = ? ORDER BY captured_at DESC, job_id DESC",
-  ).bind(captureID).all();
+  ).bind(captureID).all<{ job_id: string; sha256: string; captured_at: number }>();
   const retained = (history.results ?? []).filter((row) => row.captured_at >= cutoff).slice(0, MAX_CAPTURE_HISTORY);
   const keep = new Set(retained.map((row) => row.job_id));
   const remove = (history.results ?? []).filter((row) => !keep.has(row.job_id));
   const target = await env.DB.prepare(
     "SELECT current_sha256, last_success_at FROM capture_targets WHERE capture_id = ?",
-  ).bind(captureID).first();
+  ).bind(captureID).first<{ current_sha256: string | null; last_success_at: number }>();
   const currentExpired = target?.current_sha256 && target.last_success_at < cutoff;
   const statements = remove.map((row) => env.DB.prepare(
     "DELETE FROM capture_history WHERE capture_id = ? AND job_id = ?",
@@ -440,26 +450,28 @@ async function pruneCaptureHistory(env, captureID, now) {
     await env.DB.batch(statements.slice(offset, offset + ASSET_RECONCILIATION_PAGE_SIZE));
   }
   const candidates = new Set(remove.map((row) => row.sha256));
-  if (currentExpired) candidates.add(target.current_sha256);
+  if (currentExpired && target.current_sha256) candidates.add(target.current_sha256);
   await deleteUnreferencedAssets(env, [...candidates], now);
 }
 
-export async function cleanupExpiredCaptures(env, now = Date.now()) {
+export async function cleanupExpiredCaptures(env: CaptureEnv, now = Date.now()) {
   const cutoff = now - CAPTURE_RETENTION_MS;
   const expired = await env.DB.prepare(
     "SELECT capture_id FROM capture_targets WHERE (current_sha256 IS NOT NULL AND last_success_at < ?) " +
     "OR capture_id IN (SELECT capture_id FROM capture_history WHERE captured_at < ?) LIMIT 100",
-  ).bind(cutoff, cutoff).all();
+  ).bind(cutoff, cutoff).all<{ capture_id: string }>();
   for (const row of expired.results ?? []) await pruneCaptureHistory(env, row.capture_id, now);
   return expired.results?.length ?? 0;
 }
 
-function safeCaptureError(error) {
-  if (typeof error?.message !== "string") return "Browser capture failed.";
-  return error.message.slice(0, 240);
+function captureFailureDetails(error: unknown): CaptureFailureDetails {
+  const details = error !== null && typeof error === "object" ? error as Record<string, unknown> : {};
+  return { message: typeof details.message === "string" ? details.message : undefined,
+    browserMs: typeof details.browserMs === "number" ? details.browserMs : 0,
+    browserStarted: details.browserStarted === true, retryable: details.retryable === true };
 }
 
-function nonNegativeInteger(value, fallback) {
+function nonNegativeInteger(value: unknown, fallback: number) {
   if (value === undefined || value === null || value === "") return fallback;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback;
