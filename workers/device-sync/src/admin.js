@@ -1,4 +1,6 @@
 import { readRequestBody as readBytes, parseJSONBody } from "./request-body.ts";
+import { randomToken, sha256Hex } from "./crypto-primitives.ts";
+export { sha256Hex } from "./crypto-primitives.ts";
 import { HTTPError } from "./http-error.ts";
 import { hasExactKeys, hasOnlyKeys } from "./validation.ts";
 import {
@@ -1250,20 +1252,6 @@ async function readJSON(request) {
   }
   const bytes = await readBytes(request, MAX_JSON_BYTES);
   return parseJSONBody(bytes);
-}
-
-function randomToken() {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
-}
-
-export async function sha256Hex(value) {
-  return sha256BytesHex(new TextEncoder().encode(value));
-}
-
-async function sha256BytesHex(bytes) {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 function parseMetadata(value) {
