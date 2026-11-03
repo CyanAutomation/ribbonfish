@@ -11,7 +11,7 @@ import {
   mergeStatements,
 } from "@openuidev/lang-core";
 import { z } from "zod";
-import { compactIdentifier } from "./ui-utils.js";
+import { compactIdentifier } from "./ui-utils.ts";
 
 const READ_ONLY_TOOL = "get_fleet_overview";
 

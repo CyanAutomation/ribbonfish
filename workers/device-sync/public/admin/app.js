@@ -26,7 +26,7 @@ import {
   summarizeFleetAttention,
   prioritizeCaptureTargets,
   summarizeCaptureErrors,
-} from "./ui-utils.js";
+} from "./ui-utils.ts";
 
 const fleetSummary = document.querySelector("#fleet-summary");
 const fleetAttention = document.querySelector("#fleet-attention");

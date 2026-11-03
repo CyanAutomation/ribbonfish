@@ -8,7 +8,7 @@ import {
 import { deriveDeviceHealth } from "./device-health.ts";
 import { isPNG, MAX_ASSET_BYTES, storePngAsset } from "./asset-store.ts";
 import { normalizeCaptureSelector, validateCaptureSettings, validateCaptureTargetURL } from "./capture.ts";
-import { CaptureTargetNotAllowedError, dispatchDueCaptures, enqueueCapture } from "./capture-workflow.js";
+import { CaptureTargetNotAllowedError, dispatchDueCaptures, enqueueCapture } from "./capture-workflow.ts";
 import { AssetDeletionInProgressError, markAssetLiveStatement } from "./asset-registry.ts";
 import { callJevDecision, JEVRequestError } from "./jev.ts";
 import {

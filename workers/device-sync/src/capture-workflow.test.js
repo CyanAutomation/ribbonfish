@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { dispatchDueCaptures, enqueueCapture, handleCaptureQueue } from "./capture-workflow.js";
+import { dispatchDueCaptures, enqueueCapture, handleCaptureQueue } from "./capture-workflow.ts";
 import { fetchHandler, queueHandler, scheduledHandler } from "./index.js";
 import { handleAdminRequest } from "./admin.js";
 
