@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { callJevDecision, validateAnswers } from "./jev.ts";
+import { callJevDecision, validateAnswers, JEVRequestError } from "./jev.ts";
 import {
   buildCaptureAssessmentState,
   buildFleetAnalysisState,
@@ -25,12 +25,14 @@ const sampleAnswers = {
 };
 
 test("JEV decision primitive sends a typed decision request and returns validated answers", async () => {
-  let requested;
+  const requests: Array<{ url: string; options: RequestInit; body: Record<string, unknown> }> = [];
   const result = await callJevDecision({ OPENROUTER_API_KEY: "server-secret" }, {
     state: JSON.stringify({ summary: "compact state" }),
     questions: captureAssessmentQuestions,
     fetcher: async (url, options) => {
-      requested = { url: String(url), options, body: JSON.parse(options.body) };
+      assert.ok(options);
+      assert.ok(typeof options.body === "string");
+      requests.push({ url: String(url), options, body: JSON.parse(options.body) });
       return Response.json({
         model: "typesafe/jev-1.13",
         answers: {
@@ -44,8 +46,10 @@ test("JEV decision primitive sends a typed decision request and returns validate
     },
   });
 
+  const requested = requests[0];
+  assert.ok(requested);
   assert.equal(requested.url, "https://openrouter.ai/api/alpha/decisions");
-  assert.equal(requested.options.headers.Authorization, "Bearer server-secret");
+  assert.equal(new Headers(requested.options.headers).get("Authorization"), "Bearer server-secret");
   assert.equal(requested.body.model, "~typesafe/jev-latest");
   assert.deepEqual(requested.body.state, { summary: "compact state" });
   assert.deepEqual(result.answers, sampleAnswers);
@@ -70,7 +74,10 @@ test("JEV decision primitive rejects missing secrets, oversized input, provider 
   }), /invalid decision answers/);
   await assert.rejects(callJevDecision({ OPENROUTER_API_KEY: "key" }, {
     state: JSON.stringify({ summary: "state" }), questions: captureAssessmentQuestions, timeoutMs: 1,
-    fetcher: (_url, { signal }) => new Promise((_, reject) => signal.addEventListener("abort", () => reject(Object.assign(new Error(), { name: "AbortError" })))),
+    fetcher: (_url, options) => new Promise((_, reject) => {
+      assert.ok(options?.signal);
+      options.signal.addEventListener("abort", () => reject(Object.assign(new Error(), { name: "AbortError" })));
+    }),
   }), /timed out/);
   await assert.rejects(callJevDecision({ OPENROUTER_API_KEY: "key" }, {
     state: JSON.stringify({ summary: "state" }), questions: captureAssessmentQuestions,
@@ -84,6 +91,7 @@ test("provider errors retain upstream status separately from the client-facing s
       state: "{}", questions: captureAssessmentQuestions,
       fetcher: async () => new Response("private provider details", { status: upstreamStatus }),
     }), (error) => {
+      assert.ok(error instanceof JEVRequestError);
       assert.equal(error.status, 502);
       assert.equal(error.upstreamStatus, upstreamStatus);
       assert.doesNotMatch(error.message, /private provider details/);
@@ -104,7 +112,7 @@ test("answer validation enforces choices, types, probabilities, confidence, and 
 });
 
 test("fleet analysis state contains bounded operational signals without sensitive identifiers or URLs", () => {
-  const state = buildFleetAnalysisState({
+  const input = {
     devices: [
       { device_id: "private-name", enabled: 1, health: { status: "healthy", reported_state: "ready", sync_status: "ok", applied_playlist_id: "private-list", applied_revision: "secret-revision" } },
       { device_id: "another-name", enabled: 1, health: { status: "degraded", reported_state: "degraded", sync_status: "failed", applied_playlist_id: "private-list", applied_revision: "old-revision" } },
@@ -114,7 +122,8 @@ test("fleet analysis state contains bounded operational signals without sensitiv
     active_playlist: { playlist_id: "private-list", revision: "secret-revision" },
     asset_health: { missing: [{ sha256: "secret-digest" }], integrity_issues: [{ issue_type: "size_mismatch" }] },
     capture_targets: [{ display_url: "https://secret.example/private", job_status: "queued", last_error: "raw failure" }],
-  });
+  };
+  const state = buildFleetAnalysisState(input);
   assert.deepEqual(JSON.parse(state), {
     devices: { healthy: 1, degraded: 1, stale: 0, offline: 0, unknown: 0, disabled: 1 },
     agent_states: { ready: 1, starting: 0, degraded: 1, startup_failed: 0, stopping: 0, unknown: 0 },
@@ -129,7 +138,7 @@ test("fleet analysis state contains bounded operational signals without sensitiv
 });
 
 test("capture assessment state includes only allowlisted metadata and no private URL parts", () => {
-  const state = buildCaptureAssessmentState({
+  const input = {
     url: "https://user:pass@example.com/private?token=secret#fragment",
     capture_interval_seconds: 300,
     last_success_at: 1_000,
@@ -142,7 +151,8 @@ test("capture assessment state includes only allowlisted metadata and no private
       { browser_ms: 3000, browser_ms_source: "response_header", sha256: "a", captured_at: 9000 },
       { browser_ms: 2000, browser_ms_source: "response_header", sha256: "b", captured_at: 9500 },
     ],
-  }, 10_000);
+  };
+  const state = buildCaptureAssessmentState(input, 10_000);
   assert.deepEqual(JSON.parse(state), {
     screenshot_age_seconds: 9,
     configured_interval_seconds: 300,
@@ -161,15 +171,19 @@ test("capture assessment state includes only allowlisted metadata and no private
 });
 
 test("JEV state must be a bounded JSON object and the requested model cannot be overridden", async () => {
-  let body;
-  await callJevDecision({ OPENROUTER_API_KEY: "key", JEV_MODEL: "attacker/model" }, {
+  const bodies: Array<Record<string, unknown>> = [];
+  const env = { OPENROUTER_API_KEY: "key", JEV_MODEL: "attacker/model" };
+  await callJevDecision(env, {
     state: JSON.stringify({ safe: true }),
     questions: captureAssessmentQuestions,
     fetcher: async (_url, options) => {
-      body = JSON.parse(options.body);
+      assert.ok(typeof options?.body === "string");
+      bodies.push(JSON.parse(options.body));
       return Response.json({ answers: sampleAnswers });
     },
   });
+  const body = bodies[0];
+  assert.ok(body);
   assert.equal(body.model, "~typesafe/jev-latest");
   assert.deepEqual(body.state, { safe: true });
   await assert.rejects(callJevDecision({ OPENROUTER_API_KEY: "key" }, {
