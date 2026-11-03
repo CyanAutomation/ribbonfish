@@ -28,7 +28,7 @@ import {
   summarizeFleetAttention,
   prioritizeCaptureTargets,
   summarizeCaptureErrors,
-} from "../public/admin/ui-utils.js";
+} from "../public/admin/ui-utils.ts";
 
 // Contract source: ../README.md#local-development and ../README.md#management-api.
 // Device health presentation contract: ../README.md#management-api.
