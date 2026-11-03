@@ -1,4 +1,4 @@
-import { assessUpcomingCaptures } from "./capture-intelligence.js";
+import { assessUpcomingCaptures } from "./capture-intelligence.ts";
 import { isSupportedRotationInterval } from "./intervals.ts";
 import { handleAdminRequest } from "./admin.js";
 import { cleanupExpiredCaptures, dispatchDueCaptures, handleCaptureQueue } from "./capture-workflow.js";

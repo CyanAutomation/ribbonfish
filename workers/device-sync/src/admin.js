@@ -16,7 +16,7 @@ import {
   buildFleetAnalysisState,
   captureAssessmentQuestions,
   fleetAnalysisQuestions,
-} from "./jev-use-cases.js";
+} from "./jev-use-cases.ts";
 
 const MAX_JSON_BYTES = 64 << 10;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
