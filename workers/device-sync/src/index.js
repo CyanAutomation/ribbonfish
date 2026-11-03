@@ -1,3 +1,4 @@
+import { jsonResponse, privateHeaders } from "./http-response.ts";
 import { validatePlaylist } from "./playlist-validation.ts";
 import { verifyDeviceSignature, decodeBase64Url, encodeBase64Url, equalSha256Digests } from "./device-signature.ts";
 import { matchesETag } from "./http-cache.ts";
@@ -405,16 +406,4 @@ function formatFingerprint(requestID) {
 
 function methodNotAllowed(allowed) {
   return new Response("method not allowed", { status: 405, headers: privateHeaders({ Allow: allowed }) });
-}
-
-function jsonResponse(value, status, extraHeaders = {}) {
-  const headers = privateHeaders({ "Content-Type": "application/json; charset=utf-8", ...extraHeaders });
-  return new Response(JSON.stringify(value), { status, headers });
-}
-
-function privateHeaders(values = {}) {
-  const headers = new Headers(values);
-  headers.set("Cache-Control", "private, no-store, no-transform");
-  headers.set("X-Content-Type-Options", "nosniff");
-  return headers;
 }

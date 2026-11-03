@@ -1,3 +1,4 @@
+import { jsonResponse } from "./http-response.ts";
 import { matchesETag } from "./http-cache.ts";
 import { readRequestBody as readBytes, parseJSONBody } from "./request-body.ts";
 import { randomToken, sha256Hex } from "./crypto-primitives.ts";
@@ -1257,15 +1258,4 @@ function parseMetadata(value) {
 
 function methodNotAllowed(allowed) {
   return new Response("method not allowed", { status: 405, headers: { Allow: allowed } });
-}
-
-function jsonResponse(value, status = 200) {
-  return new Response(JSON.stringify(value), {
-    status,
-    headers: {
-      "Cache-Control": "private, no-store, no-transform",
-      "Content-Type": "application/json; charset=utf-8",
-      "X-Content-Type-Options": "nosniff",
-    },
-  });
 }
