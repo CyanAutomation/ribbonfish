@@ -1215,3 +1215,22 @@ test('abandoned background assessment can be retried without changing the schedu
     assert.equal(sqlite.prepare('SELECT action FROM capture_decisions').get().action, 'capture');
   } finally { sqlite.close(); }
 });
+
+test("capture site names can be updated, cleared, and appear in the overview", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env } = environment(sqlite);
+    const site = await registerCaptureSite(env, "https://example.com/named");
+    const path = `/admin/api/captures/${site.body.capture_id}/name`;
+    const update = async (name) => handleAdminRequest(await request(path, { method: "PATCH", body: { name } }), env);
+    let response = await update("  fbo QA status  ");
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).name, "fbo QA status");
+    response = await handleAdminRequest(await request("/admin/api/overview"), env);
+    assert.equal((await response.json()).capture_targets[0].name, "fbo QA status");
+    assert.equal((await update("x".repeat(121))).status, 400);
+    assert.equal((await update(12)).status, 400);
+    assert.equal((await update("")).status, 200);
+    assert.equal(sqlite.prepare("SELECT name FROM capture_targets WHERE capture_id = ?").get(site.body.capture_id).name, null);
+  } finally { sqlite.close(); }
+});

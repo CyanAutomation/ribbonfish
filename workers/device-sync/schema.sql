@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS capture_targets (
   validator_etag TEXT,
   validator_last_modified TEXT,
   wait_for_selector TEXT,
+  name TEXT,
   last_error TEXT,
   failure_count INTEGER NOT NULL DEFAULT 0,
   schedule_reviewed_at INTEGER,

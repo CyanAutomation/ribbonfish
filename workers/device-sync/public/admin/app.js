@@ -522,6 +522,19 @@ function renderPlaylists(playlists) {
   });
 }
 
+let openCaptureID = null;
+function filterCaptureTargets() {
+  const query = document.querySelector("#capture-search").value.trim().toLocaleLowerCase();
+  const filter = document.querySelector("#capture-filter").value;
+  const cards = [...document.querySelectorAll("#capture-target-list .capture-target")];
+  for (const card of cards) {
+    card.hidden = !card.dataset.search.includes(query) || (filter !== "all" && card.dataset.filter !== filter);
+  }
+  document.querySelector("#capture-filter-empty").hidden = !cards.length || cards.some((card) => !card.hidden);
+}
+document.querySelector("#capture-search").addEventListener("input", filterCaptureTargets);
+document.querySelector("#capture-filter").addEventListener("change", filterCaptureTargets);
+
 function renderCaptureTargets(targets, decisions = [], efficiency = null) {
   const decisionByTarget = new Map(decisions.map((decision) => [decision.capture_id, decision]));
   const container = document.querySelector("#capture-target-list");
@@ -557,6 +570,9 @@ function renderCaptureTargets(targets, decisions = [], efficiency = null) {
   }
   prioritizeCaptureTargets(targets).forEach((target) => {
     const card = node("article", undefined, "capture-target");
+    const siteName = target.name || target.display_url;
+    card.dataset.search = `${target.name ?? ""} ${target.display_url}`.toLocaleLowerCase();
+    card.dataset.filter = target.last_error || !target.schedule_reviewed || !target.last_success_at ? "attention" : "ready";
     const preview = node("img", undefined, "capture-target__preview");
     preview.src = `/admin/api/assets/${target.sha256}`;
     preview.alt = `Latest screenshot or placeholder image for ${target.display_url}`;
@@ -566,16 +582,52 @@ function renderCaptureTargets(targets, decisions = [], efficiency = null) {
 
     const content = node("div", undefined, "capture-target__content");
     const heading = node("div", undefined, "capture-target__heading");
-    heading.append(node("h4", target.display_url));
+    heading.append(node("h3", siteName));
     const screenshotStatus = formatScreenshotStatus(target.job_status, target.last_error, target.last_success_at);
     heading.append(statusBadge(screenshotStatus.label, screenshotStatus.tone));
     if (!target.schedule_reviewed) heading.append(statusBadge("Schedule review needed", "warning"));
     content.append(heading);
-    content.append(node("p", target.last_success_at ? `Last screenshot ${formatTimestamp(target.last_success_at)}` : "No screenshot is ready yet.", "muted"));
-    if (target.last_error) content.append(node("p", `Screenshot error: ${target.last_error}`, "capture-target__error error-title"));
+    content.append(node("p", target.last_success_at ? `Last successful capture ${formatTimestamp(target.last_success_at)}` : "No screenshot is ready yet.", "muted"));
+    content.append(node("p", `${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`, "muted"));
+    if (target.last_error && !repeatedErrors.some((issue) => issue.message === target.last_error)) content.append(node("p", `Screenshot error: ${target.last_error}`, "capture-target__error error-title"));
+
+    const detail = node("details", undefined, "capture-target__panel");
+    detail.open = openCaptureID === target.capture_id;
+    detail.addEventListener("toggle", () => {
+      if (detail.open) {
+        openCaptureID = target.capture_id;
+        for (const other of container.querySelectorAll(".capture-target__panel[open]")) {
+          if (other !== detail) other.open = false;
+        }
+      } else if (openCaptureID === target.capture_id) openCaptureID = null;
+    });
+    detail.append(node("summary", "View details"));
+    const detailContent = node("div", undefined, "capture-target__panel-content");
+    detailContent.append(node("p", target.display_url, "capture-target__url muted"));
+    const nameSection = node("section", undefined, "capture-detail-section");
+    nameSection.append(node("h4", "Site name"));
+    const nameLabel = node("label", "Name (optional)");
+    const nameInput = node("input", undefined, "field-control");
+    nameInput.type = "text"; nameInput.maxLength = 120; nameInput.value = target.name ?? "";
+    nameInput.dataset.siteName = "true";
+    nameLabel.append(nameInput);
+    const saveName = button("Save name", "secondary");
+    saveName.addEventListener("click", async () => {
+      saveName.disabled = true;
+      try {
+        await api(`/admin/api/captures/${encodeURIComponent(target.capture_id)}/name`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: nameInput.value }),
+        });
+        showMessage("Site name updated.", false, "sites");
+        await refresh();
+      } catch (error) { showMessage(error.message, true, "sites"); }
+      finally { saveName.disabled = false; }
+    });
+    nameSection.append(nameLabel, saveName);
+    detailContent.append(nameSection);
 
     const metadata = node("details", undefined, "capture-target__details");
-    metadata.append(node("summary", "Schedule and screenshot details"));
+    metadata.append(node("summary", "Schedule and settings"));
     metadata.append(node("p", `${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`, "muted"));
     metadata.append(node("p", "This schedule is shared by every playlist that uses this page at the same screenshot size.", "field-hint"));
     const intervalLabel = node("label", "Screenshot interval ");
@@ -597,12 +649,14 @@ function renderCaptureTargets(targets, decisions = [], efficiency = null) {
           method: "PATCH", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ capture_interval_seconds: Number(intervalSelect.value) }),
         });
-        showMessage(target.schedule_reviewed ? "Screenshot schedule updated." : "Screenshot schedule reviewed. This site can now be added to playlists.", false, "global");
+        showMessage(target.schedule_reviewed ? "Screenshot schedule updated." : "Screenshot schedule reviewed. This site can now be added to playlists.", false, "sites");
         await refresh();
-      } catch (error) { showMessage(error.message, true, "global"); }
+      } catch (error) { showMessage(error.message, true, "sites"); }
       finally { saveInterval.disabled = false; }
     });
     metadata.append(intervalLabel, saveInterval);
+    const advanced = node("details", undefined, "capture-target__details");
+    advanced.append(node("summary", "Advanced readiness settings"));
     const selectorLabel = node("label", "Wait for CSS selector ");
     const selectorInput = node("input");
     selectorInput.type = "text";
@@ -611,7 +665,7 @@ function renderCaptureTargets(targets, decisions = [], efficiency = null) {
     selectorInput.value = target.wait_for_selector ?? "";
     selectorInput.setAttribute("aria-label", `Wait for CSS selector for ${target.display_url}`);
     selectorLabel.append(selectorInput);
-    metadata.append(selectorLabel, node("p",
+    advanced.append(selectorLabel, node("p",
       "Optional. Capture waits for this element to appear after page load. Leave blank to keep the current readiness behavior.", "field-hint"));
     const saveReadiness = button("Save readiness setting", "secondary");
     saveReadiness.addEventListener("click", async () => {
@@ -621,22 +675,22 @@ function renderCaptureTargets(targets, decisions = [], efficiency = null) {
           method: "PATCH", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ wait_for_selector: selectorInput.value }),
         });
-        showMessage("Capture readiness updated. The screenshot schedule is unchanged.", false, "global");
+        showMessage("Capture readiness updated. The screenshot schedule is unchanged.", false, "sites");
         await refresh();
-      } catch (error) { showMessage(error.message, true, "global"); }
+      } catch (error) { showMessage(error.message, true, "sites"); }
       finally { saveReadiness.disabled = false; }
     });
-    metadata.append(saveReadiness);
-    if (target.last_error) metadata.append(node("p", `Full error: ${target.last_error}`, "error-title"));
-    if (Number.isSafeInteger(target.next_due_at)) metadata.append(node("p", `Next screenshot ${formatTimestamp(target.next_due_at)}`, "muted"));
+    advanced.append(saveReadiness);
+    if (target.last_error) detailContent.append(node("p", `Screenshot error: ${target.last_error}`, "error-title"));
+    if (Number.isSafeInteger(target.next_due_at)) detailContent.append(node("p", `Next screenshot ${formatTimestamp(target.next_due_at)}`, "muted"));
     const backgroundDecision = decisionByTarget.get(target.capture_id);
     if (backgroundDecision) {
       const suggestion = backgroundDecision.action === "defer_once" ? "A later capture could be suitable" :
         backgroundDecision.action === "error" ? "Assessment unavailable" : "Keep the scheduled capture";
-      metadata.append(node("p", `Background assessment ${formatTimestamp(backgroundDecision.assessed_at)} for ${formatTimestamp(backgroundDecision.due_at)}: ${suggestion}. ${backgroundDecision.reason} ${formatCaptureObservation(backgroundDecision)} The schedule was unchanged.`, "muted"));
+      metadata.dataset.assessment = `Background assessment ${formatTimestamp(backgroundDecision.assessed_at)} for ${formatTimestamp(backgroundDecision.due_at)}: ${suggestion}. ${backgroundDecision.reason} ${formatCaptureObservation(backgroundDecision)} The schedule was unchanged.`;
     }
 
-    content.append(metadata);
+    detailContent.append(metadata, advanced);
 
     const actions = node("div", undefined, "action-row");
     const capture = button("Take screenshot now", "secondary");
@@ -649,9 +703,9 @@ function renderCaptureTargets(targets, decisions = [], efficiency = null) {
           body: "{}",
         });
         const status = result.status === "running" ? "has started" : "is queued";
-        showMessage(`Screenshot job ${compactIdentifier(result.job_id)} ${status}.`, false, "playlist");
+        showMessage(`Screenshot job ${compactIdentifier(result.job_id)} ${status}.`, false, "sites");
         await refresh();
-      } catch (error) { showMessage(error.message, true, "playlist"); }
+      } catch (error) { showMessage(error.message, true, "sites"); }
       finally { capture.disabled = false; }
     });
     actions.append(capture);
@@ -670,11 +724,11 @@ function renderCaptureTargets(targets, decisions = [], efficiency = null) {
           () => api(`/admin/api/captures/${encodeURIComponent(target.capture_id)}`, { method: "DELETE" }),
         );
         if (!confirmed) return;
-        showMessage(`${target.display_url} was removed. Future screenshots have stopped.`, false, "global");
+        showMessage(`${target.display_url} was removed. Future screenshots have stopped.`, false, "sites");
         await refresh();
-      } catch (error) { showMessage(error.message, true, "global"); }
+      } catch (error) { showMessage(error.message, true, "sites"); }
     });
-    actions.append(actionDisclosure(`More actions for ${target.display_url}`, [removeSite]));
+    const removeActions = actionDisclosure(`More actions for ${siteName}`, [removeSite]);
     const assessmentDisclosure = node("details", undefined, "capture-target__assessment");
     assessmentDisclosure.append(node("summary", "Assess screenshot schedule"));
     const assess = button("Run advisory assessment", "secondary");
@@ -696,12 +750,16 @@ function renderCaptureTargets(targets, decisions = [], efficiency = null) {
         assessment.replaceChildren(node("p", error.message, "error-title"));
       } finally { assess.disabled = false; }
     });
-    content.append(actions);
+    detailContent.prepend(actions);
+    if (metadata.dataset.assessment) assessmentDisclosure.append(node("p", metadata.dataset.assessment, "muted"));
     assessmentDisclosure.append(assess, assessment);
-    content.append(assessmentDisclosure);
+    detailContent.append(assessmentDisclosure, removeActions);
+    detail.append(detailContent);
+    content.append(detail);
     card.append(preview, content);
     container.append(card);
   });
+  filterCaptureTargets();
 }
 
 function renderAvailableSites(targets, selectedIDs = null) {
@@ -725,7 +783,7 @@ function renderAvailableSites(targets, selectedIDs = null) {
     preview.loading = "lazy";
     preview.decoding = "async";
     preview.addEventListener("error", () => { preview.hidden = true; }, { once: true });
-    label.append(checkbox, preview, node("span", `${target.display_url} · ${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`));
+    label.append(checkbox, preview, node("span", `${target.name ? `${target.name} · ` : ""}${target.display_url} · ${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`));
     list.append(label);
   });
 }

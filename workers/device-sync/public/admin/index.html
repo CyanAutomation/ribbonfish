@@ -59,6 +59,7 @@
       <section id="sites-section" class="panel" aria-labelledby="sites-title">
         <div class="section-heading"><div><p class="eyebrow">Sites</p><h2 id="sites-title">Capture sites</h2></div></div>
         <p class="muted">Register pages and review their screenshot schedules here. Sites are independent of playlists; only reviewed sites can be added to a playlist. Scheduled captures run when a site is included in the active playlist.</p>
+        <div class="alert alert--success status-banner" data-feedback-slot="sites" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss site message">Dismiss</button></div>
         <details id="capture-site-editor" class="editor-disclosure"><summary>Add a site</summary>
         <form id="capture-site-form" class="form-grid">
           <label class="field--wide">Public HTTPS URL <input class="field-control" name="url" type="url" placeholder="https://status.example.com" required></label>
@@ -67,6 +68,11 @@
           <p id="capture-site-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
         </form>
         </details>
+        <div class="capture-filters">
+          <label>Search sites <input id="capture-search" class="field-control" type="search" placeholder="Search name or URL"></label>
+          <label>Status <select id="capture-filter" class="field-control"><option value="all">All sites</option><option value="attention">Needs attention</option><option value="ready">Ready</option></select></label>
+        </div>
+        <p id="capture-filter-empty" class="muted" hidden>No sites match your search and filters.</p>
         <div id="capture-target-list" class="capture-target-list" role="region" aria-label="Capture sites" aria-live="polite"></div>
       </section>
 
