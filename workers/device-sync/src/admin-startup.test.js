@@ -36,7 +36,7 @@ test("management page starts, renders its data, and dismisses errors", async () 
     environment: { production: true },
     asset_health: { missing: [] },
     playlists: [], devices: [], audit: [], capture_targets: [{
-      capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", display_url: "https://status.example/",
+      capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", display_url: "https://status.example/", name: "fbo QA status",
       capture_interval_seconds: 86400, viewport: { width: 1920, height: 1080 }, sha256: "a".repeat(64), size: 4,
       schedule_reviewed: true,
     }, {
@@ -97,6 +97,21 @@ test("management page starts, renders its data, and dismisses errors", async () 
     assert.equal(window.document.activeElement, analysisLink);
     assert.match(window.document.querySelector("#capture-target-list").textContent, /https:\/\/status.example\//);
     assert.match(window.document.querySelector("#capture-target-list").textContent, /Schedule review needed/);
+    assert.match(window.document.querySelector("#capture-target-list").textContent, /fbo QA status/);
+    assert.match(window.document.querySelector("#available-sites").textContent, /fbo QA status/);
+    const search = window.document.querySelector("#capture-search");
+    search.value = "status.example";
+    search.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.equal(window.document.querySelectorAll("#capture-target-list .capture-target:not([hidden])").length, 1);
+    search.value = "";
+    search.dispatchEvent(new window.Event("input", { bubbles: true }));
+    const nameInput = window.document.querySelector("#capture-target-list input[data-site-name]");
+    nameInput.value = "fbo QA status";
+    nameInput.parentElement.parentElement.querySelector("button").click();
+    await new Promise((resolve) => setImmediate(resolve));
+    const nameRequest = requests.find(({ path }) => path.endsWith("/name"));
+    assert.equal(JSON.parse(nameRequest.options.body).name, "fbo QA status");
+
     const scheduleButton = [...window.document.querySelectorAll("#capture-target-list button")]
       .find((button) => button.textContent === "Confirm schedule");
     scheduleButton.click();
@@ -121,7 +136,7 @@ test("management page starts, renders its data, and dismisses errors", async () 
     assert.deepEqual(playlistBody.captures, [{ capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }]);
 
     const siteCard = [...window.document.querySelectorAll("#capture-target-list article")]
-      .find((card) => card.querySelector("h4")?.textContent === "https://status.example/");
+      .find((card) => card.querySelector("h3")?.textContent === "fbo QA status");
     const removeSiteButton = [...siteCard.querySelectorAll("button")]
       .find((button) => button.textContent === "Remove capture site");
     assert.equal(removeSiteButton.closest("details").open, false);
