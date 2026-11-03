@@ -1,4 +1,11 @@
-const AUDIT_EVENT_LABELS = {
+type Playlist = { playlist_id?: string; revision_count?: number; active?: boolean | number; created_at?: number };
+type CaptureSummary = { last_error?: string | null; job_status?: string; schedule_reviewed?: boolean | number };
+type FleetOverview = { devices?: { enabled?: boolean | number; health?: { status?: string } }[]; asset_health?: { missing?: { sha256?: string }[]; integrity_issues?: { sha256?: string }[] }; capture_targets?: CaptureSummary[] };
+type HealthOutput = { connector?: string; error_code?: string; last_frame_age_seconds: number | null; display_id: string; status: string };
+type HealthReport = { sync?: { last_success_age_seconds?: number | null; status?: string; applied_playlist_id?: string; applied_revision?: number }; agent_version: string; agent_uptime_seconds: number; startup_error_code?: string; outputs?: HealthOutput[]; host?: { uptime_seconds: number; temperature_millicelsius: number; memory_available_bytes: number; state_disk_free_bytes: number; load_1m: number } };
+type HealthHistory = { events?: { metadata?: { health_status?: string; previous_health_status?: string }; received_at: number; event_type: string; error_code?: string }[]; samples?: unknown[] };
+
+const AUDIT_EVENT_LABELS: Record<string, string> = {
   "asset.uploaded": "Uploaded playlist image",
   "capture.skip_once_applied": "Skipped one scheduled screenshot",
   "capture.skip_once_confirmed": "Confirmed one screenshot skip",
@@ -26,9 +33,9 @@ export function createTransientNotice({
   onExpire = () => {},
   nowFn = Date.now,
 } = {}) {
-  let timer = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
   let remaining = duration;
-  let startedAt = null;
+  let startedAt: number | null = null;
   let active = false;
   const schedule = () => {
     startedAt = nowFn();
@@ -50,7 +57,7 @@ export function createTransientNotice({
       if (!active || timer === null) return;
       clearTimeoutFn(timer);
       timer = null;
-      remaining = Math.max(0, remaining - Math.max(0, nowFn() - startedAt));
+      remaining = Math.max(0, remaining - Math.max(0, nowFn() - (startedAt ?? nowFn())));
     },
     resume() {
       if (!active || timer !== null) return;
@@ -71,13 +78,13 @@ export function createTransientNotice({
   };
 }
 
-export function formatPlaylistState(active) {
+export function formatPlaylistState(active: unknown) {
   return active ? "Active" : "Ready to activate";
 }
 
-export function playlistDeleteActionStates(playlists) {
+export function playlistDeleteActionStates(playlists: Playlist[]) {
   const records = Array.isArray(playlists) ? playlists : [];
-  const groups = new Map();
+  const groups = new Map<string, { count: number; versionCount: number; active: boolean; representative: Playlist | null }>();
 
   records.forEach((playlist) => {
     const playlistID = String(playlist?.playlist_id ?? "");
@@ -116,7 +123,7 @@ export function playlistDeleteActionStates(playlists) {
   });
 }
 
-export function formatScreenshotStatus(jobStatus, lastError, lastSuccessAt) {
+export function formatScreenshotStatus(jobStatus: string | null, lastError: string | null, lastSuccessAt: number | null) {
   if (jobStatus === "running") return { label: "Screenshot in progress", tone: "warning" };
   if (jobStatus === "queued") return { label: "Screenshot queued", tone: "warning" };
   if (lastError) return { label: "Needs attention", tone: "warning" };
@@ -124,7 +131,7 @@ export function formatScreenshotStatus(jobStatus, lastError, lastSuccessAt) {
   return { label: "Waiting for first screenshot", tone: "neutral" };
 }
 
-export function summarizeFleetAttention(overview = {}, enrollmentRequests = []) {
+export function summarizeFleetAttention(overview: FleetOverview = {}, enrollmentRequests: unknown[] = []) {
   const items = [];
   const devices = Array.isArray(overview.devices) ? overview.devices : [];
   const healthReviewCount = devices.filter((device) => {
@@ -137,7 +144,7 @@ export function summarizeFleetAttention(overview = {}, enrollmentRequests = []) 
   ];
   const uniqueAssetIssues = new Set(assetIssues.map((asset, index) => asset.sha256 ?? `issue-${index}`));
   const failedCaptures = (overview.capture_targets ?? []).filter((target) =>
-    Boolean(target.last_error) && !["queued", "running"].includes(target.job_status)).length;
+    Boolean(target.last_error) && !["queued", "running"].includes(target.job_status ?? "")).length;
 
   if (enrollmentRequests.length) {
     items.push({
@@ -178,7 +185,7 @@ export function summarizeFleetAttention(overview = {}, enrollmentRequests = []) 
   return items;
 }
 
-export function formatCaptureInterval(seconds) {
+export function formatCaptureInterval(seconds: number) {
   if (seconds >= 86400 && seconds % 86400 === 0) {
     const days = seconds / 86400;
     return `Every ${days} day${days === 1 ? "" : "s"}`;
@@ -194,7 +201,7 @@ export function formatCaptureInterval(seconds) {
   return `Every ${seconds} second${seconds === 1 ? "" : "s"}`;
 }
 
-export function formatTimestamp(value, locale) {
+export function formatTimestamp(value: string | number | null | undefined, locale?: string) {
   if (value === null || value === undefined || value === "") return "Never seen";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Unknown time";
@@ -210,13 +217,13 @@ export function formatTimestamp(value, locale) {
   return `${formatted} UTC`;
 }
 
-export function formatAuditEventType(eventType) {
+export function formatAuditEventType(eventType: string) {
   if (Object.hasOwn(AUDIT_EVENT_LABELS, eventType)) return AUDIT_EVENT_LABELS[eventType];
   const words = String(eventType ?? "Unknown event").replace(/[._]+/g, " ");
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-export function formatEnvironmentNotice(environment) {
+export function formatEnvironmentNotice(environment: string) {
   const production = environment === "production";
   return {
     production,
@@ -228,31 +235,31 @@ export function formatEnvironmentNotice(environment) {
   };
 }
 
-export function formatActorLabel(actorID) {
+export function formatActorLabel(actorID: unknown) {
   if (actorID === null || actorID === undefined || actorID === "") return "Unknown";
   if (String(actorID).toLowerCase() === "anonymous") return "Unauthenticated";
   return String(actorID);
 }
 
-export function compactIdentifier(value) {
+export function compactIdentifier(value: unknown) {
   if (value === null || value === undefined || value === "") return "—";
   const identifier = String(value);
   if (identifier.length <= 24) return identifier;
   return `${identifier.slice(0, 10)}…${identifier.slice(-6)}`;
 }
 
-export function formatDeviceEnabledMessage(deviceID, enabled) {
+export function formatDeviceEnabledMessage(deviceID: string, enabled: boolean) {
   return `Device ${deviceID} is now ${enabled ? "enabled" : "disabled"}.`;
 }
 
-export function formatEnrollmentApprovalPrompt(request) {
+export function formatEnrollmentApprovalPrompt(request: { replaces_existing?: boolean; device_id: string; fingerprint: string }) {
   const replacement = request.replaces_existing
     ? ` This will replace the existing credentials for ${request.device_id}.`
     : "";
   return `Only approve ${request.device_id} if its physical display shows the full fingerprint ${request.fingerprint}.${replacement}`;
 }
 
-export function formatDeviceHealthDetails(result, history = {}) {
+export function formatDeviceHealthDetails(result: { latest?: HealthReport | null; health_status: string; received_at: number }, history: HealthHistory = {}) {
   const report = result?.latest;
   if (!report) return { message: "This device has not reported health yet." };
 
@@ -272,7 +279,7 @@ export function formatDeviceHealthDetails(result, history = {}) {
     const issue = output.error_code ? ` · ${output.error_code}` : "";
     const lastFrame = output.last_frame_age_seconds === null
       ? "no successful frame yet"
-      : `last frame ${formatAge(output.last_frame_age_seconds)} ago`;
+      : `last frame ${formatAge(output.last_frame_age_seconds ?? NaN)} ago`;
     return `${output.display_id}${connector}: ${output.status} · ${lastFrame}${issue}`;
   });
 
@@ -304,10 +311,10 @@ export function formatDeviceHealthDetails(result, history = {}) {
 
 export function createRetryableLoadOnce() {
   let loaded = false;
-  let pending = null;
+  let pending: Promise<unknown> | null = null;
   return {
     get loaded() { return loaded; },
-    load(loader) {
+    load(loader: () => unknown) {
       if (loaded) return Promise.resolve(undefined);
       if (!pending) {
         pending = Promise.resolve()
@@ -323,7 +330,7 @@ export function createRetryableLoadOnce() {
   };
 }
 
-function formatAge(seconds) {
+function formatAge(seconds: number) {
   if (!Number.isFinite(seconds) || seconds < 0) return "unknown";
   if (seconds < 60) return `${Math.floor(seconds)}s`;
   const minutes = Math.floor(seconds / 60);
@@ -334,7 +341,7 @@ function formatAge(seconds) {
   return `${days}d ${hours % 24}h`;
 }
 
-function formatBytes(bytes) {
+function formatBytes(bytes: number) {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
   const units = ["B", "KB", "MB", "GB", "TB"];
   let amount = bytes;
@@ -343,7 +350,7 @@ function formatBytes(bytes) {
   return `${amount.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
-export function formatAuditDetails(metadata, locale) {
+export function formatAuditDetails(metadata: unknown, locale?: string) {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return [];
   return Object.entries(metadata).map(([key, value]) => ({
     label: humanizeMetadataKey(key),
@@ -351,21 +358,22 @@ export function formatAuditDetails(metadata, locale) {
   }));
 }
 
-export async function confirmBeforeAction(confirmFn, message, action) {
+export async function confirmBeforeAction<T>(confirmFn: (message: string) => boolean | Promise<boolean>, message: string, action: () => T | Promise<T>) {
   const { confirmed } = await confirmAction(confirmFn, message, action);
   return confirmed;
 }
 
-export async function confirmAction(confirmFn, message, action) {
+export async function confirmAction<T>(confirmFn: (message: string) => boolean | Promise<boolean>, message: string, action: () => T | Promise<T>) {
   if (typeof confirmFn !== "function") throw new TypeError("A confirmation function is required");
   if (!(await confirmFn(message))) return { confirmed: false, result: undefined };
   return { confirmed: true, result: await action() };
 }
 
-function formatMetadataValue(key, value, locale) {
+function formatMetadataValue(key: string, value: unknown, locale?: string): string {
   if (value === null || value === undefined || value === "") return "—";
   if ((typeof value === "number" || typeof value === "string") && /(?:_at|_until|_expires)$/i.test(key)) {
     return formatTimestamp(value, locale);
+
   }
   if (Array.isArray(value)) return value.map((item) => formatMetadataValue(key, item, locale)).join(", ");
   if (typeof value === "object") {
@@ -378,7 +386,7 @@ function formatMetadataValue(key, value, locale) {
   return String(value);
 }
 
-function humanizeMetadataKey(key) {
+function humanizeMetadataKey(key: string) {
   const words = String(key)
     .replace(/\basset_count\b/gi, "image count")
     .replace(/_/g, " ")
@@ -390,16 +398,16 @@ function humanizeMetadataKey(key) {
 }
 
 /** Keep urgent capture problems visible without mutating the server's ordering. */
-export function prioritizeCaptureTargets(targets) {
-  const priority = (target) => target.last_error && !["queued", "running"].includes(target.job_status)
+export function prioritizeCaptureTargets<T extends CaptureSummary>(targets: T[]) {
+  const priority = (target: CaptureSummary) => target.last_error && !["queued", "running"].includes(target.job_status ?? "")
     ? 0 : target.schedule_reviewed === false || target.schedule_reviewed === 0 ? 1 : 2;
   return [...targets].sort((a, b) => priority(a) - priority(b));
 }
 
-export function summarizeCaptureErrors(targets) {
-  const counts = new Map();
+export function summarizeCaptureErrors(targets: CaptureSummary[]) {
+  const counts = new Map<string, number>();
   targets.forEach((target) => {
-    if (target.last_error && !["queued", "running"].includes(target.job_status)) {
+    if (target.last_error && !["queued", "running"].includes(target.job_status ?? "")) {
       counts.set(target.last_error, (counts.get(target.last_error) ?? 0) + 1);
     }
   });

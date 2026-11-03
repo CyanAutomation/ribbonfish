@@ -1,7 +1,7 @@
 import { assessUpcomingCaptures } from "./capture-intelligence.ts";
 import { isSupportedRotationInterval } from "./intervals.ts";
 import { handleAdminRequest } from "./admin.js";
-import { cleanupExpiredCaptures, dispatchDueCaptures, handleCaptureQueue } from "./capture-workflow.js";
+import { cleanupExpiredCaptures, dispatchDueCaptures, handleCaptureQueue } from "./capture-workflow.ts";
 import { reconcileAssets } from "./asset-maintenance.ts";
 import { cleanupDeviceHealth, persistDeviceHealth, refreshDeviceHealthStatuses, validateDeviceHealthReport } from "./device-health.ts";
 
