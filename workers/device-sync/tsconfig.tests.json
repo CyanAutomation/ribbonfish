@@ -1,14 +1,14 @@
 {
-  "extends": "./tsconfig.worker.json",
+  "extends": "./tsconfig.json",
   "compilerOptions": {
     "types": [
-      "node",
-      "@cloudflare/workers-types"
+      "node"
+    ],
+    "lib": [
+      "ES2022"
     ]
   },
   "include": [
-    "src/management-bindings.d.ts",
     "src/**/*.test.ts"
-  ],
-  "exclude": []
+  ]
 }
