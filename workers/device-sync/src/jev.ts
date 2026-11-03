@@ -1,3 +1,23 @@
+import { isRecord } from "./validation.ts";
+
+type Question =
+  | { type: "noul"; instructions: string }
+  | { type: "choice"; instructions: string; criteria: Record<string, unknown> }
+  | { type: "score"; instructions: string; criteria: unknown[] };
+type Questions = Record<string, Question>;
+type Answer = { type: "noul" | "choice" | "score"; noul?: number; choice?: string; score?: number; confidence?: number; probabilities?: Record<string, number>; legend?: Record<string, unknown> };
+export interface JevDecisionResult {
+  model: string | null;
+  id: string | null;
+  answers: Record<string, Answer>;
+  usage: { input_tokens?: number; output_tokens?: number; cost?: number } | null;
+}
+interface DecisionOptions {
+  state?: unknown;
+  questions?: unknown;
+  fetcher?: typeof fetch;
+  timeoutMs?: number;
+}
 const JEV_ENDPOINT = "https://openrouter.ai/api/alpha/decisions";
 const PINNED_MODEL = "~typesafe/jev-latest";
 const MAX_STATE_BYTES = 16 * 1024;
@@ -5,7 +25,8 @@ const MAX_RESPONSE_BYTES = 32 * 1024;
 const REQUEST_TIMEOUT_MS = 8_000;
 
 export class JEVRequestError extends Error {
-  constructor(message, status = 502) {
+  status: number;
+  constructor(message: string, status = 502) {
     super(message);
     this.name = "JEVRequestError";
     this.status = status;
@@ -13,18 +34,18 @@ export class JEVRequestError extends Error {
 }
 
 /** Call the typed JEV decisions API with a server-owned question schema. */
-export async function callJevDecision(env, {
+export async function callJevDecision(env: { OPENROUTER_API_KEY?: string } | null | undefined, {
   state,
   questions,
   fetcher = globalThis.fetch,
   timeoutMs = REQUEST_TIMEOUT_MS,
-} = {}) {
+}: DecisionOptions = {}): Promise<JevDecisionResult> {
   if (typeof env?.OPENROUTER_API_KEY !== "string" || !env.OPENROUTER_API_KEY.trim()) {
     throw new JEVRequestError("JEV is not configured.", 503);
   }
   if (typeof state !== "string" || !state.trim()) throw new TypeError("JEV state must be a non-empty string.");
   if (new TextEncoder().encode(state).byteLength > MAX_STATE_BYTES) throw new RangeError("JEV state is too large.");
-  let structuredState;
+  let structuredState: unknown;
   try { structuredState = JSON.parse(state); } catch { throw new TypeError("JEV state must be a JSON object."); }
   if (!structuredState || typeof structuredState !== "object" || Array.isArray(structuredState)) {
     throw new TypeError("JEV state must be a JSON object.");
@@ -46,9 +67,9 @@ export async function callJevDecision(env, {
     });
     if (!response.ok) throw new JEVRequestError("JEV provider request failed.");
     const raw = await readBoundedResponse(response, MAX_RESPONSE_BYTES);
-    let payload;
+    let payload: unknown;
     try { payload = JSON.parse(raw); } catch { throw new JEVRequestError("JEV provider returned invalid JSON."); }
-    if (!payload || typeof payload !== "object" || !validateAnswers(payload.answers, questions)) {
+    if (!isRecord(payload) || !validateAnswers(payload.answers, questions)) {
       throw new JEVRequestError("JEV returned invalid decision answers.");
     }
     return {
@@ -58,7 +79,7 @@ export async function callJevDecision(env, {
       usage: normalizeUsage(payload.usage),
     };
   } catch (error) {
-    if (error?.name === "AbortError") throw new JEVRequestError("JEV provider request timed out.", 504);
+    if (isRecord(error) && error.name === "AbortError") throw new JEVRequestError("JEV provider request timed out.", 504);
     if (error instanceof JEVRequestError) throw error;
     throw new JEVRequestError("JEV provider request failed.");
   } finally {
@@ -66,14 +87,14 @@ export async function callJevDecision(env, {
   }
 }
 
-export function validateAnswers(answers, questions) {
-  if (!answers || typeof answers !== "object" || Array.isArray(answers) || !isQuestionSchema(questions)) return false;
+export function validateAnswers(answers: unknown, questions: unknown): answers is Record<string, Answer> {
+  if (!isRecord(answers) || !isQuestionSchema(questions)) return false;
   const expected = Object.keys(questions).sort();
   if (Object.keys(answers).sort().join("\0") !== expected.join("\0")) return false;
   return expected.every((key) => validateAnswer(answers[key], questions[key]));
 }
 
-function normalizeAnswers(answers, questions) {
+function normalizeAnswers(answers: Record<string, Answer>, questions: Questions): Record<string, Answer> {
   return Object.fromEntries(Object.entries(questions).map(([key, question]) => {
     const answer = answers[key];
     if (question.type === "noul") {
@@ -83,38 +104,38 @@ function normalizeAnswers(answers, questions) {
         ...(answer.confidence === undefined ? {} : { confidence: answer.confidence }),
       }];
     }
-    const probabilities = Object.fromEntries(Object.entries(answer.probabilities));
+    const probabilities = Object.fromEntries(Object.entries(answer.probabilities!));
     if (question.type === "choice") {
       return [key, { type: "choice", choice: answer.choice, probabilities, confidence: answer.confidence }];
     }
     return [key, {
       type: "score",
       score: answer.score,
-      legend: Object.fromEntries(Object.entries(answer.legend)),
+      legend: Object.fromEntries(Object.entries(answer.legend!)),
       probabilities,
       confidence: answer.confidence,
     }];
   }));
 }
 
-function validateAnswer(answer, question) {
-  if (!answer || typeof answer !== "object" || Array.isArray(answer) || answer.type !== question.type) return false;
+function validateAnswer(answer: unknown, question: Question) {
+  if (!isRecord(answer) || answer.type !== question.type) return false;
   if (question.type === "noul") {
-    return Number.isFinite(answer.noul) && answer.noul >= 0 && answer.noul <= 1 &&
+    return typeof answer.noul === "number" && Number.isFinite(answer.noul) && answer.noul >= 0 && answer.noul <= 1 &&
       (answer.confidence === undefined || isProbability(answer.confidence));
   }
   const choices = question.type === "choice" ? Object.keys(question.criteria) : question.criteria.map((_, index) => String(index));
   const value = question.type === "choice" ? answer.choice : answer.score;
-  if (!Number.isFinite(value) && question.type === "score") return false;
-  if (question.type === "choice" && !choices.includes(value)) return false;
-  if (question.type === "score" && (value < 0 || value > choices.length - 1)) return false;
+  if ((typeof value !== "number" || !Number.isFinite(value)) && question.type === "score") return false;
+  if (question.type === "choice" && (typeof value !== "string" || !choices.includes(value))) return false;
+  if (question.type === "score" && (typeof value !== "number" || value < 0 || value > choices.length - 1)) return false;
   if (!isProbability(answer.confidence)) return false;
   if (answer.probabilities !== undefined) {
     const probabilities = answer.probabilities;
-    if (!probabilities || typeof probabilities !== "object" || Array.isArray(probabilities)) return false;
+    if (!isRecord(probabilities)) return false;
     if (Object.keys(probabilities).sort().join("\0") !== choices.sort().join("\0")) return false;
     const values = Object.values(probabilities);
-    if (!values.every(isProbability) || Math.abs(values.reduce((sum, item) => sum + item, 0) - 1) > 0.02) return false;
+    if (!values.every(isProbability) || Math.abs(values.reduce<number>((sum, item) => sum + (typeof item === "number" ? item : 0), 0) - 1) > 0.02) return false;
   } else return false;
   if (question.type === "score") {
     const expectedLegend = Object.fromEntries(question.criteria.map((label, index) => [String(index), label]));
@@ -123,33 +144,32 @@ function validateAnswer(answer, question) {
   return true;
 }
 
-function isQuestionSchema(questions) {
-  if (!questions || typeof questions !== "object" || Array.isArray(questions)) return false;
+function isQuestionSchema(questions: unknown): questions is Questions {
+  if (!isRecord(questions)) return false;
   const entries = Object.entries(questions);
   if (entries.length < 1 || entries.length > 12) return false;
-  return entries.every(([key, question]) => /^[a-z][a-z0-9_]{0,39}$/.test(key) && question &&
-    typeof question === "object" && typeof question.instructions === "string" &&
+  return entries.every(([key, question]) => /^[a-z][a-z0-9_]{0,39}$/.test(key) && isRecord(question) && typeof question.instructions === "string" &&
     (question.type === "noul" ||
       (question.type === "choice" && question.criteria && typeof question.criteria === "object" && !Array.isArray(question.criteria) && Object.keys(question.criteria).length > 0) ||
       (question.type === "score" && Array.isArray(question.criteria) && question.criteria.length > 0)));
 }
 
-function isProbability(value) { return Number.isFinite(value) && value >= 0 && value <= 1; }
+function isProbability(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1; }
 
-function normalizeUsage(usage) {
-  if (!usage || typeof usage !== "object") return null;
-  const normalized = {};
-  for (const key of ["input_tokens", "output_tokens"]) {
-    if (Number.isSafeInteger(usage[key]) && usage[key] >= 0) normalized[key] = usage[key];
+function normalizeUsage(usage: unknown): JevDecisionResult["usage"] {
+  if (!isRecord(usage)) return null;
+  const normalized: NonNullable<JevDecisionResult["usage"]> = {};
+  for (const key of ["input_tokens", "output_tokens"] as const) {
+    if (typeof usage[key] === "number" && Number.isSafeInteger(usage[key]) && usage[key] >= 0) normalized[key] = usage[key];
   }
-  if (Number.isFinite(usage.cost) && usage.cost >= 0) normalized.cost = usage.cost;
+  if (typeof usage.cost === "number" && Number.isFinite(usage.cost) && usage.cost >= 0) normalized.cost = usage.cost;
   return Object.keys(normalized).length ? normalized : null;
 }
 
-async function readBoundedResponse(response, maximumBytes) {
+async function readBoundedResponse(response: Response, maximumBytes: number) {
   const reader = response.body?.getReader();
   if (!reader) return "";
-  const chunks = [];
+  const chunks: Uint8Array[] = [];
   let size = 0;
   try {
     while (true) {

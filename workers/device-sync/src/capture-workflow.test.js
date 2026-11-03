@@ -326,7 +326,7 @@ test("capture readiness selectors are optional, bounded, audited and used for la
     const capture = await enqueueCapture(site.capture_id, env);
     const message = { body: { job_id: capture.job_id }, ack() {}, retry() { throw new Error("unexpected retry"); } };
     await queueHandler({ messages: [message] }, env);
-    assert.equal(calls[0].options.waitForSelector, "main .ready");
+    assert.deepEqual(calls[0].options.waitForSelector, { selector: "main .ready" });
 
     const overview = await handleAdminRequest(await request("/admin/api/overview"), env);
     assert.equal((await overview.json()).capture_targets[0].wait_for_selector, "main .ready");

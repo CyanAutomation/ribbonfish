@@ -1,3 +1,8 @@
+type AssetEnv = Pick<ManagementBindings, "DB" | "ASSETS" | "ASSET_RECONCILIATION_INTERVAL_SECONDS"> & { ASSET_RECONCILIATION_PAGE_SIZE?: string };
+type AssetReference = { sha256: string; size: number };
+type AssetSnapshot = { state: string | null; expires_at: number | null; write_lease_until: number | null; referenceSize: number | null; has_playlist: boolean; has_placeholder: boolean; has_current: boolean; has_history: boolean };
+type SnapshotRow = { sha256: string; state: string | null; expires_at: number | null; write_lease_until: number | null; kind: "playlist" | "placeholder" | "current" | "history" | null; size: number | null };
+
 import { markAssetLiveStatement } from "./asset-registry.ts";
 import { storePngAsset } from "./asset-store.ts";
 
@@ -18,11 +23,11 @@ const NOT_REFERENCED_SQL = `
   AND NOT EXISTS (SELECT 1 FROM capture_targets WHERE placeholder_sha256 = ? OR current_sha256 = ?)
   AND NOT EXISTS (SELECT 1 FROM capture_history WHERE sha256 = ?)`;
 
-export async function deleteIfUnreferenced(env, sha256, now = Date.now()) {
+export async function deleteIfUnreferenced(env: AssetEnv, sha256: string, now = Date.now()) {
   return (await deleteUnreferencedAssets(env, [sha256], now)) === 1;
 }
 
-export async function deleteUnreferencedAssets(env, sha256s, now = Date.now()) {
+export async function deleteUnreferencedAssets(env: AssetEnv, sha256s: string[], now = Date.now()) {
   const candidates = [...new Set(sha256s.filter((sha256) => /^[a-f0-9]{64}$/.test(sha256)))];
   if (!candidates.length) return 0;
   let deleted = 0;
@@ -36,7 +41,7 @@ export async function deleteUnreferencedAssets(env, sha256s, now = Date.now()) {
   return deleted;
 }
 
-async function deleteUnreferencedAssetPage(env, candidates, now) {
+async function deleteUnreferencedAssetPage(env: AssetEnv, candidates: string[], now: number) {
   const snapshots = await readAssetSnapshots(env.DB, candidates);
   const statements = [];
   const actions = [];
@@ -47,8 +52,8 @@ async function deleteUnreferencedAssetPage(env, candidates, now) {
       actions.push({ sha256, alreadyClaimed: true });
       continue;
     }
-    if (snapshot?.write_lease_until > now ||
-        (snapshot?.state && snapshot.state !== "live" && snapshot.expires_at > now)) continue;
+    if (Number(snapshot?.write_lease_until) > now ||
+        (snapshot?.state && snapshot.state !== "live" && Number(snapshot.expires_at) > now)) continue;
     if (snapshot?.state) {
       statements.push(claimAssetDeletionStatement(env.DB, sha256, now));
       actions.push({ sha256, alreadyClaimed: false });
@@ -73,7 +78,7 @@ async function deleteUnreferencedAssetPage(env, candidates, now) {
   return deleteClaimedAssets(env, claimed, now);
 }
 
-export async function reconcileAssets(env, now = Date.now()) {
+export async function reconcileAssets(env: AssetEnv, now = Date.now()) {
   const leaseToken = crypto.randomUUID();
   const lease = await env.DB.prepare(
     "UPDATE asset_reconciliation_state SET lease_token = ?, lease_until = ? " +
@@ -88,7 +93,8 @@ export async function reconcileAssets(env, now = Date.now()) {
   try {
     const state = await env.DB.prepare(
       "SELECT r2_cursor, reference_cursor, last_completed_at FROM asset_reconciliation_state WHERE singleton = 1",
-    ).first();
+    ).first<{ r2_cursor: string | null; reference_cursor: string | null; last_completed_at: number | null }>();
+    if (!state) throw new Error("Asset reconciliation state is missing.");
     const configuredSeconds = Number(env.ASSET_RECONCILIATION_INTERVAL_SECONDS);
     const intervalMs = Number.isSafeInteger(configuredSeconds) && configuredSeconds >= 0
       ? configuredSeconds * 1000
@@ -116,7 +122,7 @@ export async function reconcileAssets(env, now = Date.now()) {
       `WITH refs AS (${REFERENCE_CTE})
        SELECT sha256, MAX(size) AS size FROM refs
        WHERE sha256 > ? GROUP BY sha256 ORDER BY sha256 LIMIT ?`,
-    ).bind(state.reference_cursor ?? "", pageSize).all();
+    ).bind(state.reference_cursor ?? "", pageSize).all<AssetReference>();
     const referenceRows = references.results ?? [];
     const referenceResult = await inspectReferencePage(env, referenceRows, now);
     const nextR2Cursor = listed.truncated ? listed.cursor : null;
@@ -149,7 +155,7 @@ export async function reconcileAssets(env, now = Date.now()) {
   }
 }
 
-async function claimOrphanedAssetRecords(db, limit, now) {
+async function claimOrphanedAssetRecords(db: D1Database, limit: number, now: number) {
   const result = await db.prepare(
     `UPDATE managed_assets SET state = 'deleting', expires_at = NULL, write_lease_until = NULL, updated_at = ?
      WHERE sha256 IN (
@@ -167,7 +173,7 @@ async function claimOrphanedAssetRecords(db, limit, now) {
   return result.meta?.changes ?? 0;
 }
 
-async function inspectObjectPage(env, objects, now) {
+async function inspectObjectPage(env: AssetEnv, objects: R2Object[], now: number) {
   const invalidKeys = [];
   const validObjects = [];
   for (const object of objects) {
@@ -183,7 +189,7 @@ async function inspectObjectPage(env, objects, now) {
   for (const object of validObjects) {
     const snapshot = snapshots.get(object.sha256);
     if (hasReferences(snapshot)) {
-      if (snapshot?.state !== "pending" || snapshot.write_lease_until <= now) {
+      if (snapshot?.state !== "pending" || Number(snapshot.write_lease_until) <= now) {
         statements.push(markAssetLiveStatement(env.DB, object.sha256, snapshot?.referenceSize ?? object.size, now));
         statementActions.push({ type: "live", sha256: object.sha256 });
       }
@@ -193,10 +199,10 @@ async function inspectObjectPage(env, objects, now) {
       candidateActions.push({ type: "already_claimed", sha256: object.sha256, key: object.key });
       continue;
     }
-    if (snapshot && snapshot.write_lease_until > now) {
+    if (snapshot && Number(snapshot.write_lease_until) > now) {
       continue;
     }
-    if (snapshot && snapshot.state !== "live" && snapshot.expires_at > now) {
+    if (snapshot && snapshot.state !== "live" && Number(snapshot.expires_at) > now) {
       continue;
     }
 
@@ -226,7 +232,7 @@ async function inspectObjectPage(env, objects, now) {
   }
 
   const results = statements.length ? await env.DB.batch(statements) : [];
-  const claimed = candidateActions.filter((action) => action.type === "already_claimed");
+  const claimed: Array<{ sha256: string }> = candidateActions.filter((action) => action.type === "already_claimed");
   for (const [index, action] of statementActions.entries()) {
     if (action.type !== "claim") continue;
     if (results[index]?.meta?.changes === 1) {
@@ -247,8 +253,8 @@ async function inspectObjectPage(env, objects, now) {
   return { deleted };
 }
 
-async function readAssetSnapshots(db, sha256s) {
-  const snapshots = new Map();
+async function readAssetSnapshots(db: D1Database, sha256s: string[]) {
+  const snapshots = new Map<string, AssetSnapshot>();
   if (!sha256s.length) return snapshots;
   if (sha256s.length > ASSET_RECONCILIATION_PAGE_SIZE) {
     throw new Error(`Asset reference pages cannot exceed ${ASSET_RECONCILIATION_PAGE_SIZE} digests.`);
@@ -265,7 +271,7 @@ async function readAssetSnapshots(db, sha256s) {
      SELECT w.sha256, ma.state, ma.expires_at, ma.write_lease_until, r.kind, r.size
      FROM wanted w LEFT JOIN managed_assets ma ON ma.sha256 = w.sha256
      LEFT JOIN refs r ON r.sha256 = w.sha256 ORDER BY w.sha256`,
-  ).bind(...sha256s).all();
+  ).bind(...sha256s).all<SnapshotRow>();
   for (const row of result.results ?? []) {
     let snapshot = snapshots.get(row.sha256);
     if (!snapshot) {
@@ -289,7 +295,7 @@ async function readAssetSnapshots(db, sha256s) {
   return snapshots;
 }
 
-async function inspectReferencePage(env, references, now) {
+async function inspectReferencePage(env: AssetEnv, references: AssetReference[], now: number) {
   const checked = await mapWithConcurrency(references, 10, async (reference) => ({
     reference,
     object: await env.ASSETS.head(`assets/${reference.sha256}`),
@@ -324,11 +330,11 @@ async function inspectReferencePage(env, references, now) {
   return { repaired, issues, hasMore, lastProcessedSha };
 }
 
-async function reconcileMissingReference(env, sha256, size, now) {
+async function reconcileMissingReference(env: AssetEnv, sha256: string, size: number, now: number) {
   const assetState = await env.DB.prepare(
     "SELECT write_lease_until FROM managed_assets WHERE sha256 = ?",
-  ).bind(sha256).first();
-  if (assetState?.write_lease_until > now) return { repaired: 0, issues: 0 };
+  ).bind(sha256).first<{ write_lease_until: number | null }>();
+  if (Number(assetState?.write_lease_until) > now) return { repaired: 0, issues: 0 };
   const refs = await env.DB.prepare(
     `SELECT
        EXISTS (SELECT 1 FROM playlist_assets WHERE sha256 = ?) AS has_playlist,
@@ -397,7 +403,7 @@ async function reconcileMissingReference(env, sha256, size, now) {
   return { repaired, issues: Number(Boolean(refs.has_playlist)) + Number(Boolean(refs.has_placeholder && !repaired)) };
 }
 
-async function restorePlaceholder(env, expectedSha256, expectedSize, now) {
+async function restorePlaceholder(env: AssetEnv, expectedSha256: string, expectedSize: number, now: number) {
   const source = await env.ASSETS.get("admin/capture-pending.png");
   if (!source) return false;
   const bytes = new Uint8Array(await source.arrayBuffer());
@@ -408,7 +414,7 @@ async function restorePlaceholder(env, expectedSha256, expectedSize, now) {
   return true;
 }
 
-async function recordIssue(db, sha256, issueType, now) {
+async function recordIssue(db: D1Database, sha256: string, issueType: string, now: number) {
   await db.prepare(
     `INSERT INTO asset_integrity_issues (sha256, issue_type, first_seen_at, last_seen_at, resolved_at)
      VALUES (?, ?, ?, ?, NULL)
@@ -416,24 +422,24 @@ async function recordIssue(db, sha256, issueType, now) {
   ).bind(sha256, issueType, now, now).run();
 }
 
-async function resolveIssue(db, sha256, issueType, now) {
+async function resolveIssue(db: D1Database, sha256: string, issueType: string, now: number) {
   await db.prepare(
     "UPDATE asset_integrity_issues SET resolved_at = ? WHERE sha256 = ? AND issue_type = ? AND resolved_at IS NULL",
   ).bind(now, sha256, issueType).run();
 }
 
-function hasReferences(snapshot) {
+function hasReferences(snapshot: AssetSnapshot | undefined) {
   return Boolean(snapshot?.has_playlist || snapshot?.has_placeholder || snapshot?.has_current || snapshot?.has_history);
 }
 
-async function retryClaimedDeletions(env, limit, now) {
+async function retryClaimedDeletions(env: AssetEnv, limit: number, now: number) {
   const rows = await env.DB.prepare(
     "SELECT sha256 FROM managed_assets WHERE state = 'deleting' ORDER BY updated_at, sha256 LIMIT ?",
-  ).bind(limit).all();
+  ).bind(limit).all<{ sha256: string }>();
   return deleteClaimedAssets(env, (rows.results ?? []).map((row) => row.sha256), now);
 }
 
-async function deleteClaimedAssets(env, sha256s, now) {
+async function deleteClaimedAssets(env: AssetEnv, sha256s: string[], now: number) {
   if (!sha256s.length) return 0;
   const snapshots = await readAssetSnapshots(env.DB, sha256s);
   const referenced = sha256s.filter((sha256) => hasReferences(snapshots.get(sha256)));
@@ -458,7 +464,7 @@ async function deleteClaimedAssets(env, sha256s, now) {
   return deletable.length;
 }
 
-function claimAssetDeletionStatement(db, sha256, now) {
+function claimAssetDeletionStatement(db: D1Database, sha256: string, now: number) {
   return db.prepare(
     `UPDATE managed_assets SET state = 'deleting', expires_at = NULL, write_lease_until = NULL, updated_at = ?
      WHERE sha256 = ? AND state != 'deleting'
@@ -468,8 +474,8 @@ function claimAssetDeletionStatement(db, sha256, now) {
   ).bind(now, sha256, now, now, sha256, sha256, sha256, sha256);
 }
 
-async function mapWithConcurrency(items, concurrency, mapper) {
-  const results = new Array(items.length);
+async function mapWithConcurrency<T, U>(items: T[], concurrency: number, mapper: (item: T) => Promise<U>): Promise<U[]> {
+  const results: U[] = new Array(items.length);
   let next = 0;
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
     while (true) {
@@ -482,18 +488,18 @@ async function mapWithConcurrency(items, concurrency, mapper) {
   return results;
 }
 
-function boundedPageSize(value) {
+function boundedPageSize(value: unknown) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1) return ASSET_RECONCILIATION_PAGE_SIZE;
   return Math.min(ASSET_RECONCILIATION_PAGE_SIZE, parsed);
 }
 
-function timestamp(value) {
+function timestamp(value: Date | string | number | null | undefined) {
   if (value === null || value === undefined) return null;
   const parsed = value instanceof Date ? value.getTime() : new Date(value).getTime();
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function safeMessage(error) {
-  return typeof error?.message === "string" ? error.message.slice(0, 120) : "unknown error";
+function safeMessage(error: unknown) {
+  return error !== null && typeof error === "object" && "message" in error && typeof error.message === "string" ? error.message.slice(0, 120) : "unknown error";
 }

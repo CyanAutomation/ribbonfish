@@ -6,7 +6,7 @@ import {
   normalizeCaptureURL,
   validateCaptureTargetURL,
   validateCaptureSettings,
-} from "./capture.js";
+} from "./capture.ts";
 
 const png = new Uint8Array(await readFile(new URL("../../../agent/defaults/assets/service-health.png", import.meta.url)));
 
@@ -82,7 +82,7 @@ test("browser capture validates its response and stores bytes through the shared
         assert.equal(options.url, "https://example.com/");
         assert.deepEqual(options.viewport, { width: 1280, height: 720 });
         assert.deepEqual(options.screenshotOptions, { type: "png", fullPage: false });
-        assert.equal(options.waitForSelector, "main .ready");
+        assert.deepEqual(options.waitForSelector, { selector: "main .ready" });
         return new Response(png, {
           headers: { "Content-Type": "image/png", "X-Browser-Ms-Used": "1234" },
         });
