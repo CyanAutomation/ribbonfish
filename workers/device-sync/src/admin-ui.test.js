@@ -6,7 +6,7 @@ import postcss from "postcss";
 import {
   createFleetOpenUI,
   OPENUI_STARTER_SOURCE,
-} from "../public/admin/openui-core.js";
+} from "../public/admin/openui-core.ts";
 import {
   confirmAction,
   confirmBeforeAction,
