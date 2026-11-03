@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { deriveDeviceHealth, validateDeviceHealthReport } from "./device-health.js";
+import { deriveDeviceHealth, validateDeviceHealthReport } from "./device-health.ts";
 
 const report = {
   schema_version: 1,
@@ -19,6 +19,9 @@ test("health report accepts bounded version 1 data and rejects unknown or unsafe
   assert.equal(validateDeviceHealthReport({ ...report, token: "secret" }), null);
   assert.equal(validateDeviceHealthReport({ ...report, outputs: [{ ...report.outputs[0], error_code: "token at /var/lib/ribbonfish/device-token" }] }), null);
   assert.equal(validateDeviceHealthReport({ ...report, outputs: Array(9).fill(report.outputs[0]) }), null);
+  assert.equal(validateDeviceHealthReport({ ...report, outputs: [report.outputs[0], report.outputs[0]] }), null);
+  assert.equal(validateDeviceHealthReport({ ...report, host: { load_1m: Infinity } }), null);
+  assert.equal(validateDeviceHealthReport({ ...report, sync: { ...report.sync, applied_revision: 42 } }), null);
 });
 
 test("fleet health uses server receive time and retains reported faults", () => {

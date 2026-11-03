@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { callJevDecision, validateAnswers } from "./jev.js";
+import { callJevDecision, validateAnswers } from "./jev.ts";
 import {
   buildCaptureAssessmentState,
   buildFleetAnalysisState,
@@ -76,6 +76,20 @@ test("JEV decision primitive rejects missing secrets, oversized input, provider 
     state: JSON.stringify({ summary: "state" }), questions: captureAssessmentQuestions,
     fetcher: async () => new Response("x".repeat(33 * 1024)),
   }), /response was too large/);
+});
+
+test("provider errors retain upstream status separately from the client-facing status", async () => {
+  for (const upstreamStatus of [401, 429, 503]) {
+    await assert.rejects(callJevDecision({ OPENROUTER_API_KEY: "key" }, {
+      state: "{}", questions: captureAssessmentQuestions,
+      fetcher: async () => new Response("private provider details", { status: upstreamStatus }),
+    }), (error) => {
+      assert.equal(error.status, 502);
+      assert.equal(error.upstreamStatus, upstreamStatus);
+      assert.doesNotMatch(error.message, /private provider details/);
+      return true;
+    });
+  }
 });
 
 test("answer validation enforces choices, types, probabilities, confidence, and score bounds", () => {

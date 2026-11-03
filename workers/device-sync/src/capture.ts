@@ -8,8 +8,27 @@ export const MAX_CAPTURE_PIXELS = 3840 * 2160;
 const MAX_URL_LENGTH = 2048;
 const BLOCKED_SUFFIXES = [".localhost", ".local", ".internal", ".test", ".invalid", ".onion", ".arpa"];
 
+interface CaptureErrorOptions {
+  retryable?: boolean;
+  status?: number | null;
+  browserMs?: number;
+  browserStarted?: boolean;
+  cause?: unknown;
+}
+
+export interface CaptureTarget {
+  url: string;
+  viewport_width: number;
+  viewport_height: number;
+  wait_for_selector?: string | null;
+}
+
 export class CaptureError extends Error {
-  constructor(message, { retryable = false, status = null, browserMs = 0, browserStarted = false, cause } = {}) {
+  retryable: boolean;
+  status: number | null;
+  browserMs: number;
+  browserStarted: boolean;
+  constructor(message: string, { retryable = false, status = null, browserMs = 0, browserStarted = false, cause }: CaptureErrorOptions = {}) {
     super(message, cause === undefined ? undefined : { cause });
     this.name = "CaptureError";
     this.retryable = retryable;
@@ -19,7 +38,7 @@ export class CaptureError extends Error {
   }
 }
 
-export function normalizeCaptureURL(value) {
+export function normalizeCaptureURL(value: unknown) {
   if (typeof value !== "string" || value.length === 0 || value.length > MAX_URL_LENGTH) {
     throw new Error("Enter a public HTTPS URL no longer than 2048 characters.");
   }
@@ -38,7 +57,7 @@ export function normalizeCaptureURL(value) {
   return url.toString();
 }
 
-export function validateCaptureTargetURL(value, allowedHosts) {
+export function validateCaptureTargetURL(value: unknown, allowedHosts: unknown) {
   const normalized = normalizeCaptureURL(value);
   const hostname = new URL(normalized).hostname.toLowerCase();
   const allowlist = new Set(String(allowedHosts ?? "")
@@ -49,13 +68,13 @@ export function validateCaptureTargetURL(value, allowedHosts) {
   return normalized;
 }
 
-export function validateCaptureSettings(value) {
+export function validateCaptureSettings(value: { capture_interval_seconds?: unknown; viewport?: { width?: unknown; height?: unknown } | null; wait_for_selector?: unknown } | null | undefined) {
   const interval = value?.capture_interval_seconds;
   const viewport = value?.viewport;
   if (!isSupportedCaptureInterval(interval)) {
     throw new Error("Capture interval must be one of the supported values: 15m, 30m, 1h, 6h, or 24h.");
   }
-  if (!viewport || !Number.isSafeInteger(viewport.width) || !Number.isSafeInteger(viewport.height) ||
+  if (!viewport || typeof viewport.width !== "number" || typeof viewport.height !== "number" || !Number.isSafeInteger(viewport.width) || !Number.isSafeInteger(viewport.height) ||
       viewport.width < 320 || viewport.width > 3840 || viewport.height < 240 || viewport.height > 2160 ||
       viewport.width * viewport.height > MAX_CAPTURE_PIXELS) {
     throw new Error("Viewport must be between 320×240 and 3840×2160, within the supported pixel limit.");
@@ -68,7 +87,7 @@ export function validateCaptureSettings(value) {
   };
 }
 
-export function normalizeCaptureSelector(value) {
+export function normalizeCaptureSelector(value: unknown) {
   if (value === undefined || value === null) return null;
   if (typeof value !== "string") throw new Error("Wait for selector must be text up to 256 characters.");
   const selector = value.trim();
@@ -79,7 +98,7 @@ export function normalizeCaptureSelector(value) {
   return selector;
 }
 
-export async function captureScreenshot(target, env) {
+export async function captureScreenshot(target: CaptureTarget, env: Pick<ManagementBindings, "CAPTURE_ALLOWED_HOSTS" | "BROWSER" | "ASSETS" | "DB">) {
   const url = validateCaptureTargetURL(target.url, env.CAPTURE_ALLOWED_HOSTS);
   const width = target.viewport_width;
   const height = target.viewport_height;
@@ -99,7 +118,7 @@ export async function captureScreenshot(target, env) {
       viewport: { width, height },
       screenshotOptions: { type: "png", fullPage: false },
       gotoOptions: { waitUntil: "domcontentloaded", timeout: MAX_CAPTURE_TIMEOUT_MS },
-      ...(waitForSelector ? { waitForSelector } : {}),
+      ...(waitForSelector ? { waitForSelector: { selector: waitForSelector } } : {}),
     });
   } catch (error) {
     throw new CaptureError("Browser Run screenshot request failed.", { retryable: true, browserStarted: true, cause: error });
@@ -137,13 +156,13 @@ export async function captureScreenshot(target, env) {
   }
 }
 
-function parseBrowserMilliseconds(value) {
+function parseBrowserMilliseconds(value: string | null) {
   if (!value || !/^\d+$/.test(value)) return 0;
   const milliseconds = Number(value);
   return Number.isSafeInteger(milliseconds) ? milliseconds : 0;
 }
 
-async function readBoundedBody(response, maxBytes, captureInfo) {
+async function readBoundedBody(response: Response, maxBytes: number, captureInfo: CaptureErrorOptions) {
   const length = Number(response.headers.get("Content-Length"));
   if (Number.isFinite(length) && length > maxBytes) {
     await response.body?.cancel();
@@ -151,7 +170,7 @@ async function readBoundedBody(response, maxBytes, captureInfo) {
   }
   if (!response.body) throw new CaptureError("Browser Run returned an empty screenshot.", captureInfo);
   const reader = response.body.getReader();
-  const chunks = [];
+  const chunks: Uint8Array[] = [];
   let total = 0;
   try {
     while (true) {
