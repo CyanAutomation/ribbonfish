@@ -414,3 +414,19 @@ label { display: grid; gap: var(--space-1); color: var(--color-text-label); font
 .playlist-group + .playlist-group { margin-top: var(--space-6); }
 .playlist-group > h3 { margin: 0 0 var(--space-3); overflow-wrap: anywhere; }
 .playlist-group__cards { display: grid; gap: var(--space-3); }
+
+/* Capture sites: compact summaries with focused, progressively disclosed settings. */
+.capture-filters { display: grid; grid-template-columns: minmax(0, 2fr) minmax(10rem, 1fr); gap: var(--space-3); margin: var(--space-4) 0; }
+.capture-target[hidden] { display: none; }
+.capture-target__heading h3 { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--color-heading); }
+.capture-target__panel { margin-top: var(--space-3); }
+.capture-target__panel > summary { color: var(--color-brand); font-weight: 650; cursor: pointer; }
+.capture-target__panel-content { display: grid; gap: var(--space-3); margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--color-border-subtle); }
+.capture-target__panel-content .action-row, .capture-target__panel-content .capture-target__details, .capture-target__panel-content .capture-target__assessment { margin-top: 0; }
+.capture-target__url { margin: 0; overflow-wrap: anywhere; }
+.capture-detail-section { display: grid; gap: var(--space-2); max-width: 36rem; }
+.capture-detail-section h4 { margin: 0; }
+.capture-detail-section .button { justify-self: start; }
+.capture-target__details > label { margin-top: var(--space-3); }
+.capture-target__details > .button { margin-top: var(--space-2); }
+@media (max-width: 600px) { .capture-filters { grid-template-columns: 1fr; } }

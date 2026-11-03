@@ -139,6 +139,7 @@ func TestValidateTargetsRejectsUnavailableOrMismatchedHardware(t *testing.T) {
 		Modes:             []string{"1920x1080"},
 	}
 	target := DisplayTarget{ID: "display-main", Connector: "HDMI-A-1", Mode: "1920x1080@60"}
+	missingDevice := filepath.Join(t.TempDir(), "missing-card")
 	tests := []struct {
 		name       string
 		devicePath string
@@ -148,7 +149,7 @@ func TestValidateTargetsRejectsUnavailableOrMismatchedHardware(t *testing.T) {
 	}{
 		{name: "missing connector", devicePath: "/dev/dri/card0", targets: []DisplayTarget{target}, connectors: nil, wantError: "not found"},
 		{name: "wrong card", devicePath: "/dev/dri/card1", targets: []DisplayTarget{target}, connectors: []Connector{base}, wantError: "belongs to"},
-		{name: "missing device node", devicePath: "/dev/dri/card0", targets: []DisplayTarget{target}, connectors: []Connector{{Card: 0, Name: base.Name, Device: base.Device, Status: base.Status, Modes: base.Modes}}, wantError: "is missing"},
+		{name: "missing device node", devicePath: missingDevice, targets: []DisplayTarget{target}, connectors: []Connector{{Card: 0, Name: base.Name, Device: missingDevice, Status: base.Status, Modes: base.Modes}}, wantError: "is missing"},
 		{name: "disconnected connector", devicePath: "/dev/dri/card0", targets: []DisplayTarget{target}, connectors: []Connector{{Card: 0, Name: base.Name, Device: base.Device, DeviceNodePresent: true, Status: "disconnected", Modes: base.Modes}}, wantError: "disconnected"},
 		{name: "no advertised modes", devicePath: "/dev/dri/card0", targets: []DisplayTarget{target}, connectors: []Connector{{Card: 0, Name: base.Name, Device: base.Device, DeviceNodePresent: true, Status: "connected"}}, wantError: "advertises no modes"},
 		{name: "unsupported resolution", devicePath: "/dev/dri/card0", targets: []DisplayTarget{{ID: target.ID, Connector: target.Connector, Mode: "3840x2160"}}, connectors: []Connector{base}, wantError: "does not advertise resolution 3840x2160"},
