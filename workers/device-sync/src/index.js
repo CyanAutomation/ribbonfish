@@ -1,4 +1,6 @@
 import { readRequestBody, parseJSONBody } from "./request-body.ts";
+import { randomToken, sha256Hex, sha256HexBytes } from "./crypto-primitives.ts";
+export { sha256Hex } from "./crypto-primitives.ts";
 import { HTTPError } from "./http-error.ts";
 import { hasExactKeys } from "./validation.ts";
 import { assessUpcomingCaptures } from "./capture-intelligence.ts";
@@ -462,21 +464,6 @@ function encodeBase64Url(bytes) {
 
 function formatFingerprint(requestID) {
   return requestID.slice(0, 32).match(/.{4}/g).join("-");
-}
-
-function randomToken() {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
-}
-
-export async function sha256Hex(value) {
-  const bytes = new TextEncoder().encode(value);
-  return sha256HexBytes(bytes);
-}
-
-async function sha256HexBytes(bytes) {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 function constantTimeEqual(left, right) {
