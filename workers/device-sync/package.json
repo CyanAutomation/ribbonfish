@@ -7,22 +7,26 @@
   },
   "scripts": {
     "test": "node --test",
-    "build:admin": "node scripts/build-admin.mjs",
+    "build:admin": "node scripts/build-admin.ts",
     "check:config": "wrangler deploy --dry-run --config wrangler.toml && wrangler deploy --dry-run --config wrangler.management.toml",
     "dev": "npm run publish:admin:local && wrangler dev --config wrangler.management.toml --local --var \"ADMIN_ENABLED:true\" \"ADMIN_ACCESS_REQUIRED:false\"",
     "deploy:production": "wrangler deploy --config wrangler.toml",
     "deploy:management": "npm run publish:admin:production && wrangler deploy --config wrangler.management.toml",
-    "init:local": "node scripts/bootstrap-database.mjs --local --config wrangler.management.toml --database ribbonfish-devices",
-    "publish:admin:production": "node scripts/publish-admin-assets.mjs --config wrangler.management.toml --bucket ribbonfish-assets --remote",
-    "publish:admin:local": "node scripts/publish-admin-assets.mjs --config wrangler.management.toml --bucket ribbonfish-assets --local",
-    "migrate:management": "wrangler d1 migrations apply ribbonfish-devices --remote --config wrangler.management.toml"
+    "init:local": "node scripts/bootstrap-database.ts --local --config wrangler.management.toml --database ribbonfish-devices",
+    "publish:admin:production": "node scripts/publish-admin-assets.ts --config wrangler.management.toml --bucket ribbonfish-assets --remote",
+    "publish:admin:local": "node scripts/publish-admin-assets.ts --config wrangler.management.toml --bucket ribbonfish-assets --local",
+    "migrate:management": "wrangler d1 migrations apply ribbonfish-devices --remote --config wrangler.management.toml",
+    "typecheck": "tsc -p tsconfig.worker.json && tsc -p tsconfig.admin.json && tsc -p tsconfig.scripts.json"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261103.1",
     "@openuidev/lang-core": "^1.0.2",
+    "@types/node": "^24.19.2",
     "esbuild": "^0.28.2",
     "jsdom": "^30.1.3",
     "parse5": "^8.0.1",
     "postcss": "^8.5.32",
+    "typescript": "^7.0.2",
     "wrangler": "4.154.0",
     "yaml": "^2.9.1"
   }

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { storePngAsset } from "./asset-store.js";
+import { storePngAsset } from "./asset-store.ts";
 
 const png = new Uint8Array(await readFile(new URL("../../../agent/defaults/assets/service-health.png", import.meta.url)));
 
