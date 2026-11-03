@@ -1079,7 +1079,7 @@ test("retention removes captures older than 30 days and restores their holding a
 });
 
 test('background screenshot assessment records a bounded shadow decision once per due time without changing the schedule', async () => {
-  const { assessUpcomingCaptures } = await import('./capture-intelligence.js');
+  const { assessUpcomingCaptures } = await import('./capture-intelligence.ts');
   const sqlite = await freshDatabase();
   try {
     sqlite.exec(await readFile(new URL('../migrations/0010_capture_decisions.sql', import.meta.url), 'utf8'));
@@ -1122,7 +1122,7 @@ test('background screenshot assessment records a bounded shadow decision once pe
 });
 
 test('shadow deferral suggestions are evaluated against the scheduled screenshot outcome', async () => {
-  const { assessUpcomingCaptures } = await import('./capture-intelligence.js');
+  const { assessUpcomingCaptures } = await import('./capture-intelligence.ts');
   const sqlite = await freshDatabase();
   try {
     const { env, messages } = environment(sqlite, {
@@ -1181,7 +1181,7 @@ test('shadow deferral suggestions are evaluated against the scheduled screenshot
 });
 
 test('background assessment failures record a fallback and preserve the scheduled capture', async () => {
-  const { assessUpcomingCaptures } = await import('./capture-intelligence.js');
+  const { assessUpcomingCaptures } = await import('./capture-intelligence.ts');
   const sqlite = await freshDatabase();
   try {
     const { env, messages } = environment(sqlite);
@@ -1200,7 +1200,7 @@ test('background assessment failures record a fallback and preserve the schedule
 
 
 test('abandoned background assessment can be retried without changing the schedule', async () => {
-  const { assessUpcomingCaptures } = await import('./capture-intelligence.js');
+  const { assessUpcomingCaptures } = await import('./capture-intelligence.ts');
   const sqlite = await freshDatabase();
   try {
     const { env, messages } = environment(sqlite);

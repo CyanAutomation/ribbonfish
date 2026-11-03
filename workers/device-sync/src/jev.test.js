@@ -6,7 +6,7 @@ import {
   buildFleetAnalysisState,
   captureAssessmentQuestions,
   fleetAnalysisQuestions,
-} from "./jev-use-cases.js";
+} from "./jev-use-cases.ts";
 
 const sampleAnswers = {
   recommendation: {
