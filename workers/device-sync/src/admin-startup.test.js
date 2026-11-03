@@ -113,7 +113,7 @@ test("management page starts, renders its data, and dismisses errors", async () 
     assert.deepEqual(playlistBody.captures, [{ capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }]);
 
     const siteCard = [...window.document.querySelectorAll("#capture-target-list article")]
-      .find((card) => card.textContent.includes("https://status.example/"));
+      .find((card) => card.querySelector("h4")?.textContent === "https://status.example/");
     const removeSiteButton = [...siteCard.querySelectorAll("button")]
       .find((button) => button.textContent === "Remove capture site");
     assert.equal(removeSiteButton.closest("details").open, false);
