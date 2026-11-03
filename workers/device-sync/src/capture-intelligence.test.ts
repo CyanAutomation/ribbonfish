@@ -5,10 +5,10 @@ import { decideCapturePolicy } from './capture-intelligence.ts';
 const now = 1_000_000;
 const target = { capture_interval_seconds: 60, last_success_at: now - 60_000, next_due_at: now,
   current_asset_present: true, current_sha256: 'x', failure_count: 0, last_error: null, job_status: null,
-  history: [{ sha256: 'x' }, { sha256: 'x' }, { sha256: 'x' }] };
+  history: [{ sha256: 'x', browser_ms: 0, browser_ms_source: null }, { sha256: 'x', browser_ms: 0, browser_ms_source: null }, { sha256: 'x', browser_ms: 0, browser_ms_source: null }] };
 const decision = { answers: {
-  recommendation: { choice: 'skip_once', confidence: 0.9 },
-  risk: { score: 0, confidence: 0.9 },
+  recommendation: { type: 'choice' as const, choice: 'skip_once', confidence: 0.9 },
+  risk: { type: 'score' as const, score: 0, confidence: 0.9 },
 } };
 
 test('stable captures can be proposed for one bounded deferral', () => {
@@ -18,14 +18,14 @@ test('stable captures can be proposed for one bounded deferral', () => {
 test('uncertain, stale, missing or failed captures always retain their schedule', () => {
   for (const changed of [
     { last_success_at: now - 120_001 }, { current_asset_present: false }, { failure_count: 1 },
-    { job_status: 'running' }, { history: [{ sha256: 'x' }, { sha256: 'y' }, { sha256: 'x' }] },
+    { job_status: 'running' }, { history: [{ sha256: 'x', browser_ms: 0, browser_ms_source: null }, { sha256: 'y', browser_ms: 0, browser_ms_source: null }, { sha256: 'x', browser_ms: 0, browser_ms_source: null }] },
   ]) assert.equal(decideCapturePolicy({ ...target, ...changed }, decision, now).action, 'capture');
   assert.equal(decideCapturePolicy(target, null, now).action, 'capture');
-  assert.equal(decideCapturePolicy(target, { answers: { recommendation: { choice: 'capture_now' } } }, now).action, 'capture');
+  assert.equal(decideCapturePolicy(target, { answers: { recommendation: { type: 'choice' as const, choice: 'capture_now' } } }, now).action, 'capture');
   for (const uncertain of [
-    { recommendation: { choice: 'skip_once' }, risk: { score: 0, confidence: 0.9 } },
-    { recommendation: { choice: 'skip_once', confidence: 0.79 }, risk: { score: 0, confidence: 0.9 } },
-    { recommendation: { choice: 'skip_once', confidence: 0.9 }, risk: { score: 0, confidence: 0.79 } },
+    { recommendation: { type: 'choice' as const, choice: 'skip_once' }, risk: { type: 'score' as const, score: 0, confidence: 0.9 } },
+    { recommendation: { type: 'choice' as const, choice: 'skip_once', confidence: 0.79 }, risk: { type: 'score' as const, score: 0, confidence: 0.9 } },
+    { recommendation: { type: 'choice' as const, choice: 'skip_once', confidence: 0.9 }, risk: { type: 'score' as const, score: 0, confidence: 0.79 } },
   ]) {
     assert.equal(decideCapturePolicy(target, { answers: uncertain }, now).action, 'capture');
   }

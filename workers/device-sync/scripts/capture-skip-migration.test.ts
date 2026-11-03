@@ -15,9 +15,9 @@ test("capture skip migration is repeatable and approvals cascade with their targ
     database.prepare(
       "INSERT INTO capture_skip_approvals (capture_id, due_at, expires_at, actor_id, created_at) VALUES (?, ?, ?, ?, ?)",
     ).run("capture-1", 100, 200, "admin@example.com", 50);
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM capture_skip_approvals").get().count, 1);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM capture_skip_approvals").get()?.count, 1);
     database.prepare("DELETE FROM capture_targets WHERE capture_id = ?").run("capture-1");
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM capture_skip_approvals").get().count, 0);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM capture_skip_approvals").get()?.count, 0);
   } finally {
     database.close();
   }
