@@ -188,7 +188,7 @@ test("capture interval API updates a stored target, next due time, and audit rec
       .get(captureID);
     assert.equal(target.capture_interval_seconds, 21600);
     assert.ok(target.next_due_at >= Date.now() + 21_590_000);
-    const event = sqlite.prepare("SELECT event_type, metadata_json FROM audit_events WHERE subject_id = ? ORDER BY occurred_at DESC LIMIT 1")
+    const event = sqlite.prepare("SELECT event_type, metadata_json FROM audit_events WHERE subject_id = ? ORDER BY occurred_at DESC, rowid DESC LIMIT 1")
       .get(captureID);
     assert.equal(event.event_type, "capture.interval_updated");
     assert.deepEqual(JSON.parse(event.metadata_json), { capture_interval_seconds: 21600 });
