@@ -2,11 +2,11 @@ import { execFileSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-export function ledgerNames(response) {
-  if (!Array.isArray(response) || response.length !== 1 || response[0].success !== true || !Array.isArray(response[0].results) || response[0].results.some(row => typeof row.name !== 'string')) throw new Error('Invalid D1 migration ledger response');
-  return response[0].results.map(row => row.name);
+export function ledgerNames(response: unknown) {
+  if (!Array.isArray(response) || response.length !== 1 || response[0].success !== true || !Array.isArray(response[0].results) || response[0].results.some((row: unknown) => !row || typeof row !== 'object' || !('name' in row) || typeof row.name !== 'string')) throw new Error('Invalid D1 migration ledger response');
+  return (response[0].results as { name: string }[]).map(row => row.name);
 }
-export function pendingMigrations(local, applied) {
+export function pendingMigrations(local: string[], applied: string[]) {
   if (!Array.isArray(local) || !Array.isArray(applied)) throw new Error('Invalid migration list');
   const done = new Set(applied);
   return local.filter(name => /^\d+_.*\.sql$/.test(name) && !done.has(name)).sort();

@@ -31,6 +31,9 @@ jobs:
       - name: Install pinned Wrangler
         working-directory: workers/device-sync
         run: npm ci
+      - name: Type-check TypeScript
+        working-directory: workers/device-sync
+        run: npm run typecheck
       - name: Build management console assets
         working-directory: workers/device-sync
         run: npm run build:admin

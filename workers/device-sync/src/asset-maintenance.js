@@ -1,5 +1,5 @@
-import { markAssetLiveStatement } from "./asset-registry.js";
-import { storePngAsset } from "./asset-store.js";
+import { markAssetLiveStatement } from "./asset-registry.ts";
+import { storePngAsset } from "./asset-store.ts";
 
 export const ASSET_RECONCILIATION_PAGE_SIZE = 40;
 export const LEGACY_ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
