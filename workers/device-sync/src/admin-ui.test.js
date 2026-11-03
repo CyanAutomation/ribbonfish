@@ -26,6 +26,8 @@ import {
   formatScreenshotStatus,
   formatTimestamp,
   summarizeFleetAttention,
+  prioritizeCaptureTargets,
+  summarizeCaptureErrors,
 } from "../public/admin/ui-utils.js";
 
 // Contract source: ../README.md#local-development and ../README.md#management-api.
@@ -713,4 +715,32 @@ test('visible analysis copy is branded as Ribbonfish and omits provider metadata
   assert.doesNotMatch(visible, /\bJEV\b/i);
   assert.match(visible, /Ribbonfish reviews/i);
   assert.doesNotMatch(script, /result\.model|result\.usage/);
+});
+
+test("module shell provides persistent navigation and an on-demand site form", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const nodes = parseHTML(html);
+  const nav = byID(nodes, "module-navigation");
+  assert.ok(nav);
+  assert.equal(attribute(nav, "aria-label"), "Management modules");
+  const links = descendants(nav).filter((item) => item.tagName === "a");
+  for (const id of ["dashboard", "overview-section", "sites-section", "playlist-section", "device-section", "activity-section", "analysis-section"]) {
+    assert.ok(links.some((link) => attribute(link, "href") === `#${id}`), `${id} is reachable`);
+  }
+  const siteEditor = byID(nodes, "capture-site-editor");
+  assert.equal(siteEditor.tagName, "details");
+  assert.ok(descendants(siteEditor).some((item) => attribute(item, "id") === "capture-site-form"));
+});
+
+
+test("capture issues are grouped and surfaced before healthy sites without changing input", () => {
+  const targets = [
+    { display_url: "healthy", last_success_at: 1 },
+    { display_url: "first", last_error: "Budget reached", schedule_reviewed: true },
+    { display_url: "second", last_error: "Budget reached", schedule_reviewed: true },
+    { display_url: "review", schedule_reviewed: false },
+  ];
+  assert.deepEqual(prioritizeCaptureTargets(targets).map((item) => item.display_url), ["first", "second", "review", "healthy"]);
+  assert.deepEqual(summarizeCaptureErrors(targets), [{ message: "Budget reached", count: 2 }]);
+  assert.equal(targets[0].display_url, "healthy");
 });

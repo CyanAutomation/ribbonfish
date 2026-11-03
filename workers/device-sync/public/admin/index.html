@@ -29,6 +29,15 @@
       </div>
       <section id="asset-health" class="panel panel--alert" hidden role="alert" aria-live="assertive"></section>
 
+      <nav id="module-navigation" class="module-navigation" aria-label="Management modules">
+        <a href="#dashboard">All modules</a>
+        <a href="#overview-section">Overview</a>
+        <a href="#sites-section">Capture sites</a>
+        <a href="#playlist-section">Playlists</a>
+        <a href="#device-section">Devices</a>
+        <a href="#activity-section">Recent activity</a>
+        <a href="#analysis-section">Fleet analysis</a>
+      </nav>
       <nav id="dashboard-tiles" class="tile-grid" aria-label="Management modules">
         <a class="module-tile" href="#overview-section"><strong>Overview</strong><span>Fleet snapshot and items needing attention</span></a>
         <a class="module-tile" href="#sites-section"><strong>Capture sites</strong><span id="sites-tile-status">Sites, schedules and screenshots</span></a>
@@ -37,35 +46,35 @@
         <a class="module-tile" href="#activity-section"><strong>Recent activity</strong><span>Management history</span></a>
         <a class="module-tile" href="#analysis-section"><strong>Fleet analysis</strong><span>Review advisory signals</span></a>
       </nav>
-      <a id="dashboard-home" class="dashboard-home" href="#dashboard">← All modules</a>
 
       <section id="overview-section" class="panel" aria-labelledby="overview-title">
         <div class="section-heading">
           <div><p class="eyebrow">Overview</p><h2 id="overview-title">Fleet snapshot</h2></div>
         </div>
         <div id="overview-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="overview" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss overview message">Dismiss</button></div>
-        <div id="fleet-summary" role="region" aria-label="Fleet snapshot" aria-live="polite"></div>
         <div id="fleet-attention" class="fleet-attention" role="region" aria-label="Needs attention"></div>
+        <div id="fleet-summary" role="region" aria-label="Fleet snapshot" aria-live="polite"></div>
       </section>
 
       <section id="sites-section" class="panel" aria-labelledby="sites-title">
         <div class="section-heading"><div><p class="eyebrow">Sites</p><h2 id="sites-title">Capture sites</h2></div></div>
         <p class="muted">Register pages and review their screenshot schedules here. Sites are independent of playlists; only reviewed sites can be added to a playlist. Scheduled captures run when a site is included in the active playlist.</p>
-        <nav class="child-tiles" aria-label="Site tasks"><a href="#capture-site-form">Add a site</a><a href="#capture-target-list">Manage sites and schedules</a></nav>
+        <details id="capture-site-editor" class="editor-disclosure"><summary>Add a site</summary>
         <form id="capture-site-form" class="form-grid">
           <label class="field--wide">Public HTTPS URL <input class="field-control" name="url" type="url" placeholder="https://status.example.com" required></label>
           <label>Screenshot size <span class="viewport-inputs"><input class="field-control" name="viewport_width" type="number" value="1920" min="320" max="3840" step="1" aria-label="Screenshot width in pixels" required><span aria-hidden="true">×</span><input class="field-control" name="viewport_height" type="number" value="1080" min="240" max="2160" step="1" aria-label="Screenshot height in pixels" required></span></label>
           <div class="field--wide form-actions"><button class="button button--primary" type="submit">Add site</button></div>
           <p id="capture-site-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
         </form>
+        </details>
         <div id="capture-target-list" class="capture-target-list" role="region" aria-label="Capture sites" aria-live="polite"></div>
       </section>
 
       <section id="playlist-section" class="panel" aria-labelledby="playlist-title">
         <div class="section-heading">
           <div><p class="eyebrow">Playlists</p><h2 id="playlist-title">Playlist versions</h2></div>
+          <a class="button button--primary" href="#playlist-editor">Create playlist version</a>
         </div>
-        <nav class="child-tiles" aria-label="Playlist tasks"><a href="#playlists">Playlist versions</a><a href="#playlist-editor">Create playlist version</a></nav>
         <div id="playlist-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="playlist" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss playlist message">Dismiss</button></div>
         <div id="playlists" class="table-scroll desktop-data" role="region" aria-label="Playlist versions" tabindex="0"></div>
         <div id="playlists-mobile" class="mobile-card-list" role="region" aria-label="Playlist versions"></div>
@@ -99,7 +108,6 @@
         <div class="section-heading">
           <div><p class="eyebrow">Devices</p><h2 id="device-title">Device fleet</h2></div>
         </div>
-        <nav class="child-tiles" aria-label="Device tasks"><a href="#pending-enrollments-title">Devices awaiting approval</a><a href="#devices">Enrolled devices</a></nav>
         <div id="device-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="device" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss device message">Dismiss</button></div>
         <details id="pending-enrollments-details" class="pending-enrollments">
           <summary><h3 id="pending-enrollments-title">Devices awaiting approval</h3><span id="pending-enrollment-count" class="disclosure-hint"></span></summary>
