@@ -78,6 +78,20 @@ test("JEV decision primitive rejects missing secrets, oversized input, provider 
   }), /response was too large/);
 });
 
+test("provider errors retain upstream status separately from the client-facing status", async () => {
+  for (const upstreamStatus of [401, 429, 503]) {
+    await assert.rejects(callJevDecision({ OPENROUTER_API_KEY: "key" }, {
+      state: "{}", questions: captureAssessmentQuestions,
+      fetcher: async () => new Response("private provider details", { status: upstreamStatus }),
+    }), (error) => {
+      assert.equal(error.status, 502);
+      assert.equal(error.upstreamStatus, upstreamStatus);
+      assert.doesNotMatch(error.message, /private provider details/);
+      return true;
+    });
+  }
+});
+
 test("answer validation enforces choices, types, probabilities, confidence, and score bounds", () => {
   assert.equal(validateAnswers(sampleAnswers, captureAssessmentQuestions), true);
   assert.equal(validateAnswers({ ...sampleAnswers, recommendation: { ...sampleAnswers.recommendation, choice: "delete" } }, captureAssessmentQuestions), false);
