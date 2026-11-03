@@ -1,3 +1,4 @@
+import { node, button, statusBadge, actionDisclosure } from "./ui-primitives.ts";
 import { initModuleNavigation } from "./module-navigation.ts";
 import {
   createFleetOpenUI,
@@ -23,6 +24,8 @@ import {
   formatScreenshotStatus,
   formatTimestamp,
   summarizeFleetAttention,
+  prioritizeCaptureTargets,
+  summarizeCaptureErrors,
 } from "./ui-utils.js";
 
 const fleetSummary = document.querySelector("#fleet-summary");
@@ -43,19 +46,6 @@ let intervalDefinitions = null;
 const fleetViewRuntime = createFleetOpenUI({ getOverview: async () => latestOverview });
 
 fleetViewRuntime.subscribe(renderFleetSummary);
-
-function node(tag, text, className) {
-  const value = document.createElement(tag);
-  if (text !== undefined && text !== null) value.textContent = String(text);
-  if (className) value.className = className;
-  return value;
-}
-
-function button(text, variant = "primary") {
-  const value = node("button", text, `button button--${variant}`);
-  value.type = "button";
-  return value;
-}
 
 function formatRunTime(milliseconds) {
   const seconds = Math.max(0, Math.round((Number(milliseconds) || 0) / 1000));
@@ -204,14 +194,15 @@ function renderResponsiveRecords({
     valuesFor(record, "table").forEach(({ label, value }) => row.append(cell(label, value)));
     return row;
   });
-  document.querySelector(tableSelector).replaceChildren(table(
+  const tableContainer = typeof tableSelector === "string" ? document.querySelector(tableSelector) : tableSelector;
+  tableContainer.replaceChildren(table(
     caption,
     fields.map(({ label }) => label),
     rows,
     emptyState,
   ));
 
-  const cards = document.querySelector(cardsSelector);
+  const cards = typeof cardsSelector === "string" ? document.querySelector(cardsSelector) : cardsSelector;
   cards.replaceChildren();
   if (!records.length) {
     cards.append(emptyCard(emptyState.message, emptyState.actionLabel, emptyState.href));
@@ -288,11 +279,6 @@ async function copyValue(value, successMessage, context = "global") {
   } catch {
     showMessage("Clipboard access failed. Select and copy the value manually.", true, context);
   }
-}
-
-function statusBadge(text, tone = "success") {
-  const toneClass = tone === "success" ? "badge" : `badge badge--${tone}`;
-  return node("span", text, toneClass);
 }
 
 function playlistForm() {
@@ -429,7 +415,7 @@ function playlistActionButtons(playlist, deleteAction, layout) {
           await refresh();
         } catch (error) { showMessage(error.message, true, "playlist"); }
       });
-      actions.append(remove);
+      actions.append(actionDisclosure(`More actions for ${playlist.playlist_id}`, [remove]));
     }
   }
   return actions;
@@ -494,11 +480,17 @@ function renderPlaylists(playlists) {
       ),
     },
   ];
-  renderResponsiveRecords({
-    tableSelector: "#playlists",
-    cardsSelector: "#playlists-mobile",
-    caption: "Playlist versions",
-    records: playlists,
+  const desktop = document.querySelector("#playlists");
+  const mobile = document.querySelector("#playlists-mobile");
+  desktop.replaceChildren();
+  mobile.replaceChildren();
+  const groups = new Map();
+  [...playlists].sort((a, b) => String(a.playlist_id).localeCompare(String(b.playlist_id)) || Number(b.active) - Number(a.active)).forEach((playlist) => {
+    const versions = groups.get(playlist.playlist_id) ?? [];
+    versions.push(playlist);
+    groups.set(playlist.playlist_id, versions);
+  });
+  const options = {
     fields,
     emptyState: {
       message: "No playlists yet. Add images or reviewed sites to create your first playlist version.",
@@ -507,6 +499,26 @@ function renderPlaylists(playlists) {
     },
     cardTitleField: "Playlist",
     cardStatusField: "Status",
+  };
+  if (!groups.size) {
+    renderResponsiveRecords({ ...options, tableSelector: desktop, cardsSelector: mobile, caption: "Playlist versions", records: [] });
+    return;
+  }
+  groups.forEach((versions, name) => {
+    const desktopGroup = node("section", undefined, "playlist-group");
+    const mobileGroup = node("section", undefined, "playlist-group");
+    desktopGroup.append(node("h3", name));
+    mobileGroup.append(node("h3", name));
+    const tableContainer = node("div", undefined, "table-scroll");
+    tableContainer.tabIndex = 0;
+    tableContainer.setAttribute("role", "region");
+    tableContainer.setAttribute("aria-label", `Versions of ${name}`);
+    const cardContainer = node("div", undefined, "playlist-group__cards");
+    desktopGroup.append(tableContainer);
+    mobileGroup.append(cardContainer);
+    desktop.append(desktopGroup);
+    mobile.append(mobileGroup);
+    renderResponsiveRecords({ ...options, tableSelector: tableContainer, cardsSelector: cardContainer, caption: `Versions of ${name}`, records: versions });
   });
 }
 
@@ -518,7 +530,9 @@ function renderCaptureTargets(targets, decisions = [], efficiency = null) {
     const daily = efficiency.daily_usage ?? {};
     const recent = efficiency.last_30_days ?? {};
     const runTime = recent.browser_run_ms ?? {};
-    container.append(node("p",
+    const usage = node("details", undefined, "usage-details");
+    usage.append(node("summary", "Capture efficiency and Browser Run usage"));
+    usage.append(node("p",
       `Browser Run today: ${formatRunTime(daily.accounted_ms)} of ${formatRunTime(daily.budget_ms)} accounted. ` +
       `Last 30 days: ${recent.successful_screenshots ?? 0} screenshots completed, ${recent.validator_unchanged ?? 0} unchanged validator checks skipped Browser Run, ` +
       `${recent.successful_unclassified ?? 0} older results unclassified. Browser Run time: ${formatRunTime(runTime.response_header)} measured, ` +
@@ -526,12 +540,22 @@ function renderCaptureTargets(targets, decisions = [], efficiency = null) {
       `Scheduled JEV made ${recent.jev_shadow_assessments ?? 0} shadow assessments. Of ${recent.jev_candidate_deferrals ?? 0} defer suggestions, ` +
       `${recent.jev_candidate_changed ?? 0} were followed by changed screenshots and ${recent.jev_candidate_unchanged ?? 0} by unchanged screenshots; ` +
       `${recent.jev_candidate_unverified ?? 0} remain unverified. Schedules were unchanged.`, "muted"));
+    container.append(usage);
   }
   if (!targets.length) {
     container.append(node("p", "No capture sites yet. Add a site above to configure its screenshot schedule.", "muted"));
     return;
   }
-  targets.forEach((target) => {
+  const repeatedErrors = summarizeCaptureErrors(targets);
+  if (repeatedErrors.length) {
+    const summary = node("section", undefined, "alert alert--warning capture-issues");
+    summary.append(node("h3", "Shared screenshot issues"));
+    const list = node("ul");
+    repeatedErrors.forEach(({ message, count }) => list.append(node("li", `${count} sites: ${message}`)));
+    summary.append(list);
+    container.append(summary);
+  }
+  prioritizeCaptureTargets(targets).forEach((target) => {
     const card = node("article", undefined, "capture-target");
     const preview = node("img", undefined, "capture-target__preview");
     preview.src = `/admin/api/assets/${target.sha256}`;
@@ -650,7 +674,7 @@ function renderCaptureTargets(targets, decisions = [], efficiency = null) {
         await refresh();
       } catch (error) { showMessage(error.message, true, "global"); }
     });
-    actions.append(removeSite);
+    actions.append(actionDisclosure(`More actions for ${target.display_url}`, [removeSite]));
     const assessmentDisclosure = node("details", undefined, "capture-target__assessment");
     assessmentDisclosure.append(node("summary", "Assess screenshot schedule"));
     const assess = button("Run advisory assessment", "secondary");
@@ -754,7 +778,7 @@ function deviceActionButtons(device, layout) {
       await refresh();
     } catch (error) { showMessage(error.message, true, "device"); }
   });
-  buttons.push(remove);
+  const moreActions = [remove];
   if (device.auth_type !== "key") {
     const rotate = button("Rotate device token", "danger");
     rotate.addEventListener("click", async () => {
@@ -778,10 +802,10 @@ function deviceActionButtons(device, layout) {
         await refresh();
       } catch (error) { showMessage(error.message, true, "device"); }
     });
-    buttons.push(rotate);
+    moreActions.push(rotate);
   }
   const actions = node("div", undefined, layout === "card" ? "card-actions" : "table-actions");
-  actions.append(...buttons);
+  actions.append(...buttons, actionDisclosure(`More actions for ${device.device_id}`, moreActions));
   return actions;
 }
 
@@ -878,7 +902,10 @@ function renderDevices(devices) {
     tableSelector: "#devices",
     cardsSelector: "#devices-mobile",
     caption: "Enrolled devices",
-    records: devices,
+    records: [...devices].sort((a, b) => {
+      const needsReview = (device) => device.enabled && ["degraded", "stale", "offline", "unknown"].includes(device.health?.status ?? "unknown");
+      return Number(needsReview(b)) - Number(needsReview(a));
+    }),
     fields: [
       { label: "Device", render: (device) => identifier(device.device_id, "device ID", "device") },
       {
