@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { deriveDeviceHealth, validateDeviceHealthReport } from "./device-health.ts";
+import { deriveDeviceHealth, validateDeviceHealthReport, type DeviceHealthReport } from "./device-health.ts";
 
-const report = {
+const report: DeviceHealthReport = {
   schema_version: 1,
   instance_id: "boot-0123456789abcdef",
   agent_version: "sha-0123456789ab",
@@ -27,9 +27,9 @@ test("health report accepts bounded version 1 data and rejects unknown or unsafe
 test("fleet health uses server receive time and retains reported faults", () => {
   const receivedAt = 1_000_000;
   assert.equal(deriveDeviceHealth(null, receivedAt, receivedAt), "unknown");
-  assert.equal(deriveDeviceHealth({ state: "ready", sync: { status: "ok" }, outputs: [] }, receivedAt, receivedAt + 1000), "healthy");
-  assert.equal(deriveDeviceHealth({ state: "ready", sync: { status: "unknown" }, outputs: [{ status: "unknown" }] }, receivedAt, receivedAt + 1000), "starting");
+  assert.equal(deriveDeviceHealth({ state: "ready", sync: { status: "ok", error_code: null }, outputs: [] }, receivedAt, receivedAt + 1000), "healthy");
+  assert.equal(deriveDeviceHealth({ state: "ready", sync: { status: "unknown", error_code: null }, outputs: [{ status: "unknown", error_code: null }] }, receivedAt, receivedAt + 1000), "starting");
   assert.equal(deriveDeviceHealth(report, receivedAt, receivedAt + 1000), "degraded");
-  assert.equal(deriveDeviceHealth({ state: "ready", sync: { status: "ok" }, outputs: [] }, receivedAt, receivedAt + 181_000), "stale");
-  assert.equal(deriveDeviceHealth({ state: "ready", sync: { status: "ok" }, outputs: [] }, receivedAt, receivedAt + 301_000), "offline");
+  assert.equal(deriveDeviceHealth({ state: "ready", sync: { status: "ok", error_code: null }, outputs: [] }, receivedAt, receivedAt + 181_000), "stale");
+  assert.equal(deriveDeviceHealth({ state: "ready", sync: { status: "ok", error_code: null }, outputs: [] }, receivedAt, receivedAt + 301_000), "offline");
 });

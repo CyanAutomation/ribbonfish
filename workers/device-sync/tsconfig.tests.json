@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.worker.json",
+  "compilerOptions": {
+    "types": [
+      "node",
+      "@cloudflare/workers-types"
+    ]
+  },
+  "include": [
+    "src/management-bindings.d.ts",
+    "src/**/*.test.ts"
+  ],
+  "exclude": []
+}

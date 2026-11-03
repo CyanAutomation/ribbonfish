@@ -7,7 +7,7 @@ on:
     paths:
       - "workers/device-sync/**"
       - ".github/workflows/deploy-device-sync.yml"
-      - ".github/scripts/release-freshness.mjs"
+      - ".github/scripts/release-freshness.mts"
       - "workers/device-sync/scripts/migration-readiness.ts"
 
 permissions:
@@ -81,7 +81,7 @@ jobs:
         id: freshness
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node .github/scripts/release-freshness.mjs workers/device-sync --allow-stale
+        run: node .github/scripts/release-freshness.mts workers/device-sync --allow-stale
       - name: Deploy device-sync Worker
         if: steps.freshness.outcome == 'success' && steps.freshness.outputs.current == 'true'
         working-directory: workers/device-sync
