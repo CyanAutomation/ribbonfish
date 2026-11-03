@@ -13,7 +13,7 @@ export function button(text: string, variant = "primary"): HTMLButtonElement {
 }
 
 export function statusBadge(text: string, tone = "success"): HTMLElement {
-  return node("span", text, `badge badge--${tone}`);
+  return node("span", text, tone === "success" ? "badge" : `badge badge--${tone}`);
 }
 
 /** Group infrequent actions behind a native keyboard-accessible disclosure. */

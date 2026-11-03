@@ -17,6 +17,18 @@ test("management page starts, renders its data, and dismisses errors", async () 
   const dom = new JSDOM(html, { url: "https://example.test/admin/", runScripts: "outside-only" });
   const { window } = dom;
   window.confirm = () => true;
+  const navigate = (action) => new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      window.removeEventListener("hashchange", onHashChange);
+      reject(new Error("Navigation did not emit a hashchange event"));
+    }, 2000);
+    function onHashChange() {
+      clearTimeout(timeout);
+      resolve();
+    }
+    window.addEventListener("hashchange", onHashChange, { once: true });
+    action();
+  });
   const calls = [];
   const requests = [];
   let fail = false;
@@ -65,26 +77,22 @@ test("management page starts, renders its data, and dismisses errors", async () 
     assert.equal(rotation.value, "90s");
     assert.ok(window.document.querySelector("#sites-section"));
     assert.equal(window.document.querySelector("#sites-section").hidden, true);
-    window.document.querySelector('a[href="#sites-section"]').click();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await navigate(() => window.document.querySelector('a[href="#sites-section"]').click());
     assert.equal(window.document.querySelector("#sites-section").hidden, false);
     assert.equal(window.document.querySelector("#device-section").hidden, true);
     assert.equal(window.document.activeElement.id, "sites-title");
     assert.equal(window.document.querySelector('#module-navigation a[href="#sites-section"]').getAttribute("aria-current"), "page");
     assert.equal(window.document.querySelector("#capture-site-editor").open, false);
-    window.document.querySelector('#module-navigation a[href="#dashboard"]').click();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await navigate(() => window.document.querySelector('#module-navigation a[href="#dashboard"]').click());
     assert.equal(window.document.querySelector("#sites-section").hidden, true);
     const analysisLink = window.document.querySelector('#dashboard-tiles a[href="#analysis-section"]');
     const analysisDialog = window.document.querySelector("#analysis-dialog");
     analysisLink.focus();
-    analysisLink.click();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await navigate(() => analysisLink.click());
     assert.equal(analysisDialog.open, true);
     assert.equal(window.document.querySelector("#dashboard-tiles").hidden, true);
     assert.equal(window.document.activeElement.id, "close-analysis");
-    analysisDialog.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await navigate(() => analysisDialog.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     assert.equal(analysisDialog.open, false);
     assert.equal(window.document.activeElement, analysisLink);
     assert.match(window.document.querySelector("#capture-target-list").textContent, /https:\/\/status.example\//);
