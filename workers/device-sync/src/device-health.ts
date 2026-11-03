@@ -1,3 +1,22 @@
+import { isRecord } from "./validation.ts";
+
+export interface DeviceHealthReport extends Record<string, unknown> {
+  schema_version: 1;
+  instance_id: string;
+  agent_version: string;
+  state: "starting" | "ready" | "degraded" | "startup_failed" | "stopping";
+  agent_uptime_seconds: number;
+  startup_error_code?: string | null;
+  sync: { status: "unknown" | "ok" | "failed"; applied_playlist_id: string | null; applied_revision: string | null; last_success_age_seconds: number | null; error_code: string | null };
+  outputs: Array<{ display_id: string; connector: string | null; status: "unknown" | "ready" | "failed"; last_frame_age_seconds: number | null; error_code: string | null }>;
+  host?: { uptime_seconds?: number; load_1m?: number; memory_available_bytes?: number; state_disk_free_bytes?: number; temperature_millicelsius?: number };
+}
+
+type HealthSnapshot = Pick<DeviceHealthReport, "state" | "startup_error_code"> & {
+  sync?: Pick<DeviceHealthReport["sync"], "status" | "error_code">;
+  outputs?: Array<Pick<DeviceHealthReport["outputs"][number], "status" | "error_code">>;
+};
+
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/;
 const ERROR_CODES = new Set([
@@ -8,32 +27,32 @@ const ERROR_CODES = new Set([
 const STALE_AFTER_MS = 3 * 60 * 1000;
 const OFFLINE_AFTER_MS = 5 * 60 * 1000;
 
-export function validateDeviceHealthReport(value) {
-  if (!record(value) || !exactKeys(value,
+export function validateDeviceHealthReport(value: unknown): DeviceHealthReport | null {
+  if (!isRecord(value) || !exactKeys(value,
     ["schema_version", "instance_id", "agent_version", "state", "agent_uptime_seconds", "sync", "outputs"],
     ["startup_error_code", "host"])) return null;
   if (value.schema_version !== 1 || !matches(value.instance_id, VERSION_PATTERN) ||
       !matches(value.agent_version, VERSION_PATTERN) ||
-      !["starting", "ready", "degraded", "startup_failed", "stopping"].includes(value.state) ||
+      !(typeof value.state === "string" && ["starting", "ready", "degraded", "startup_failed", "stopping"].includes(value.state)) ||
       !uint(value.agent_uptime_seconds, 10_000_000_000) ||
       value.startup_error_code !== undefined && !errorCode(value.startup_error_code, true) ||
       value.host !== undefined && !validHost(value.host) || !validSync(value.sync) ||
       !Array.isArray(value.outputs) || value.outputs.length > 8) return null;
-  const ids = new Set();
+  const ids = new Set<string>();
   for (const output of value.outputs) {
-    if (!record(output) || !exactKeys(output,
+    if (!isRecord(output) || !exactKeys(output,
       ["display_id", "connector", "status", "last_frame_age_seconds", "error_code"]) ||
       !matches(output.display_id, ID_PATTERN) || output.connector !== null && !matches(output.connector, ID_PATTERN) ||
-      !["unknown", "ready", "failed"].includes(output.status) ||
+      !(typeof output.status === "string" && ["unknown", "ready", "failed"].includes(output.status)) ||
       !nullableUInt(output.last_frame_age_seconds, 31_536_000) || !errorCode(output.error_code, true) ||
       ids.has(output.display_id)) return null;
     ids.add(output.display_id);
   }
-  return value;
+  return value as DeviceHealthReport;
 }
 
-export function deriveDeviceHealth(report, receivedAt, now = Date.now()) {
-  if (!report || !Number.isSafeInteger(receivedAt)) return "unknown";
+export function deriveDeviceHealth(report: HealthSnapshot | null, receivedAt: number | undefined, now = Date.now()) {
+  if (!report || typeof receivedAt !== "number" || !Number.isSafeInteger(receivedAt)) return "unknown";
   const age = Math.max(0, now - receivedAt);
   if (age > OFFLINE_AFTER_MS) return "offline";
   if (age > STALE_AFTER_MS) return "stale";
@@ -46,17 +65,17 @@ export function deriveDeviceHealth(report, receivedAt, now = Date.now()) {
   return "healthy";
 }
 
-function healthKey(report) {
+function healthKey(report: DeviceHealthReport) {
   return JSON.stringify({
     state: report.state,
     startup_error_code: report.startup_error_code ?? null,
     sync_status: report.sync.status,
     sync_error_code: report.sync.error_code,
-    outputs: report.outputs.map(({ display_id, status, error_code }) => [display_id, status, error_code]).sort((a, b) => a[0].localeCompare(b[0])),
+    outputs: report.outputs.map(({ display_id, status, error_code }) => [display_id, status, error_code] as const).sort((a, b) => a[0].localeCompare(b[0])),
   });
 }
 
-export async function persistDeviceHealth(db, deviceID, report, receivedAt) {
+export async function persistDeviceHealth(db: D1Database, deviceID: string, report: DeviceHealthReport, receivedAt: number) {
   const key = healthKey(report);
   const healthStatus = deriveDeviceHealth(report, receivedAt, receivedAt);
   const error = report.startup_error_code ?? report.sync.error_code ?? report.outputs.find((item) => item.error_code)?.error_code ?? null;
@@ -93,14 +112,14 @@ export async function persistDeviceHealth(db, deviceID, report, receivedAt) {
 
 // refreshDeviceHealthStatuses persists stale/offline transitions even when a
 // device stops reporting, and records the condition before the next report.
-export async function refreshDeviceHealthStatuses(db, now) {
+export async function refreshDeviceHealthStatuses(db: D1Database, now: number) {
   const candidates = await db.prepare(
     "SELECT h.device_id, h.instance_id, h.received_at, h.reported_state, h.report_json, h.health_status " +
     "FROM device_health_latest h JOIN devices d ON d.device_id = h.device_id " +
     "WHERE d.enabled = 1 AND h.received_at <= ? AND h.health_status <> 'offline' " +
     "ORDER BY h.received_at LIMIT 500",
-  ).bind(now - 3 * 60 * 1000).all();
-  const statements = [];
+  ).bind(now - 3 * 60 * 1000).all<{ device_id: string; instance_id: string; received_at: number; reported_state: string; report_json: string; health_status: string }>();
+  const statements: D1PreparedStatement[] = [];
   for (const row of candidates.results ?? []) {
     const report = parseReport(row.report_json);
     const status = deriveDeviceHealth(report, row.received_at, now);
@@ -127,7 +146,7 @@ export async function refreshDeviceHealthStatuses(db, now) {
   return result.reduce((count, item, index) => count + (index % 2 === 1 ? item?.meta?.changes ?? 0 : 0), 0);
 }
 
-export async function cleanupDeviceHealth(db, now) {
+export async function cleanupDeviceHealth(db: D1Database, now: number) {
   const cutoff = now - 30 * 24 * 60 * 60 * 1000;
   const results = await db.batch([
     db.prepare("DELETE FROM device_health_samples WHERE received_at < ?").bind(cutoff),
@@ -136,37 +155,36 @@ export async function cleanupDeviceHealth(db, now) {
   return (results ?? []).reduce((sum, row) => sum + (row?.meta?.changes ?? 0), 0);
 }
 
-function validSync(value) {
-  return record(value) && exactKeys(value,
+function validSync(value: unknown) {
+  return isRecord(value) && exactKeys(value,
     ["status", "applied_playlist_id", "applied_revision", "last_success_age_seconds", "error_code"]) &&
-    ["unknown", "ok", "failed"].includes(value.status) && nullableMatches(value.applied_playlist_id, ID_PATTERN) &&
+    typeof value.status === "string" && ["unknown", "ok", "failed"].includes(value.status) && nullableMatches(value.applied_playlist_id, ID_PATTERN) &&
     nullableMatches(value.applied_revision, VERSION_PATTERN) && nullableUInt(value.last_success_age_seconds, 31_536_000) &&
     errorCode(value.error_code, true);
 }
 
-function parseReport(value) {
+function parseReport(value: unknown): DeviceHealthReport | null {
   if (typeof value !== "string") return null;
-  try { return JSON.parse(value); } catch { return null; }
+  try { return JSON.parse(value) as DeviceHealthReport; } catch { return null; }
 }
 
-function validHost(value) {
-  if (!record(value) || !exactKeys(value, [], ["uptime_seconds", "load_1m", "memory_available_bytes", "state_disk_free_bytes", "temperature_millicelsius"])) return false;
+function validHost(value: unknown) {
+  if (!isRecord(value) || !exactKeys(value, [], ["uptime_seconds", "load_1m", "memory_available_bytes", "state_disk_free_bytes", "temperature_millicelsius"])) return false;
   if (value.uptime_seconds !== undefined && !uint(value.uptime_seconds, 10_000_000_000)) return false;
-  if (value.load_1m !== undefined && (!Number.isFinite(value.load_1m) || value.load_1m < 0 || value.load_1m > 1000)) return false;
+  if (value.load_1m !== undefined && (typeof value.load_1m !== "number" || !Number.isFinite(value.load_1m) || value.load_1m < 0 || value.load_1m > 1000)) return false;
   for (const key of ["memory_available_bytes", "state_disk_free_bytes"]) {
     if (value[key] !== undefined && !uint(value[key], Number.MAX_SAFE_INTEGER)) return false;
   }
   return value.temperature_millicelsius === undefined ||
-    Number.isSafeInteger(value.temperature_millicelsius) && value.temperature_millicelsius >= -40_000 && value.temperature_millicelsius <= 150_000;
+    typeof value.temperature_millicelsius === "number" && Number.isSafeInteger(value.temperature_millicelsius) && value.temperature_millicelsius >= -40_000 && value.temperature_millicelsius <= 150_000;
 }
 
-function record(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
-function exactKeys(value, required, optional = []) {
+function exactKeys(value: Record<string, unknown>, required: string[], optional: string[] = []) {
   const keys = Object.keys(value);
   return required.every((key) => Object.hasOwn(value, key)) && keys.every((key) => required.includes(key) || optional.includes(key));
 }
-function matches(value, pattern) { return typeof value === "string" && pattern.test(value); }
-function nullableMatches(value, pattern) { return value === null || matches(value, pattern); }
-function uint(value, max) { return Number.isSafeInteger(value) && value >= 0 && value <= max; }
-function nullableUInt(value, max) { return value === null || uint(value, max); }
-function errorCode(value, nullable = false) { return nullable && value === null || typeof value === "string" && ERROR_CODES.has(value); }
+function matches(value: unknown, pattern: RegExp): value is string { return typeof value === "string" && pattern.test(value); }
+function nullableMatches(value: unknown, pattern: RegExp) { return value === null || matches(value, pattern); }
+function uint(value: unknown, max: number): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max; }
+function nullableUInt(value: unknown, max: number) { return value === null || uint(value, max); }
+function errorCode(value: unknown, nullable = false) { return nullable && value === null || typeof value === "string" && ERROR_CODES.has(value); }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { callJevDecision, validateAnswers } from "./jev.js";
+import { callJevDecision, validateAnswers } from "./jev.ts";
 import {
   buildCaptureAssessmentState,
   buildFleetAnalysisState,
