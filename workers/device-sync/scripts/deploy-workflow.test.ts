@@ -6,12 +6,35 @@ import { parse } from "yaml";
 // Release contract: ../README.md#local-development and ../../../README.md#deployment-model.
 const root = new URL("../../../", import.meta.url);
 
-async function readYaml(path) {
+interface WorkflowStep {
+  name: string;
+  id: string;
+  uses: string;
+  run: string;
+  if: string;
+  with: Record<string, string>;
+  env: Record<string, string>;
+}
+interface WorkflowJob {
+  steps: WorkflowStep[];
+  uses: string;
+  needs: string | string[];
+  if: string;
+  environment: { name: string };
+}
+interface WorkflowDocument {
+  on: { push: { paths: string[]; branches: string[] } };
+  jobs: Record<string, WorkflowJob>;
+  permissions: Record<string, string>;
+  updates: { "package-ecosystem": string; directory: string }[];
+}
+
+async function readYaml(path: string): Promise<WorkflowDocument> {
   const source = await readFile(new URL(path, root), "utf8");
   return parse(source, { uniqueKeys: true });
 }
 
-function stepNamed(job, name) {
+function stepNamed(job: WorkflowJob, name: string) {
   const step = job.steps?.find((item) => item.name === name);
   assert.ok(step, `expected workflow step: ${name}`);
   return step;
@@ -71,13 +94,19 @@ test("container publishers wait for shared validation and avoid promoting stale 
 
   const ghcr = await readYaml(".github/workflows/publish-agent.yml");
   const metadata = ghcr.jobs.publish.steps.find((step) => step.id === "metadata");
+  assert.ok(metadata);
   assert.match(metadata.with.tags, /type=sha,format=long/);
-  assert.match(ghcr.jobs.publish.steps.find((step) => /Promote current main image/.test(step.name)).run,
+  const ghcrPromotion = ghcr.jobs.publish.steps.find((step) => /Promote current main image/.test(step.name));
+  assert.ok(ghcrPromotion);
+  assert.match(ghcrPromotion.run,
     /ribbonfish:main/);
 
   const dockerHub = await readYaml(".github/workflows/docker-publish.yml");
   const promotion = dockerHub.jobs.publish.steps.find((step) => /Promote current main image/.test(step.name));
-  assert.equal(dockerHub.jobs.publish.steps.find((step) => step.id === "freshness").env.GH_TOKEN, "${{ github.token }}");
+  assert.ok(promotion);
+  const dockerFreshness = dockerHub.jobs.publish.steps.find((step) => step.id === "freshness");
+  assert.ok(dockerFreshness);
+  assert.equal(dockerFreshness.env.GH_TOKEN, "${{ github.token }}");
   assert.match(promotion.run, /ribbonfish:latest/);
 });
 
@@ -90,6 +119,7 @@ test("Go and workflow validation run on pull requests through their intended job
   assert.ok(Object.hasOwn(lint.on, "pull_request"), "workflow lint must run for pull requests");
   assert.ok(lint.on.push.paths.includes(".github/workflows/**"));
   const lintCommand = lint.jobs.actionlint.steps.find((step) => /Check workflow syntax/.test(step.name));
+  assert.ok(lintCommand);
   assert.match(lintCommand.run, /actionlint/);
 });
 

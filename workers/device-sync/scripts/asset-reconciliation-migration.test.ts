@@ -31,7 +31,7 @@ test("asset reconciliation migration is repeatable, backfills current references
       { sha256: "b".repeat(64), size: 12, state: "live" },
       { sha256: "c".repeat(64), size: 13, state: "live" },
     ]);
-    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM asset_reconciliation_state").get().count, 1);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM asset_reconciliation_state").get()?.count, 1);
     const leaseUntil = Date.now() + 60_000;
     database.prepare(
       "INSERT INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at) " +
@@ -65,7 +65,7 @@ test("asset reconciliation migration is repeatable, backfills current references
     );
     database.prepare("INSERT INTO capture_targets VALUES ('new-target', ?, 15, ?, 16)")
       .run("e".repeat(64), "f".repeat(64));
-    assert.equal(database.prepare("SELECT state FROM managed_assets WHERE sha256 = ?").get("f".repeat(64)).state,
+    assert.equal(database.prepare("SELECT state FROM managed_assets WHERE sha256 = ?").get("f".repeat(64))?.state,
       "live", "new current-image references are registered too");
     database.prepare("UPDATE managed_assets SET state = 'deleting' WHERE sha256 = ?").run("a".repeat(64));
     assert.throws(() => database.prepare(

@@ -6,16 +6,16 @@ import { storePngAsset } from "./asset-store.ts";
 const png = new Uint8Array(await readFile(new URL("../../../agent/defaults/assets/service-health.png", import.meta.url)));
 
 function bucket() {
-  const objects = new Map();
-  const writes = [];
+  const objects = new Map<string, Uint8Array>();
+  const writes: { key: string; options: { httpMetadata: { contentType: string } } }[] = [];
   return {
     objects,
     writes,
-    async head(key) {
+    async head(key: string) {
       const bytes = objects.get(key);
       return bytes ? { size: bytes.byteLength } : null;
     },
-    async put(key, bytes, options) {
+    async put(key: string, bytes: Uint8Array, options: { httpMetadata: { contentType: string } }) {
       objects.set(key, new Uint8Array(bytes));
       writes.push({ key, options });
     },
