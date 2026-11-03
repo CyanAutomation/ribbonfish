@@ -14,6 +14,18 @@ test("admin API sends no-store requests and returns the decoded response", async
   assert.deepEqual(received, { input: "/admin/api/overview", init: { cache: "no-store", method: "POST" } });
 });
 
+test("admin API does not permit callers to override the no-store policy", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let cache: RequestInit["cache"];
+  globalThis.fetch = async (_input, init) => {
+    cache = init?.cache;
+    return Response.json({});
+  };
+  await api("/admin/api/overview", { cache: "force-cache" });
+  assert.equal(cache, "no-store");
+});
+
 test("admin API reports server errors and falls back for invalid JSON", async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
