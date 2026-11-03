@@ -5,12 +5,12 @@ import {
   isSupportedCaptureInterval,
   isSupportedRotationInterval,
 } from "./intervals.ts";
-import { deriveDeviceHealth } from "./device-health.js";
+import { deriveDeviceHealth } from "./device-health.ts";
 import { isPNG, MAX_ASSET_BYTES, storePngAsset } from "./asset-store.ts";
-import { normalizeCaptureSelector, validateCaptureSettings, validateCaptureTargetURL } from "./capture.js";
+import { normalizeCaptureSelector, validateCaptureSettings, validateCaptureTargetURL } from "./capture.ts";
 import { CaptureTargetNotAllowedError, dispatchDueCaptures, enqueueCapture } from "./capture-workflow.js";
 import { AssetDeletionInProgressError, markAssetLiveStatement } from "./asset-registry.ts";
-import { callJevDecision, JEVRequestError } from "./jev.js";
+import { callJevDecision, JEVRequestError } from "./jev.ts";
 import {
   buildCaptureAssessmentState,
   buildFleetAnalysisState,

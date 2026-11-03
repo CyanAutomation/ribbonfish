@@ -2,8 +2,8 @@ import { assessUpcomingCaptures } from "./capture-intelligence.ts";
 import { isSupportedRotationInterval } from "./intervals.ts";
 import { handleAdminRequest } from "./admin.js";
 import { cleanupExpiredCaptures, dispatchDueCaptures, handleCaptureQueue } from "./capture-workflow.js";
-import { reconcileAssets } from "./asset-maintenance.js";
-import { cleanupDeviceHealth, persistDeviceHealth, refreshDeviceHealthStatuses, validateDeviceHealthReport } from "./device-health.js";
+import { reconcileAssets } from "./asset-maintenance.ts";
+import { cleanupDeviceHealth, persistDeviceHealth, refreshDeviceHealthStatuses, validateDeviceHealthReport } from "./device-health.ts";
 
 const MAX_ENROLLMENT_BYTES = 4 << 10;
 const MAX_TELEMETRY_BYTES = 8 << 10;

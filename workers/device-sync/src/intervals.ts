@@ -16,7 +16,7 @@ export const ROTATION_INTERVALS = Object.freeze([
 ]);
 export const DEFAULT_ROTATION_INTERVAL = "90s";
 
-export function isSupportedCaptureInterval(value: unknown) {
+export function isSupportedCaptureInterval(value: unknown): value is number {
   return Number.isSafeInteger(value) && CAPTURE_INTERVALS.some(({ value: allowed }) => allowed === value);
 }
 

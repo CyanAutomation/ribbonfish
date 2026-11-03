@@ -1,5 +1,5 @@
 import { buildCaptureAssessmentState, captureAssessmentQuestions, type CaptureAssessmentTarget } from './jev-use-cases.ts';
-import { callJevDecision, type JevDecisionResult } from './jev.js';
+import { callJevDecision, type JevDecisionResult } from './jev.ts';
 
 interface PolicyTarget extends CaptureAssessmentTarget {
   current_sha256: string | null;

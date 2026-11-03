@@ -5,7 +5,7 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fetchHandler, sha256Hex } from "./index.js";
 import { handleAdminRequest } from "./admin.js";
-import { persistDeviceHealth, refreshDeviceHealthStatuses } from "./device-health.js";
+import { persistDeviceHealth, refreshDeviceHealthStatuses } from "./device-health.ts";
 
 const deviceID = "pi-office";
 const token = "a-secure-device-token-with-at-least-32-characters";

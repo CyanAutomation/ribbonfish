@@ -263,6 +263,18 @@ test("JEV fleet analysis is Access protected, validates its request, and sends o
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("JEV provider failures do not expose provider authentication or response details", async () => {
+  const env = testEnvironment();
+  env.OPENROUTER_API_KEY = "test-secret";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("private provider details", { status: 401 });
+  try {
+    const response = await handleAdminRequest(request("/admin/api/jev/fleet-analysis", { method: "POST", body: {} }), env);
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: "Analysis is temporarily unavailable. Try again shortly." });
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("JEV decision routes stop before provider calls when the per-admin limit is reached", async () => {
   const env = testEnvironment();
   env.OPENROUTER_API_KEY = "test-secret";

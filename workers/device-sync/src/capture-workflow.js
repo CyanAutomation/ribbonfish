@@ -1,5 +1,5 @@
-import { captureScreenshot, validateCaptureTargetURL } from "./capture.js";
-import { ASSET_RECONCILIATION_PAGE_SIZE, deleteUnreferencedAssets } from "./asset-maintenance.js";
+import { captureScreenshot, validateCaptureTargetURL } from "./capture.ts";
+import { ASSET_RECONCILIATION_PAGE_SIZE, deleteUnreferencedAssets } from "./asset-maintenance.ts";
 import { markAssetLiveStatement } from "./asset-registry.ts";
 import { DEFAULT_CAPTURE_INTERVAL_SECONDS } from "./intervals.ts";
 

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { deleteUnreferencedAssets, reconcileAssets } from "./asset-maintenance.js";
+import { deleteUnreferencedAssets, reconcileAssets } from "./asset-maintenance.ts";
 import { storePngAsset } from "./asset-store.ts";
 import { beginAssetWrite, markAssetLiveStatement } from "./asset-registry.ts";
 
