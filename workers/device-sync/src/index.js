@@ -1,3 +1,4 @@
+import { readRequestBody, parseJSONBody } from "./request-body.ts";
 import { HTTPError } from "./http-error.ts";
 import { hasExactKeys } from "./validation.ts";
 import { assessUpcomingCaptures } from "./capture-intelligence.ts";
@@ -409,42 +410,6 @@ async function readJSON(request, maxBytes) {
 async function readJSONBody(request, maxBytes) {
   const bodyBytes = await readRequestBody(request, maxBytes);
   return { data: parseJSONBody(bodyBytes), bodyBytes };
-}
-
-async function readRequestBody(request, maxBytes) {
-  const reader = request.body?.getReader();
-  if (!reader) throw new HTTPError(400, "request body is required");
-  const chunks = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel();
-        throw new HTTPError(413, "request body exceeds size limit");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
-function parseJSONBody(bodyBytes) {
-  try {
-    return JSON.parse(new TextDecoder().decode(bodyBytes));
-  } catch {
-    throw new HTTPError(400, "request body must be valid JSON");
-  }
 }
 
 async function verifyDeviceSignature(request, deviceID, publicKey, bodyBytes) {

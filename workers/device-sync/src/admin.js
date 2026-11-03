@@ -1,3 +1,4 @@
+import { readRequestBody as readBytes, parseJSONBody } from "./request-body.ts";
 import { HTTPError } from "./http-error.ts";
 import { hasExactKeys, hasOnlyKeys } from "./validation.ts";
 import {
@@ -1248,39 +1249,7 @@ async function readJSON(request) {
     throw new HTTPError(415, "Content-Type must be application/json");
   }
   const bytes = await readBytes(request, MAX_JSON_BYTES);
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    throw new HTTPError(400, "request body must be valid JSON");
-  }
-}
-
-async function readBytes(request, maximum) {
-  const reader = request.body?.getReader();
-  if (!reader) throw new HTTPError(400, "request body is required");
-  const chunks = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > maximum) {
-        await reader.cancel();
-        throw new HTTPError(413, "request body exceeds size limit");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  return parseJSONBody(bytes);
 }
 
 function randomToken() {
