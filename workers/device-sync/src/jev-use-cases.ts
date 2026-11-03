@@ -1,3 +1,24 @@
+interface FleetDevice {
+  enabled?: boolean | number;
+  health?: { status?: string; reported_state?: string; sync_status?: string; applied_playlist_id?: string | null; applied_revision?: string | null } | null;
+}
+interface FleetOverview {
+  active_playlist?: { playlist_id: string; revision: string } | null;
+  devices?: FleetDevice[];
+  capture_targets?: { job_status?: string | null; last_error?: string | null }[];
+  playlists?: { active?: boolean | number }[];
+  asset_health?: { missing?: unknown[]; integrity_issues?: unknown[] } | null;
+}
+export interface CaptureAssessmentTarget {
+  last_success_at: number | null;
+  next_due_at: number;
+  capture_interval_seconds: number;
+  failure_count: number;
+  job_status?: string | null;
+  last_error?: string | null;
+  history?: { sha256: string | null; browser_ms: number; browser_ms_source: string | null }[];
+}
+
 export const fleetAnalysisQuestions = Object.freeze({
   analysis_status: {
     type: "choice",
@@ -42,10 +63,10 @@ export const captureAssessmentQuestions = Object.freeze({
   },
 });
 
-export function buildFleetAnalysisState(overview) {
-  const health = { healthy: 0, degraded: 0, stale: 0, offline: 0, unknown: 0, disabled: 0 };
-  const agentStates = { ready: 0, starting: 0, degraded: 0, startup_failed: 0, stopping: 0, unknown: 0 };
-  const syncStates = { ok: 0, failed: 0, unknown: 0 };
+export function buildFleetAnalysisState(overview: FleetOverview | null | undefined) {
+  const health: Record<string, number> = { healthy: 0, degraded: 0, stale: 0, offline: 0, unknown: 0, disabled: 0 };
+  const agentStates: Record<string, number> = { ready: 0, starting: 0, degraded: 0, startup_failed: 0, stopping: 0, unknown: 0 };
+  const syncStates: Record<string, number> = { ok: 0, failed: 0, unknown: 0 };
   const playlistSync = { current: 0, behind: 0, unknown: 0 };
   const active = overview?.active_playlist;
   for (const device of overview?.devices ?? []) {
@@ -82,8 +103,8 @@ export function buildFleetAnalysisState(overview) {
   });
 }
 
-export function buildCaptureAssessmentState(target, now = Date.now()) {
-  const lastSuccess = Number.isFinite(target.last_success_at) ? target.last_success_at : null;
+export function buildCaptureAssessmentState(target: CaptureAssessmentTarget, now = Date.now()) {
+  const lastSuccess = typeof target.last_success_at === "number" && Number.isFinite(target.last_success_at) ? target.last_success_at : null;
   const nextDue = Number.isFinite(target.next_due_at) ? target.next_due_at : now;
   const durations = (target.history ?? []).filter((item) => item.browser_ms_source === "response_header")
     .map((item) => item.browser_ms)
@@ -111,7 +132,7 @@ export function buildCaptureAssessmentState(target, now = Date.now()) {
     configured_interval_seconds: Number.isSafeInteger(target.capture_interval_seconds) ? target.capture_interval_seconds : null,
     seconds_until_due: Math.max(0, Math.floor((nextDue - now) / 1000)),
     consecutive_failures: Number.isSafeInteger(target.failure_count) ? Math.max(0, target.failure_count) : 0,
-    recent_job: ["queued", "running"].includes(target.job_status) ? target.job_status : "none",
+    recent_job: (target.job_status === "queued" || target.job_status === "running") ? target.job_status : "none",
     recent_error_present: Boolean(target.last_error),
     recent_capture_count: (target.history ?? []).length,
     browser_duration_sample_count: durations.length,

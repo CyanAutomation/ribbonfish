@@ -58,6 +58,8 @@ npm test
 npm run check:config
 ```
 
+The type check verifies that the generated management Worker bindings match `wrangler.management.toml`. After changing those bindings, regenerate them with `npx wrangler types src/management-bindings.d.ts --config wrangler.management.toml --env-interface ManagementBindings --include-runtime=false --strict-vars=false`.
+
 Initialize local D1, then start the local Worker:
 
 ```sh
