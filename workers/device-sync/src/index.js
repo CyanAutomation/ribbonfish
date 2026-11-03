@@ -1,10 +1,12 @@
+import { validatePlaylist } from "./playlist-validation.ts";
+import { verifyDeviceSignature, decodeBase64Url, encodeBase64Url, equalSha256Digests } from "./device-signature.ts";
+import { matchesETag } from "./http-cache.ts";
 import { readRequestBody, parseJSONBody } from "./request-body.ts";
 import { randomToken, sha256Hex, sha256HexBytes } from "./crypto-primitives.ts";
 export { sha256Hex } from "./crypto-primitives.ts";
 import { HTTPError } from "./http-error.ts";
 import { hasExactKeys } from "./validation.ts";
 import { assessUpcomingCaptures } from "./capture-intelligence.ts";
-import { isSupportedRotationInterval } from "./intervals.ts";
 import { handleAdminRequest } from "./admin.js";
 import { cleanupExpiredCaptures, dispatchDueCaptures, handleCaptureQueue } from "./capture-workflow.ts";
 import { reconcileAssets } from "./asset-maintenance.ts";
@@ -15,9 +17,7 @@ const MAX_TELEMETRY_BYTES = 8 << 10;
 const MAX_ASSET_BYTES = 32 << 20;
 const ENROLLMENT_REQUEST_TTL_MS = 24 * 60 * 60 * 1000;
 const LAST_SEEN_WRITE_INTERVAL_MS = 5 * 60 * 1000;
-const SIGNATURE_CLOCK_SKEW_MS = 5 * 60 * 1000;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
 const PUBLIC_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 export default {
@@ -333,7 +333,7 @@ async function authenticateDevice(request, deviceID, device, bodyBytes = new Uin
   const match = authorization.match(/^Bearer ([A-Za-z0-9_-]{32,256})$/);
   if (!match) throw new HTTPError(401, "device authentication failed");
   const presentedHash = await sha256Hex(match[1]);
-  if (!constantTimeEqual(presentedHash, device.token_hash)) {
+  if (!equalSha256Digests(presentedHash, device.token_hash)) {
     throw new HTTPError(401, "device authentication failed");
   }
   return device;
@@ -390,21 +390,6 @@ async function readActivePlaylist(env, ifNoneMatch = null) {
   return { playlist, etag: `"${playlist.revision}"` };
 }
 
-function validatePlaylist(playlist) {
-  if (!hasExactKeys(playlist, ["version", "revision", "id", "rotation_interval", "assets"]) ||
-      playlist.version !== 2 || !ID_PATTERN.test(playlist.revision ?? "") ||
-      !ID_PATTERN.test(playlist.id ?? "") || !isSupportedRotationInterval(playlist.rotation_interval) ||
-      !Array.isArray(playlist.assets) || playlist.assets.length < 1 || playlist.assets.length > 256) {
-    throw new Error("invalid playlist envelope");
-  }
-  for (const asset of playlist.assets) {
-    if (!hasExactKeys(asset, ["sha256", "size"]) || !DIGEST_PATTERN.test(asset.sha256 ?? "") ||
-        !Number.isSafeInteger(asset.size) || asset.size < 1 || asset.size > MAX_ASSET_BYTES) {
-      throw new Error("invalid asset reference");
-    }
-  }
-}
-
 async function readJSON(request, maxBytes) {
   return (await readJSONBody(request, maxBytes)).data;
 }
@@ -414,67 +399,8 @@ async function readJSONBody(request, maxBytes) {
   return { data: parseJSONBody(bodyBytes), bodyBytes };
 }
 
-async function verifyDeviceSignature(request, deviceID, publicKey, bodyBytes) {
-  const timestamp = request.headers.get("X-Ribbonfish-Timestamp") ?? "";
-  if (!/^\d{13}$/.test(timestamp)) return false;
-  const timestampValue = Number(timestamp);
-  if (!Number.isSafeInteger(timestampValue) || Math.abs(Date.now() - timestampValue) > SIGNATURE_CLOCK_SKEW_MS) return false;
-
-  const signatureText = request.headers.get("X-Ribbonfish-Signature") ?? "";
-  if (!/^[A-Za-z0-9_-]{86}$/.test(signatureText)) return false;
-  const signature = decodeBase64Url(signatureText);
-  const publicKeyBytes = decodeBase64Url(publicKey);
-  if (signature.byteLength !== 64 || publicKeyBytes.byteLength !== 32) return false;
-
-  try {
-    const key = await crypto.subtle.importKey("raw", publicKeyBytes, { name: "Ed25519" }, false, ["verify"]);
-    const url = new URL(request.url);
-    const target = url.pathname + url.search;
-    const bodyHash = await sha256HexBytes(bodyBytes);
-    const payload = [
-      "ribbonfish-device-v1",
-      request.method,
-      target,
-      deviceID,
-      timestamp,
-      request.headers.get("If-None-Match") ?? "",
-      bodyHash,
-    ].join("\n");
-    return await crypto.subtle.verify("Ed25519", key, signature, new TextEncoder().encode(payload));
-  } catch {
-    return false;
-  }
-}
-
-function decodeBase64Url(value) {
-  try {
-    const base64 = value.replaceAll("-", "+").replaceAll("_", "/");
-    const binary = atob(base64 + "=".repeat((4 - base64.length % 4) % 4));
-    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-  } catch {
-    return new Uint8Array();
-  }
-}
-
-function encodeBase64Url(bytes) {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-}
-
 function formatFingerprint(requestID) {
   return requestID.slice(0, 32).match(/.{4}/g).join("-");
-}
-
-function constantTimeEqual(left, right) {
-  if (typeof right !== "string" || left.length !== right.length) return false;
-  let result = 0;
-  for (let i = 0; i < left.length; i++) result |= left.charCodeAt(i) ^ right.charCodeAt(i);
-  return result === 0;
-}
-
-function matchesETag(header, etag) {
-  return (header ?? "").split(",").map((value) => value.trim()).some((value) => value === "*" || value === etag);
 }
 
 function methodNotAllowed(allowed) {

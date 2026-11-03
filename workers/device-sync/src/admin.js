@@ -1,3 +1,4 @@
+import { matchesETag } from "./http-cache.ts";
 import { readRequestBody as readBytes, parseJSONBody } from "./request-body.ts";
 import { randomToken, sha256Hex } from "./crypto-primitives.ts";
 export { sha256Hex } from "./crypto-primitives.ts";
@@ -360,7 +361,7 @@ async function fetchAdminAsset(request, env, pathname) {
   if (request.headers.has("If-None-Match")) {
     const metadata = await env.ASSETS.head(file.key);
     if (!metadata) return new Response("management asset not found", { status: 404 });
-    if (metadata.httpEtag && matchesAssetETag(request.headers.get("If-None-Match"), metadata.httpEtag)) {
+    if (metadata.httpEtag && matchesETag(request.headers.get("If-None-Match"), metadata.httpEtag)) {
       return new Response(null, { status: 304, headers: adminAssetHeaders(file, cacheControl, metadata.httpEtag) });
     }
   }
@@ -382,10 +383,6 @@ function adminAssetHeaders(file, cacheControl, etag = null) {
   });
   if (etag) headers.set("ETag", etag);
   return headers;
-}
-
-function matchesAssetETag(header, etag) {
-  return (header ?? "").split(",").map((value) => value.trim()).some((value) => value === "*" || value === etag);
 }
 
 async function readOverview(env) {
