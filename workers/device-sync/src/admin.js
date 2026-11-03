@@ -1,3 +1,5 @@
+import { HTTPError } from "./http-error.ts";
+import { hasExactKeys, hasOnlyKeys } from "./validation.ts";
 import {
   DEFAULT_CAPTURE_INTERVAL_SECONDS,
   DEFAULT_ROTATION_INTERVAL,
@@ -29,13 +31,6 @@ const ADMIN_FILES = new Map([
   ["/admin/favicon.png", { key: "admin/favicon.png", contentType: "image/png", maxAge: 3600 }],
   ["/admin/capture-pending.png", { key: "admin/capture-pending.png", contentType: "image/png", maxAge: 3600 }],
 ]);
-
-class HTTPError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
 
 // Production management deployments require a Cloudflare Access identity and an
 // explicit email allowlist, so the admin API fails closed if either is missing.
@@ -1300,16 +1295,6 @@ export async function sha256Hex(value) {
 async function sha256BytesHex(bytes) {
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
-}
-
-function hasExactKeys(value, keys) {
-  return value !== null && typeof value === "object" && !Array.isArray(value) &&
-    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
-}
-
-function hasOnlyKeys(value, keys) {
-  return value !== null && typeof value === "object" && !Array.isArray(value) &&
-    Object.keys(value).every((key) => keys.includes(key));
 }
 
 function parseMetadata(value) {

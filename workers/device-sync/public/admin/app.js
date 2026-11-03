@@ -1,3 +1,4 @@
+import { api } from "./api.ts";
 import { formatCaptureObservation, formatRunTime } from "./capture-presentation.ts";
 import { node, button, statusBadge, actionDisclosure } from "./ui-primitives.ts";
 import { initModuleNavigation } from "./module-navigation.ts";
@@ -47,13 +48,6 @@ let intervalDefinitions = null;
 const fleetViewRuntime = createFleetOpenUI({ getOverview: async () => latestOverview });
 
 fleetViewRuntime.subscribe(renderFleetSummary);
-
-async function api(path, options = {}) {
-  const response = await fetch(path, { cache: "no-store", ...options });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || "Something went wrong. Please try again.");
-  return result;
-}
 
 const feedbackSlots = new Map([...document.querySelectorAll("[data-feedback-slot]")].map((element) => {
   const slot = {
