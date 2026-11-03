@@ -7,7 +7,7 @@ import {
   ROTATION_INTERVALS,
   isSupportedCaptureInterval,
   isSupportedRotationInterval,
-} from "./intervals.js";
+} from "./intervals.ts";
 
 test("interval contract defines five choices and the product defaults", () => {
   assert.deepEqual(CAPTURE_INTERVALS.map(({ value }) => value), [900, 1800, 3600, 21600, 86400]);

@@ -1,7 +1,7 @@
 import { captureScreenshot, validateCaptureTargetURL } from "./capture.js";
 import { ASSET_RECONCILIATION_PAGE_SIZE, deleteUnreferencedAssets } from "./asset-maintenance.js";
-import { markAssetLiveStatement } from "./asset-registry.js";
-import { DEFAULT_CAPTURE_INTERVAL_SECONDS } from "./intervals.js";
+import { markAssetLiveStatement } from "./asset-registry.ts";
+import { DEFAULT_CAPTURE_INTERVAL_SECONDS } from "./intervals.ts";
 
 export const MAX_CAPTURE_ATTEMPTS = 3;
 export const MAX_CAPTURE_HISTORY = 10;

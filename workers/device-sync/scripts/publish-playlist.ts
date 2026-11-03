@@ -4,13 +4,13 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { isSupportedRotationInterval } from "../src/intervals.js";
+import { isSupportedRotationInterval } from "../src/intervals.ts";
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MAX_ASSET_BYTES = 32 * 1024 * 1024;
 
-function usage() {
-  console.error("Usage: node scripts/publish-playlist.mjs <playlist.json> [--activate] [--database NAME] [--bucket NAME]");
+function usage(): never {
+  console.error("Usage: node scripts/publish-playlist.ts <playlist.json> [--activate] [--database NAME] [--bucket NAME]");
   process.exit(2);
 }
 
@@ -24,9 +24,9 @@ let config = "wrangler.toml";
 while (args.length) {
   const flag = args.shift();
   if (flag === "--activate") activate = true;
-  else if (flag === "--database" && args[0]) database = args.shift();
-  else if (flag === "--bucket" && args[0]) bucket = args.shift();
-  else if (flag === "--config" && args[0]) config = args.shift();
+  else if (flag === "--database" && args[0]) database = args.shift()!;
+  else if (flag === "--bucket" && args[0]) bucket = args.shift()!;
+  else if (flag === "--config" && args[0]) config = args.shift()!;
   else usage();
 }
 
@@ -55,9 +55,9 @@ for (const [position, source] of input.assets.entries()) {
 }
 
 const revision = `r-${randomUUID().replaceAll("-", "")}`;
-const sqlString = (value) => `'${String(value).replaceAll("'", "''")}'`;
+const sqlString = (value: string) => `'${String(value).replaceAll("'", "''")}'`;
 const temporaryDirectory = await mkdtemp(resolve(tmpdir(), "ribbonfish-playlist-"));
-const run = (command, commandArgs) => {
+const run = (command: string, commandArgs: string[]) => {
   const result = spawnSync(command, commandArgs, { stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} exited with status ${result.status}`);

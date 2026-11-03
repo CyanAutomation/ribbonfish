@@ -1,5 +1,5 @@
 const DURATION_COMPONENT = /([0-9]+)(?:\.([0-9]+))?(ns|us|µs|ms|s|m|h)/g;
-const UNIT_NANOSECONDS = {
+const UNIT_NANOSECONDS: Record<string, bigint> = {
   ns: 1n,
   us: 1_000n,
   "µs": 1_000n,
@@ -12,7 +12,7 @@ const MAX_DURATION_NANOSECONDS = (1n << 63n) - 1n;
 
 // isValidPositiveDuration matches the positive range accepted by Go's
 // time.ParseDuration and time.Duration, which the device agent uses.
-export function isValidPositiveDuration(value) {
+export function isValidPositiveDuration(value: unknown) {
   if (typeof value !== "string" || value.length === 0 || value.length > 128) return false;
 
   let position = 0;

@@ -1,6 +1,6 @@
-import { MAX_ASSET_BYTES, isPNG, storePngAsset } from "./asset-store.js";
-import { ASSET_WRITE_LEASE_MS } from "./asset-registry.js";
-import { isSupportedCaptureInterval } from "./intervals.js";
+import { MAX_ASSET_BYTES, isPNG, storePngAsset } from "./asset-store.ts";
+import { ASSET_WRITE_LEASE_MS } from "./asset-registry.ts";
+import { isSupportedCaptureInterval } from "./intervals.ts";
 
 export const MAX_CAPTURE_TIMEOUT_MS = 45_000;
 export const MAX_CAPTURE_PIXELS = 3840 * 2160;

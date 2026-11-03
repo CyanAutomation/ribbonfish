@@ -1,9 +1,9 @@
-import { ASSET_STAGING_MS, beginAssetWrite, finishAssetWrite } from "./asset-registry.js";
+import { ASSET_STAGING_MS, beginAssetWrite, finishAssetWrite } from "./asset-registry.ts";
 
 export const MAX_ASSET_BYTES = 32 << 20;
 const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
 
-export function isPNG(bytes) {
+export function isPNG(bytes: unknown) {
   if (!(bytes instanceof Uint8Array) || bytes.byteLength < 45 || bytes.byteLength > MAX_ASSET_BYTES ||
       !PNG_SIGNATURE.every((value, index) => bytes[index] === value) ||
       String.fromCharCode(...bytes.slice(12, 16)) !== "IHDR") return false;
@@ -12,12 +12,12 @@ export function isPNG(bytes) {
   return width > 0 && height > 0 && String.fromCharCode(...bytes.slice(-8, -4)) === "IEND";
 }
 
-export async function storePngAsset(input, bucket, {
+export async function storePngAsset(input: Uint8Array | ArrayBuffer, bucket: R2Bucket, {
   maxBytes = MAX_ASSET_BYTES,
   db,
   now = Date.now(),
   stagingMs = ASSET_STAGING_MS,
-} = {}) {
+}: { maxBytes?: number; db?: D1Database; now?: number; stagingMs?: number } = {}) {
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   if (bytes.byteLength < 1 || bytes.byteLength > maxBytes) {
     throw new Error("PNG asset exceeds the configured size limit.");

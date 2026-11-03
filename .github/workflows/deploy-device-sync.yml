@@ -8,7 +8,7 @@ on:
       - "workers/device-sync/**"
       - ".github/workflows/deploy-device-sync.yml"
       - ".github/scripts/release-freshness.mjs"
-      - "workers/device-sync/scripts/migration-readiness.js"
+      - "workers/device-sync/scripts/migration-readiness.ts"
 
 permissions:
   contents: read
@@ -32,6 +32,9 @@ jobs:
       - name: Install dependencies
         working-directory: workers/device-sync
         run: npm ci
+      - name: Type-check TypeScript
+        working-directory: workers/device-sync
+        run: npm run typecheck
       - name: Build management console assets
         working-directory: workers/device-sync
         run: npm run build:admin
@@ -70,7 +73,7 @@ jobs:
         run: npm ci
       - name: Check production migration readiness
         working-directory: workers/device-sync
-        run: node scripts/migration-readiness.js
+        run: node scripts/migration-readiness.ts
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

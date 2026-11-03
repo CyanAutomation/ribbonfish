@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { migrationLedgerSQL } from "./migration-ledger.js";
+import { migrationLedgerSQL } from "./migration-ledger.ts";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const workerDirectory = resolve(scriptDirectory, "..");
@@ -21,9 +21,9 @@ while (args.length) {
     target = argument;
   } else if (argument === "--remote") {
     throw new Error("Remote database bootstrap is disabled; use the production migration workflow.");
-  } else if (argument === "--config" && args[0]) config = args.shift();
-  else if (argument === "--database" && args[0]) database = args.shift();
-  else throw new Error("Usage: node scripts/bootstrap-database.mjs --local [--config FILE] [--database NAME]");
+  } else if (argument === "--config" && args[0]) config = args.shift()!;
+  else if (argument === "--database" && args[0]) database = args.shift()!;
+  else throw new Error("Usage: node scripts/bootstrap-database.ts --local [--config FILE] [--database NAME]");
 }
 if (!target) throw new Error("Choose --local explicitly");
 
@@ -34,7 +34,7 @@ const tempDirectory = await mkdtemp(resolve(tmpdir(), "ribbonfish-d1-bootstrap-"
 const ledgerPath = resolve(tempDirectory, "migration-ledger.sql");
 await writeFile(ledgerPath, ledgerSQL, { mode: 0o600 });
 
-function run(commandArgs) {
+function run(commandArgs: string[]) {
   const result = spawnSync("npx", commandArgs, { cwd: workerDirectory, stdio: "inherit" });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error("Wrangler command failed with status " + result.status);
