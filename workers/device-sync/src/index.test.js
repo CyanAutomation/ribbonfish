@@ -259,6 +259,18 @@ test("changing the active playlist changes the global response revision", async 
   assert.equal((await response.json()).id, "platform");
 });
 
+test("malformed stored token hashes cannot authenticate a device", async () => {
+  for (const tokenHash of [null, "a".repeat(63), "a".repeat(65), "z".repeat(64)]) {
+    const { env, db } = testEnvironment();
+    db.device.token_hash = tokenHash;
+    const request = new Request("https://worker.test/v2/playlist", {
+      headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office" },
+    });
+    assert.equal((await fetchHandler(request, env)).status, 401);
+    assert.equal(db.playlistListReads, 0);
+  }
+});
+
 test("unauthorized device cannot read its playlist or cause an R2 read", async () => {
   const { env, r2Gets } = testEnvironment();
   const response = await fetchHandler(new Request("https://worker.test/v2/playlist", {

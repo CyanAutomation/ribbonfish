@@ -1,5 +1,5 @@
 import { validatePlaylist } from "./playlist-validation.ts";
-import { verifyDeviceSignature, decodeBase64Url, encodeBase64Url, constantTimeEqual } from "./device-signature.ts";
+import { verifyDeviceSignature, decodeBase64Url, encodeBase64Url, equalSha256Digests } from "./device-signature.ts";
 import { matchesETag } from "./http-cache.ts";
 import { readRequestBody, parseJSONBody } from "./request-body.ts";
 import { randomToken, sha256Hex, sha256HexBytes } from "./crypto-primitives.ts";
@@ -333,7 +333,7 @@ async function authenticateDevice(request, deviceID, device, bodyBytes = new Uin
   const match = authorization.match(/^Bearer ([A-Za-z0-9_-]{32,256})$/);
   if (!match) throw new HTTPError(401, "device authentication failed");
   const presentedHash = await sha256Hex(match[1]);
-  if (!constantTimeEqual(presentedHash, device.token_hash)) {
+  if (!equalSha256Digests(presentedHash, device.token_hash)) {
     throw new HTTPError(401, "device authentication failed");
   }
   return device;

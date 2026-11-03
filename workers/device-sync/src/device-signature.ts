@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { sha256HexBytes } from "./crypto-primitives.ts";
 
 const SIGNATURE_CLOCK_SKEW_MS = 5 * 60 * 1000;
@@ -50,10 +51,10 @@ export function encodeBase64Url(bytes: Uint8Array): string {
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
-export function constantTimeEqual(left: string, right: unknown): boolean {
-  if (typeof right !== "string" || left.length !== right.length) return false;
-  let result = 0;
-  for (let i = 0; i < left.length; i++) result |= left.charCodeAt(i) ^ right.charCodeAt(i);
-  return result === 0;
+/** Compare valid, fixed-size SHA-256 hex digests with the runtime's timing-safe primitive. */
+export function equalSha256Digests(left: string, right: unknown): boolean {
+  const digestPattern = /^[0-9a-f]{64}$/;
+  if (!digestPattern.test(left) || typeof right !== "string" || !digestPattern.test(right)) return false;
+  const encoder = new TextEncoder();
+  return timingSafeEqual(encoder.encode(left), encoder.encode(right));
 }
-
