@@ -389,3 +389,28 @@ label { display: grid; gap: var(--space-1); color: var(--color-text-label); font
 .module-dialog > .button { float: right; }
 
 .module-dialog--page { position: static; width: 100%; max-height: none; margin: 1rem 0; }
+
+/* Shared module shell and progressive disclosure */
+.module-navigation { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-4) 0; }
+.module-navigation a { padding: .5rem .75rem; border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface); color: var(--color-text-label); font-size: var(--font-size-body); font-weight: 650; text-decoration: none; }
+.module-navigation a:hover, .module-navigation a[aria-current="page"] { border-color: var(--color-brand); background: var(--color-info-bg); color: var(--color-brand-hover); }
+.editor-disclosure { margin: var(--space-4) 0; }
+.editor-disclosure > summary { width: fit-content; padding: .55rem .85rem; border: 1px solid var(--color-brand); border-radius: var(--radius-control); background: var(--color-brand); color: white; font-weight: 650; cursor: pointer; }
+.editor-disclosure[open] > summary { margin-bottom: var(--space-4); }
+.fleet-attention { margin-bottom: var(--space-4); }
+.data-table td { overflow-wrap: anywhere; }
+.table-actions { min-width: 10rem; }
+@media (max-width: 700px) { .module-navigation { flex-wrap: nowrap; overflow-x: auto; padding-bottom: var(--space-2); } .module-navigation a { flex: none; } }
+.action-disclosure { position: relative; }
+.action-disclosure > summary { padding: .45rem .25rem; color: var(--color-brand); font-size: var(--font-size-small); font-weight: 650; cursor: pointer; }
+.action-disclosure__content { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
+.capture-issues { margin: var(--space-4) 0; }
+.capture-issues h3 { margin-bottom: var(--space-2); }
+.capture-issues ul { margin: 0; padding-left: 1.25rem; }
+.usage-details { margin: var(--space-4) 0; color: var(--color-muted); }
+.usage-details > summary { color: var(--color-brand); font-weight: 650; cursor: pointer; }
+.usage-details p { margin: var(--space-2) 0; line-height: 1.5; }
+@media (max-width: 420px) { .section-heading { align-items: flex-start; flex-wrap: wrap; } }
+.playlist-group + .playlist-group { margin-top: var(--space-6); }
+.playlist-group > h3 { margin: 0 0 var(--space-3); overflow-wrap: anywhere; }
+.playlist-group__cards { display: grid; gap: var(--space-3); }
