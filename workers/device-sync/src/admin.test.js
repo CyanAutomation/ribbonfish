@@ -61,6 +61,14 @@ class FakeDatabase {
       async all() {
         if (sql.includes("AVG(browser_ms)")) return { results: database.captureRuntimeAverages ?? [] };
         if (sql.includes("FROM capture_targets t")) return { results: database.captureTargets ?? [] };
+        if (sql.includes("FROM playlist_capture_items p JOIN capture_targets t")) {
+          const target = database.playlistCaptureTarget;
+          if (!target) return { results: [] };
+          return { results: [{
+            sha256: target.last_success_at >= values[0] ? target.current_sha256 : target.placeholder_sha256,
+            size: target.last_success_at >= values[1] ? target.current_size : target.placeholder_size,
+          }] };
+        }
         if (sql.includes("FROM capture_history")) return { results: database.captureHistory ?? [] };
         if (sql.includes("FROM playlists WHERE playlist_id")) {
           return { results: [...database.playlists.values()]
@@ -455,6 +463,59 @@ test("overview omits device token hashes and reports missing active assets", asy
   assert.equal(body.capture_targets[0].last_attempt_at, 123);
   assert.deepEqual(body.asset_health.missing, [{ sha256: digest, expected_size: 4, actual_size: null }]);
   assert.deepEqual(body.asset_health.integrity_issues, env.DB.assetIntegrityIssues);
+});
+
+test("overview uses one freshness window for capture summaries and active playlist assets", async () => {
+  const env = testEnvironment();
+  const currentDigest = "c".repeat(64);
+  const placeholderDigest = "d".repeat(64);
+  const currentBytes = new Uint8Array(8);
+  const placeholderBytes = new Uint8Array(3);
+  env.objects.set(`assets/${digest}`, new Uint8Array(4));
+  env.objects.set(`assets/${currentDigest}`, currentBytes);
+  env.objects.set(`assets/${placeholderDigest}`, placeholderBytes);
+  const now = 30 * 24 * 60 * 60 * 1000 + 10_000;
+  const target = {
+    capture_id: captureID,
+    url: "https://status.example/",
+    name: "Status page",
+    capture_interval_seconds: 300,
+    viewport_width: 1920,
+    viewport_height: 1080,
+    wait_for_selector: null,
+    sha256: currentDigest,
+    size: currentBytes.byteLength,
+    last_attempt_at: now,
+    last_success_at: 10_001,
+    last_error: null,
+    next_due_at: now,
+    schedule_reviewed_at: now,
+    job_status: null,
+    active_in_playlist: 1,
+  };
+  env.DB.captureTargets = [target];
+  env.DB.playlistCaptureTarget = {
+    ...target,
+    current_sha256: currentDigest,
+    current_size: currentBytes.byteLength,
+    placeholder_sha256: placeholderDigest,
+    placeholder_size: placeholderBytes.byteLength,
+  };
+
+  const originalNow = Date.now;
+  const clockValues = [now, now + 1, now + 2];
+  Date.now = () => clockValues.shift() ?? now + 2;
+  let response;
+  try {
+    response = await handleAdminRequest(request("/admin/api/overview"), env);
+  } finally {
+    Date.now = originalNow;
+  }
+
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.capture_targets[0].sha256, currentDigest);
+  assert.deepEqual(body.asset_health.missing, []);
 });
 
 test("overview returns active site runtime samples and both daily usage limits", async () => {
