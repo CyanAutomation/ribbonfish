@@ -24,6 +24,7 @@ function chartRow(
   markers: Array<{ value: number; kind: string; label: string }>,
   siteSegments?: Array<{ capture_id: string; value_ms: number }>,
 ) {
+  const row = node("div", undefined, "browser-usage-chart__row", document);
   const meterMarkers: ScaleMeterMarker[] = markers.map(({ value, kind, label: markerLabel }) => ({
     label: markerLabel,
     value,
@@ -32,7 +33,7 @@ function chartRow(
     className: "browser-usage-chart__marker browser-usage-chart__marker--" + kind,
     quotaMarker: kind,
   }));
-  return scaleMeter({
+  const meter = scaleMeter({
     label,
     value: valueMs,
     valueLabel: formatRunTime(valueMs),
@@ -46,11 +47,17 @@ function chartRow(
       className: "browser-usage-chart__segment--" + (index % 6),
     })),
     ownerDocument: document,
-    className: "browser-usage-chart__row",
     captionClassName: "browser-usage-chart__heading",
     trackClassName: "browser-usage-chart__track",
     fillClassName: "browser-usage-chart__bar browser-usage-chart__bar--actual",
   });
+  const axis = node("div", undefined, "browser-usage-chart__axis", document);
+  axis.append(
+    node("span", "0", undefined, document),
+    node("span", "Scale: " + formatRunTime(scaleMs), undefined, document),
+  );
+  row.append(meter, axis);
+  return row;
 }
 
 export function renderCaptureUsageForecast(
@@ -70,7 +77,8 @@ export function renderCaptureUsageForecast(
     workerBudgetMs: daily.budget,
   });
   const forecastDisplayMs = forecast.total_estimated_ms ?? forecast.known_estimated_ms;
-  const scaleMs = Math.max(daily.quota, daily.budget, daily.accounted, forecastDisplayMs, 1000);
+  const usageScaleMs = Math.max(1000, Math.ceil(Math.max(daily.quota, daily.budget) * 1.1));
+  const forecastScaleMs = Math.max(daily.quota, daily.budget, daily.accounted, forecastDisplayMs, 1000);
   const markers = [
     { value: daily.budget, kind: "worker-budget", label: "Ribbonfish capture budget: " + formatRunTime(daily.budget) },
     { value: daily.quota, kind: "free-plan", label: "Cloudflare Free allowance: " + formatRunTime(daily.quota) },
@@ -102,23 +110,18 @@ export function renderCaptureUsageForecast(
   const figure = node("figure", undefined, "browser-usage-chart", document);
   figure.setAttribute("aria-label", "Daily Browser Run usage forecast");
   figure.append(node("figcaption", "Daily Browser Run time", "browser-usage-chart__caption", document));
-  figure.append(chartRow(document, "Used today", daily.accounted, scaleMs, markers));
+  figure.append(chartRow(document, "Used today", daily.accounted, usageScaleMs, markers));
   figure.append(chartRow(
     document,
     forecast.total_estimated_ms === null ? "Known forecast portion" : "Forecast per day",
     forecastDisplayMs,
-    scaleMs,
+    forecastScaleMs,
     markers,
     forecast.sites.map((site) => ({
       capture_id: site.capture_id,
       value_ms: site.estimated_browser_ms_per_day ?? 0,
     })),
   ));
-
-  const axis = node("div", undefined, "browser-usage-chart__axis", document);
-  axis.append(node("span", "0", undefined, document));
-  axis.append(node("span", "Scale: " + formatRunTime(scaleMs), undefined, document));
-  figure.append(axis);
   section.append(figure);
 
   const legend = node("ul", undefined, "browser-usage-forecast__legend", document);
