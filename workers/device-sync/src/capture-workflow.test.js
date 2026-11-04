@@ -1176,7 +1176,25 @@ test('shadow deferral suggestions are evaluated against the scheduled screenshot
     assert.equal(latestDecision.observed_result, "changed");
     assert.equal(latestDecision.observed_delay_ms, decision.observed_delay_ms);
     const overview = await handleAdminRequest(await request("/admin/api/overview"), env);
-    assert.equal((await overview.json()).capture_efficiency.last_30_days.jev_candidate_changed, 1);
+    const metrics = (await overview.json()).capture_efficiency.last_30_days;
+    assert.equal(metrics.jev_candidate_changed, 1);
+
+    const otherOutcomes = ["unchanged", "validator_unchanged", "failed", "budget_deferred", null];
+    for (const [index, outcome] of otherOutcomes.entries()) {
+      sqlite.prepare(
+        "INSERT INTO capture_decisions (capture_id, due_at, assessed_at, action, reason, observed_result) VALUES (?, ?, ?, 'defer_once', 'test outcome', ?)",
+      ).run(id, dueAt + index + 1, dueAt, outcome);
+    }
+    const detailedOverview = await handleAdminRequest(await request("/admin/api/overview"), env);
+    const detailedMetrics = (await detailedOverview.json()).capture_efficiency.last_30_days;
+    assert.equal(detailedMetrics.jev_candidate_deferrals, 6);
+    assert.equal(detailedMetrics.jev_candidate_changed, 1);
+    assert.equal(detailedMetrics.jev_candidate_unchanged, 1);
+    assert.equal(detailedMetrics.jev_candidate_validator_unchanged, 1);
+    assert.equal(detailedMetrics.jev_candidate_failed, 1);
+    assert.equal(detailedMetrics.jev_candidate_budget_deferred, 1);
+    assert.equal(detailedMetrics.jev_candidate_unobserved, 1);
+    assert.equal(detailedMetrics.jev_candidate_unverified, 4);
   } finally { sqlite.close(); }
 });
 

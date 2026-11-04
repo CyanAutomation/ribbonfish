@@ -1,5 +1,5 @@
 import { api } from "./api.ts";
-import { formatCaptureObservation, formatRunTime } from "./capture-presentation.ts";
+import { formatCaptureObservation, formatJevCaptureOutcomeSummary, formatRunTime } from "./capture-presentation.ts";
 import { node, button, statusBadge, actionDisclosure } from "./ui-primitives.ts";
 import { initModuleNavigation } from "./module-navigation.ts";
 import {
@@ -527,9 +527,7 @@ function renderCaptureTargets(targets, decisions = [], efficiency = null) {
       `Last 30 days: ${recent.successful_screenshots ?? 0} screenshots completed, ${recent.validator_unchanged ?? 0} unchanged validator checks skipped Browser Run, ` +
       `${recent.successful_unclassified ?? 0} older results unclassified. Browser Run time: ${formatRunTime(runTime.response_header)} measured, ` +
       `${formatRunTime(runTime.reserve)} reserve-estimated, ${runTime.unclassified_jobs ?? 0} older jobs unclassified. ` +
-      `Scheduled JEV made ${recent.jev_shadow_assessments ?? 0} shadow assessments. Of ${recent.jev_candidate_deferrals ?? 0} defer suggestions, ` +
-      `${recent.jev_candidate_changed ?? 0} were followed by changed screenshots and ${recent.jev_candidate_unchanged ?? 0} by unchanged screenshots; ` +
-      `${recent.jev_candidate_unverified ?? 0} remain unverified. Schedules were unchanged.`, "muted"));
+      formatJevCaptureOutcomeSummary(recent), "muted"));
     container.append(usage);
   }
   if (!targets.length) {
