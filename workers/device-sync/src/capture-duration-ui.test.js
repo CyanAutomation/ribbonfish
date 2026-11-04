@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { renderCaptureEfficiencyModule } from "../public/admin/capture-efficiency-module.ts";
 
-test("Capture Efficiency shows source-separated duration samples and possible reserve overestimates", () => {
+test("Capture Efficiency shows source-separated duration samples and reserve review direction", () => {
   const dom = new JSDOM("<section id='capture-efficiency'></section>");
   const container = dom.window.document.querySelector("#capture-efficiency");
   assert.ok(container);
@@ -31,7 +31,7 @@ test("Capture Efficiency shows source-separated duration samples and possible re
       measured_average_ms: 10_500,
       reserve_estimated_total_ms: 180_000,
       configured_reserve_ms: 60_000,
-      conservative_review: "review",
+      reserve_review: "possible_overestimate",
     },
   }], {
     daily_usage: { accounted_ms: 10_000, budget_ms: 600_000, free_plan_limit_ms: 600_000 },
@@ -45,4 +45,22 @@ test("Capture Efficiency shows source-separated duration samples and possible re
   assert.match(container.textContent ?? "", /1 failed capture attempt/);
   assert.match(container.textContent ?? "", /2 retry attempts/);
   assert.match(container.textContent ?? "", /readiness: selector gated/);
+});
+
+test("Capture Efficiency flags a possible reserve underestimate separately", () => {
+  const dom = new JSDOM("<section id='capture-efficiency'></section>");
+  const container = dom.window.document.querySelector("#capture-efficiency");
+  assert.ok(container);
+  renderCaptureEfficiencyModule(container, [{
+    capture_id: "site-1", display_url: "https://status.example.com/", duration_summary: {
+      total_samples: 20, measured_sample_count: 20, reserve_estimated_sample_count: 0,
+      unknown_sample_count: 0, failed_attempt_count: 0, retry_attempt_count: 0,
+      capture_attempt_failure_rate: 0, retry_attempt_rate: 0, measured_header_coverage: 1,
+      measured_p50_ms: 62_000, measured_p90_ms: 65_000, measured_average_ms: 62_000,
+      reserve_estimated_total_ms: 0, configured_reserve_ms: 60_000,
+      reserve_review: "possible_underestimate",
+    },
+  }], { daily_usage: {}, last_30_days: {} });
+  assert.match(container.textContent ?? "", /Possible reserve underestimate/);
+  assert.match(container.textContent ?? "", /review the accounting reserve/i);
 });

@@ -16,10 +16,11 @@ export interface CaptureAssessmentTarget {
 export const captureAssessmentQuestions = Object.freeze({
   duration_review: {
     type: "choice",
-    instructions: "Should the operator review this site's configured Browser Run accounting reserve based on the supplied duration evidence? Recommend review_duration only when the measured Browser Run p90 is far below the configured reserve and the measured sample count and coverage are sufficient. The reserve is an accounting estimate, not a Browser Run timeout or screenshot wait. This question does not judge screenshot completeness or page readiness, and must never recommend an automatic change.",
+    instructions: "Should the operator review this site's configured Browser Run accounting reserve based on the supplied duration evidence? Recommend review_overestimate only when measured p90 is at most half the configured reserve, or review_underestimate only when measured p90 exceeds the reserve, with sufficient measured sample count and coverage. The reserve is an accounting estimate, not a Browser Run timeout or screenshot wait. This question does not judge screenshot completeness or page readiness, and must never recommend an automatic change.",
     criteria: {
       keep_current: "Keep the current settings or evidence is insufficient",
-      review_duration: "Recommend an operator review of the accounting reserve; do not change it",
+      review_overestimate: "Measured p90 is at most half the reserve; recommend an operator review for possible excess reserve",
+      review_underestimate: "Measured p90 exceeds the reserve; recommend an operator review for possible insufficient reserve",
     },
   },
   recommendation: {
@@ -87,8 +88,8 @@ export function buildCaptureAssessmentState(target: CaptureAssessmentTarget, now
       measured_average_ms: safeDuration(durationSummary?.measured_average_ms),
       reserve_estimated_total_ms: safeCount(durationSummary?.reserve_estimated_total_ms),
       configured_reserve_ms: safeCount(durationSummary?.configured_reserve_ms, 60_000),
-      conservative_review: durationSummary?.conservative_review === "review" || durationSummary?.conservative_review === "not_flagged"
-        ? durationSummary.conservative_review : "insufficient_data",
+      reserve_review: durationSummary?.reserve_review === "possible_overestimate" || durationSummary?.reserve_review === "possible_underestimate" || durationSummary?.reserve_review === "not_flagged"
+        ? durationSummary.reserve_review : "insufficient_data",
     },
     readiness_mode: target.readiness_mode === "selector" || target.wait_for_selector ? "selector" : "domcontentloaded",
     recent_content_change_count: recentContentChangeCount,
@@ -97,15 +98,18 @@ export function buildCaptureAssessmentState(target: CaptureAssessmentTarget, now
 }
 
 export function durationReviewRecommendation(answers: unknown, durationSummary?: CaptureDurationSummary) {
-  if (durationSummary?.conservative_review === "insufficient_data") return "insufficient_data";
-  if (durationSummary?.conservative_review !== "review") return "keep_current";
+  const review = durationSummary?.reserve_review;
+  if (review === "insufficient_data" || !review) return "insufficient_data";
+  const requiredChoice = review === "possible_overestimate" ? "review_overestimate"
+    : review === "possible_underestimate" ? "review_underestimate" : null;
+  if (!requiredChoice) return "keep_current";
   if (!answers || typeof answers !== "object") return "keep_current";
   const answer = (answers as Record<string, unknown>).duration_review;
   if (!answer || typeof answer !== "object") return "keep_current";
   const choice = (answer as Record<string, unknown>).choice;
   const confidence = (answer as Record<string, unknown>).confidence;
-  return choice === "review_duration" && typeof confidence === "number" && Number.isFinite(confidence) && confidence >= 0.8
-    ? "review" : "keep_current";
+  return choice === requiredChoice && typeof confidence === "number" && Number.isFinite(confidence) && confidence >= 0.8
+    ? requiredChoice : "keep_current";
 }
 
 function safeCount(value: unknown, fallback = 0) {

@@ -1142,7 +1142,7 @@ test('background screenshot assessment records a bounded shadow decision once pe
       assessedState = JSON.parse(input.state);
       assessedQuestions = input.questions;
       return { model: 'test-model', answers: {
-        duration_review: { choice: 'review_duration', confidence: 0.95 },
+        duration_review: { choice: 'review_overestimate', confidence: 0.95 },
         recommendation: { choice: 'capture_now' }, risk: { score: 1 },
       } };
     };
@@ -1160,6 +1160,7 @@ test('background screenshot assessment records a bounded shadow decision once pe
     assert.equal(assessedState.capture_duration.measured_sample_count, 20);
     assert.equal(assessedState.capture_duration.measured_p90_ms, 18_500);
     assert.equal(assessedState.capture_duration.configured_reserve_ms, 60_000);
+    assert.equal(assessedState.capture_duration.reserve_review, 'possible_overestimate');
     assert.deepEqual(Object.keys(assessedQuestions), ['duration_review', 'recommendation', 'risk']);
 
     const response = await handleAdminRequest(await request('/admin/api/capture-decisions'), env);
@@ -1167,7 +1168,7 @@ test('background screenshot assessment records a bounded shadow decision once pe
     const decisions = await response.json();
     assert.equal(decisions[0].capture_id, id);
     assert.equal(decisions[0].action, 'capture');
-    assert.equal(decisions[0].duration_review, 'review');
+    assert.equal(decisions[0].duration_review, 'review_overestimate');
     assert.equal(decisions[0].model, undefined);
     assert.equal(decisions[0].state_json, undefined);
     const overviewResponse = await handleAdminRequest(await request('/admin/api/overview'), env);
