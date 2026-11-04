@@ -94,7 +94,7 @@ export function renderCaptureUsageForecast(
     undefined,
     document,
   );
-  const forecastTotal = forecastMetric.querySelector(".metric-card__value")!;
+  const forecastTotal = forecastMetric.querySelector<HTMLElement>(".metric-card__value")!;
   forecastTotal.dataset.testid = "forecast-total";
   metrics.append(forecastMetric);
   section.append(metrics);
