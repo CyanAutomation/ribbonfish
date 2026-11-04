@@ -6,12 +6,35 @@ import { readRequestBody, parseJSONBody } from "./request-body.ts";
 import { randomToken, sha256Hex, sha256HexBytes } from "./crypto-primitives.ts";
 export { sha256Hex } from "./crypto-primitives.ts";
 import { HTTPError } from "./http-error.ts";
-import { hasExactKeys } from "./validation.ts";
+import { hasExactKeys, isString } from "./validation.ts";
 import { assessUpcomingCaptures } from "./capture-intelligence.ts";
-import { handleAdminRequest } from "./admin.js";
+import { handleAdminRequest } from "./admin.ts";
 import { cleanupExpiredCaptures, dispatchDueCaptures, handleCaptureQueue } from "./capture-workflow.ts";
 import { reconcileAssets } from "./asset-maintenance.ts";
 import { cleanupDeviceHealth, persistDeviceHealth, refreshDeviceHealthStatuses, validateDeviceHealthReport } from "./device-health.ts";
+import type {
+  ActivePlaylistRow,
+  AssignedAssetRow,
+  CaptureQueueBatch,
+  DeviceCredentialRow,
+  EnrollmentRequestRow,
+  EnrollmentRow,
+  PlaylistAssetRow,
+  WorkerEnvironment,
+  WorkerExecutionContext,
+  WorkerScheduledController,
+} from "./worker-contracts.ts";
+
+type ActivePlaylist = {
+  version: 2;
+  revision: string;
+  id: string;
+  rotation_interval: number;
+  assets: Array<Pick<PlaylistAssetRow, "sha256" | "size">>;
+};
+type PlaylistReadResult =
+  | { playlist: ActivePlaylist; etag: string; notModified: false }
+  | { playlist?: undefined; etag: string; notModified: true };
 
 const MAX_ENROLLMENT_BYTES = 4 << 10;
 const MAX_TELEMETRY_BYTES = 8 << 10;
@@ -21,7 +44,7 @@ const LAST_SEEN_WRITE_INTERVAL_MS = 5 * 60 * 1000;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const PUBLIC_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
-export default {
+const worker = {
   fetch(request, env, ctx) {
     return fetchHandler(request, env, ctx);
   },
@@ -29,15 +52,17 @@ export default {
     return queueHandler(batch, env);
   },
   scheduled(controller, env) {
-    return scheduledHandler(controller, env);
+    void scheduledHandler(controller, env);
   },
-};
+} satisfies ExportedHandler<WorkerEnvironment, { job_id?: unknown }>;
 
-export async function queueHandler(batch, env) {
+export default worker;
+
+export async function queueHandler(batch: CaptureQueueBatch, env: WorkerEnvironment) {
   return handleCaptureQueue(batch, env);
 }
 
-export async function scheduledHandler(controller, env) {
+export async function scheduledHandler(controller: WorkerScheduledController, env: WorkerEnvironment) {
   const now = Number.isSafeInteger(controller?.scheduledTime) ? controller.scheduledTime : Date.now();
   const cleanHealth = new Date(now).getUTCMinutes() === 0;
   const [dispatch, assets, healthTransitions, healthRecordsCleaned] = await Promise.all([
@@ -56,7 +81,7 @@ export async function scheduledHandler(controller, env) {
     ...(cleanHealth ? { device_health_records_cleaned: healthRecordsCleaned } : {}) };
 }
 
-export async function fetchHandler(request, env, ctx) {
+export async function fetchHandler(request: Request, env: WorkerEnvironment, ctx?: WorkerExecutionContext) {
   const url = new URL(request.url);
   try {
     if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
@@ -85,7 +110,7 @@ export async function fetchHandler(request, env, ctx) {
       let bodyBytes;
       if (typeof device.public_key === "string" && device.public_key) {
         bodyBytes = await readRequestBody(request, MAX_TELEMETRY_BYTES);
-        await authenticateDevice(request, deviceID, device, bodyBytes);
+        await authenticateDevice(request, deviceID, device, new Uint8Array(bodyBytes));
       } else {
         await authenticateDevice(request, deviceID, device);
         bodyBytes = await readRequestBody(request, MAX_TELEMETRY_BYTES);
@@ -103,6 +128,7 @@ export async function fetchHandler(request, env, ctx) {
       await updateLastSeen(env, deviceID, ctx);
       const { playlist, etag, notModified } = await readActivePlaylist(env, request.headers.get("If-None-Match"));
       if (notModified) return new Response(null, { status: 304, headers: privateHeaders({ ETag: etag }) });
+      if (!playlist) throw new HTTPError(502, "active playlist was not available");
       if (matchesETag(request.headers.get("If-None-Match"), etag)) {
         return new Response(null, { status: 304, headers: privateHeaders({ ETag: etag }) });
       }
@@ -119,7 +145,7 @@ export async function fetchHandler(request, env, ctx) {
         `SELECT pa.size FROM playlist_assets pa
          JOIN active_playlist ap ON ap.playlist_id = pa.playlist_id AND ap.revision = pa.revision
          WHERE pa.sha256 = ? AND ap.singleton = 1 LIMIT 1`,
-      ).bind(digest).first();
+      ).bind(digest).first<AssignedAssetRow>();
       const captureAssigned = assigned ? null : await env.DB.prepare(
         "SELECT CASE WHEN t.current_sha256 = ? AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size " +
         "FROM playlist_capture_items p " +
@@ -129,11 +155,11 @@ export async function fetchHandler(request, env, ctx) {
         "(t.current_sha256 = ? AND t.last_success_at >= ?) OR " +
         "(t.placeholder_sha256 = ? AND (t.current_sha256 IS NULL OR t.last_success_at < ?))) LIMIT 1",
       ).bind(digest, Date.now() - 30 * 24 * 60 * 60 * 1000, digest,
-        Date.now() - 30 * 24 * 60 * 60 * 1000, digest, Date.now() - 30 * 24 * 60 * 60 * 1000).first();
+        Date.now() - 30 * 24 * 60 * 60 * 1000, digest, Date.now() - 30 * 24 * 60 * 60 * 1000).first<AssignedAssetRow>();
       if (!assigned && !captureAssigned) throw new HTTPError(403, "asset is not assigned to the active playlist");
       const object = await env.ASSETS.get(`assets/${digest}`);
       if (!object) throw new HTTPError(404, "asset not found");
-      if (object.size !== (assigned?.size ?? captureAssigned.size) || object.size > MAX_ASSET_BYTES) {
+      if (object.size !== (assigned?.size ?? captureAssigned?.size) || object.size > MAX_ASSET_BYTES) {
         throw new HTTPError(502, "stored asset metadata does not match the playlist");
       }
       const headers = privateHeaders({
@@ -154,7 +180,7 @@ export async function fetchHandler(request, env, ctx) {
   }
 }
 
-function updateLastSeen(env, deviceID, ctx) {
+function updateLastSeen(env: WorkerEnvironment, deviceID: string, ctx?: WorkerExecutionContext) {
   const now = Date.now();
   const update = Promise.resolve()
     .then(() => env.DB.prepare(
@@ -168,7 +194,7 @@ function updateLastSeen(env, deviceID, ctx) {
   return update;
 }
 
-async function healthCheck(env) {
+async function healthCheck(env: WorkerEnvironment) {
   try {
     const { playlist } = await readActivePlaylist(env);
     for (const asset of playlist.assets) {
@@ -183,10 +209,10 @@ async function healthCheck(env) {
   }
 }
 
-async function enroll(request, env) {
+async function enroll(request: Request, env: WorkerEnvironment) {
   const data = await readJSON(request, MAX_ENROLLMENT_BYTES);
   if (!hasExactKeys(data, ["device_id", "enrollment_code"]) ||
-      !ID_PATTERN.test(data.device_id ?? "") || typeof data.enrollment_code !== "string" ||
+      !isString(data.device_id) || !ID_PATTERN.test(data.device_id) || !isString(data.enrollment_code) ||
       data.enrollment_code.length < 8 || data.enrollment_code.length > 512) {
     throw new HTTPError(400, "invalid enrollment request");
   }
@@ -195,13 +221,13 @@ async function enroll(request, env) {
   const codeHash = await sha256Hex(data.enrollment_code);
   const enrollment = await env.DB.prepare(
     "SELECT code_hash, expires_at, consumed_at FROM enrollments WHERE code_hash = ?",
-  ).bind(codeHash).first();
+  ).bind(codeHash).first<EnrollmentRow>();
   if (!enrollment || enrollment.consumed_at !== null || enrollment.expires_at <= now) {
     throw new HTTPError(401, "enrollment code is invalid or expired");
   }
   const existing = await env.DB.prepare(
     "SELECT device_id FROM devices WHERE device_id = ?",
-  ).bind(data.device_id).first();
+  ).bind(data.device_id).first<{ device_id: string }>();
   if (existing) throw new HTTPError(409, "device is already enrolled");
 
   const token = randomToken();
@@ -224,14 +250,14 @@ async function enroll(request, env) {
   if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) {
     const existingAfterClaim = await env.DB.prepare(
       "SELECT device_id FROM devices WHERE device_id = ?",
-    ).bind(data.device_id).first();
+    ).bind(data.device_id).first<{ device_id: string }>();
     if (existingAfterClaim) throw new HTTPError(409, "device is already enrolled");
     throw new HTTPError(401, "enrollment code is invalid or expired");
   }
   return jsonResponse({ device_token: token }, 201);
 }
 
-async function requestDeviceEnrollment(request, env) {
+async function requestDeviceEnrollment(request: Request, env: WorkerEnvironment) {
   const rateLimiter = env.ENROLLMENT_RATE_LIMITER;
   if (rateLimiter) {
     const ipAddress = request.headers.get("CF-Connecting-IP") ?? "unknown";
@@ -241,7 +267,8 @@ async function requestDeviceEnrollment(request, env) {
 
   const { data, bodyBytes } = await readJSONBody(request, MAX_ENROLLMENT_BYTES);
   if (!hasExactKeys(data, ["device_id", "public_key"]) ||
-      !ID_PATTERN.test(data.device_id ?? "") || !PUBLIC_KEY_PATTERN.test(data.public_key ?? "")) {
+      !isString(data.device_id) || !ID_PATTERN.test(data.device_id) ||
+      !isString(data.public_key) || !PUBLIC_KEY_PATTERN.test(data.public_key)) {
     throw new HTTPError(400, "invalid enrollment request");
   }
   const publicKeyBytes = decodeBase64Url(data.public_key);
@@ -257,7 +284,7 @@ async function requestDeviceEnrollment(request, env) {
   const now = Date.now();
   const existingDevice = await env.DB.prepare(
     "SELECT device_id, public_key, enabled FROM devices WHERE device_id = ?",
-  ).bind(data.device_id).first();
+  ).bind(data.device_id).first<Pick<DeviceCredentialRow, "device_id" | "public_key" | "enabled">>();
   if (existingDevice?.public_key === data.public_key) {
     return jsonResponse({
       status: existingDevice.enabled === 1 ? "approved" : "disabled",
@@ -272,7 +299,7 @@ async function requestDeviceEnrollment(request, env) {
   const existingRequest = await env.DB.prepare(
     "SELECT request_id, device_id, public_key, fingerprint, created_at, last_seen_at, expires_at, status " +
     "FROM enrollment_requests WHERE request_id = ?",
-  ).bind(requestID).first();
+  ).bind(requestID).first<EnrollmentRequestRow>();
   if (existingRequest && (existingRequest.device_id !== data.device_id || existingRequest.public_key !== data.public_key)) {
     throw new HTTPError(409, "enrollment request identity conflict");
   }
@@ -290,7 +317,7 @@ async function requestDeviceEnrollment(request, env) {
   const current = await env.DB.prepare(
     "SELECT request_id, device_id, public_key, fingerprint, created_at, last_seen_at, expires_at, status " +
     "FROM enrollment_requests WHERE request_id = ?",
-  ).bind(requestID).first();
+  ).bind(requestID).first<EnrollmentRequestRow>();
   if (!current || current.device_id !== data.device_id || current.public_key !== data.public_key) {
     throw new HTTPError(409, "enrollment request is no longer active");
   }
@@ -306,23 +333,28 @@ async function requestDeviceEnrollment(request, env) {
   });
 }
 
-async function authenticate(request, env, deviceID, bodyBytes = new Uint8Array()) {
+async function authenticate(request: Request, env: WorkerEnvironment, deviceID: string, bodyBytes = new Uint8Array()) {
   const device = await getEnabledDevice(env, deviceID);
   return authenticateDevice(request, deviceID, device, bodyBytes);
 }
 
-async function getEnabledDevice(env, deviceID) {
+async function getEnabledDevice(env: WorkerEnvironment, deviceID: string): Promise<DeviceCredentialRow> {
   if (!ID_PATTERN.test(deviceID)) throw new HTTPError(401, "device authentication failed");
   const device = await env.DB.prepare(
     "SELECT device_id, token_hash, public_key, enabled FROM devices WHERE device_id = ?",
-  ).bind(deviceID).first();
+  ).bind(deviceID).first<DeviceCredentialRow>();
   if (!device || device.enabled !== 1) {
     throw new HTTPError(401, "device authentication failed");
   }
   return device;
 }
 
-async function authenticateDevice(request, deviceID, device, bodyBytes = new Uint8Array()) {
+async function authenticateDevice(
+  request: Request,
+  deviceID: string,
+  device: DeviceCredentialRow,
+  bodyBytes = new Uint8Array(),
+): Promise<DeviceCredentialRow> {
   if (typeof device.public_key === "string" && device.public_key) {
     if (!await verifyDeviceSignature(request, deviceID, device.public_key, bodyBytes)) {
       throw new HTTPError(401, "device authentication failed");
@@ -330,6 +362,7 @@ async function authenticateDevice(request, deviceID, device, bodyBytes = new Uin
     return device;
   }
 
+  if (!device.token_hash) throw new HTTPError(401, "device authentication failed");
   const authorization = request.headers.get("Authorization") ?? "";
   const match = authorization.match(/^Bearer ([A-Za-z0-9_-]{32,256})$/);
   if (!match) throw new HTTPError(401, "device authentication failed");
@@ -340,13 +373,15 @@ async function authenticateDevice(request, deviceID, device, bodyBytes = new Uin
   return device;
 }
 
-async function readActivePlaylist(env, ifNoneMatch = null) {
+async function readActivePlaylist(env: WorkerEnvironment): Promise<Extract<PlaylistReadResult, { notModified: false }>>;
+async function readActivePlaylist(env: WorkerEnvironment, ifNoneMatch: string | null): Promise<PlaylistReadResult>;
+async function readActivePlaylist(env: WorkerEnvironment, ifNoneMatch: string | null = null): Promise<PlaylistReadResult> {
   const active = await env.DB.prepare(
     "SELECT ap.playlist_id, ap.revision, p.rotation_interval, " +
     "EXISTS (SELECT 1 FROM playlist_capture_items pci WHERE pci.playlist_id = ap.playlist_id AND pci.revision = ap.revision) AS has_captures " +
     "FROM active_playlist ap JOIN playlists p ON p.playlist_id = ap.playlist_id AND p.revision = ap.revision " +
     "WHERE ap.singleton = 1",
-  ).first();
+  ).first<ActivePlaylistRow>();
   if (!active || !ID_PATTERN.test(active.playlist_id ?? "") || !ID_PATTERN.test(active.revision ?? "")) {
     throw new HTTPError(503, "no active playlist is configured");
   }
@@ -358,7 +393,7 @@ async function readActivePlaylist(env, ifNoneMatch = null) {
   const [assetResult, captureResult] = await Promise.all([
     env.DB.prepare(
       "SELECT position, sha256, size FROM playlist_assets WHERE playlist_id = ? AND revision = ? ORDER BY position",
-    ).bind(active.playlist_id, active.revision).all(),
+    ).bind(active.playlist_id, active.revision).all<PlaylistAssetRow>(),
     env.DB.prepare(
       "SELECT p.position, " +
       "CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
@@ -366,7 +401,7 @@ async function readActivePlaylist(env, ifNoneMatch = null) {
       "FROM playlist_capture_items p JOIN capture_targets t ON t.capture_id = p.capture_id " +
       "WHERE p.playlist_id = ? AND p.revision = ? ORDER BY p.position",
     ).bind(Date.now() - 30 * 24 * 60 * 60 * 1000, Date.now() - 30 * 24 * 60 * 60 * 1000,
-      active.playlist_id, active.revision).all(),
+      active.playlist_id, active.revision).all<PlaylistAssetRow>(),
   ]);
   const orderedAssets = [
     ...(assetResult.results ?? []).map((asset, index) => ({ position: Number.isSafeInteger(asset.position) ? asset.position : index, sha256: asset.sha256, size: asset.size })),
@@ -377,7 +412,7 @@ async function readActivePlaylist(env, ifNoneMatch = null) {
     ? (await sha256Hex(`${playlistRow.revision}\n${orderedAssets.map(({ sha256, size }) => `${sha256}:${size}`).join("\n")}`)).slice(0, 64)
     : playlistRow.revision;
   const playlist = {
-    version: 2,
+    version: 2 as const,
     revision: resolvedRevision,
     id: playlistRow.playlist_id,
     rotation_interval: playlistRow.rotation_interval,
@@ -388,22 +423,22 @@ async function readActivePlaylist(env, ifNoneMatch = null) {
   } catch {
     throw new HTTPError(502, "stored active playlist is invalid");
   }
-  return { playlist, etag: `"${playlist.revision}"` };
+  return { playlist, etag: `"${playlist.revision}"`, notModified: false };
 }
 
-async function readJSON(request, maxBytes) {
+async function readJSON(request: Request, maxBytes: number): Promise<unknown> {
   return (await readJSONBody(request, maxBytes)).data;
 }
 
-async function readJSONBody(request, maxBytes) {
+async function readJSONBody(request: Request, maxBytes: number): Promise<{ data: unknown; bodyBytes: Uint8Array }> {
   const bodyBytes = await readRequestBody(request, maxBytes);
   return { data: parseJSONBody(bodyBytes), bodyBytes };
 }
 
-function formatFingerprint(requestID) {
-  return requestID.slice(0, 32).match(/.{4}/g).join("-");
+function formatFingerprint(requestID: string) {
+  return requestID.slice(0, 32).match(/.{4}/g)!.join("-");
 }
 
-function methodNotAllowed(allowed) {
+function methodNotAllowed(allowed: string) {
   return new Response("method not allowed", { status: 405, headers: privateHeaders({ Allow: allowed }) });
 }

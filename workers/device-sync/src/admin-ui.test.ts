@@ -781,7 +781,7 @@ test("playlist delete action is visible once per group and explains the active-p
 
 test('management UI does not display model confidence or probability percentages', async () => {
   const html = await readFile(new URL('../public/admin/index.html', import.meta.url), 'utf8');
-  const script = await readFile(new URL('../public/admin/app.js', import.meta.url), 'utf8');
+  const script = await readFile(new URL('../public/admin/app.ts', import.meta.url), 'utf8');
   const visible = parseHTML(html).filter((item) => item.nodeName === '#text').map((item) => item.value).join(' ');
   assert.doesNotMatch(visible, /\bJEV\b/i);
   assert.doesNotMatch(visible, /confidence|probability/i);

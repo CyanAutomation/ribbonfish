@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { fetchHandler, sha256Hex } from "./index.js";
+import { fetchHandler, sha256Hex } from "./index.ts";
 
 // Device-sync contract: ../README.md (enrolled-device authorization and global playlist).
 const token = "a-secure-device-token-with-at-least-32-characters";

@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { fetchHandler, sha256Hex } from "./index.js";
-import { handleAdminRequest } from "./admin.js";
+import { fetchHandler, sha256Hex } from "./index.ts";
+import { handleAdminRequest } from "./admin.ts";
 import { persistDeviceHealth, refreshDeviceHealthStatuses } from "./device-health.ts";
 
 const deviceID = "pi-office";

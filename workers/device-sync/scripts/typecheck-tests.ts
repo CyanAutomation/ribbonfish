@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -12,15 +12,18 @@ function copyTests(source: string, destination: string, root = source): void {
     const path = join(source, entry.name);
     if (entry.isDirectory()) copyTests(path, destination, root);
     else if (entry.isFile() && entry.name.endsWith(".test.ts")) {
+      const contents = readFileSync(path, "utf8");
+      if (!contents.startsWith("// @typecheck-node-test")) continue;
       const target = join(destination, relative(root, path));
       mkdirSync(dirname(target), { recursive: true });
-      cpSync(path, target);
+      writeFileSync(target, contents);
     }
   }
 }
 
 // Compile Worker declarations separately so test globals come only from Node.
-// Relative imports in copied tests resolve to those declarations, not Worker sources.
+// Node-only tests opt into this checker with @typecheck-node-test. Browser
+// tests use a separate DOM type environment; all tests run under `node --test`.
 export function checkNodeTests(source = join(directory, "src")): { status: number; output: string } {
   const temporary = mkdtempSync(join(directory, ".node-test-types-"));
   try {

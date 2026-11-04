@@ -4,8 +4,8 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { dispatchDueCaptures, enqueueCapture, handleCaptureQueue } from "./capture-workflow.ts";
-import { fetchHandler, queueHandler, scheduledHandler } from "./index.js";
-import { handleAdminRequest } from "./admin.js";
+import { fetchHandler, queueHandler, scheduledHandler } from "./index.ts";
+import { handleAdminRequest } from "./admin.ts";
 
 const placeholder = new Uint8Array(await readFile(new URL("../public/admin/capture-pending.png", import.meta.url)));
 const screenshot = new Uint8Array(await readFile(new URL("../../../agent/defaults/assets/service-health.png", import.meta.url)));

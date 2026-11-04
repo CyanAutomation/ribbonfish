@@ -1,4 +1,5 @@
 {
   "extends": "./tsconfig.json",
-  "include": ["public/admin/**/*.ts"]
+  "include": ["public/admin/**/*.ts"],
+  "exclude": ["public/admin/app.ts"]
 }
