@@ -56,6 +56,23 @@ test("inactive and unreviewed sites do not contribute to recurring daily forecas
   assert.deepEqual(forecast.sites.map((site) => site.capture_id), ["site-a"]);
 });
 
+test("forecast is incomplete when there are no eligible active reviewed sites", () => {
+  const targetSets = [
+    [],
+    [target({ active_in_playlist: false })],
+    [target({ schedule_reviewed: false })],
+  ];
+
+  for (const targets of targetSets) {
+    const forecast = calculateDailyCaptureForecast(targets);
+
+    assert.equal(forecast.is_complete, false);
+    assert.equal(forecast.total_estimated_ms, null);
+    assert.equal(forecast.known_estimated_ms, 0);
+    assert.deepEqual(forecast.sites, []);
+  }
+});
+
 test("new sites use the active-site measured average and identify that estimate", () => {
   const forecast = calculateDailyCaptureForecast([
     target({ browser_ms_samples: 1, average_browser_ms: 1000 }),
