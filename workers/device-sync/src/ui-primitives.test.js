@@ -56,8 +56,10 @@ test("scale meters can draw labelled site segments on the shared scale", () => {
     ],
     ownerDocument: dom.window.document,
   });
+  const stack = meter.querySelector(".scale-meter__stack");
   const segments = [...meter.querySelectorAll(".scale-meter__segment")];
 
+  assert.equal(stack.style.width, "100%", "the segment stack spans the track so percentage widths can resolve");
   assert.deepEqual(segments.map((segment) => segment.style.width), ["25%", "100%"]);
   assert.deepEqual(segments.map((segment) => segment.dataset.captureId), ["site-a", "site-b"]);
   dom.window.close();

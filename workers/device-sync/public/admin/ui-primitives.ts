@@ -115,6 +115,7 @@ export function scaleMeter({
   if (segments) {
     const stack = node("span", undefined, "scale-meter__stack browser-usage-chart__stack", ownerDocument);
     stack.setAttribute("aria-hidden", "true");
+    stack.style.width = "100%";
     for (const segment of segments) {
       if (!Number.isFinite(segment.value) || segment.value <= 0) continue;
       const item = node("span", undefined, "scale-meter__segment browser-usage-chart__segment" + (segment.className ? " " + segment.className : ""), ownerDocument);
