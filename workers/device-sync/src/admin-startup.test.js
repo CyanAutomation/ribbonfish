@@ -106,7 +106,7 @@ test("management page starts, renders its data, and dismisses errors", async () 
     assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /Cloudflare account-wide allowance/);
     assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /fbo QA status/);
     assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /10 site samples/);
-    assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /8m 0s measured · 2m 0s reserve-estimated/);
+    assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /8m 0s measured, 2m 0s reserve-estimated/);
     assert.doesNotMatch(window.document.querySelector("#capture-target-list").textContent, /Capture efficiency and Browser Run usage/);
     await navigate(() => window.document.querySelector('#module-navigation a[href="#dashboard"]').click());
     assert.equal(window.document.activeElement.id, "sites-title");
