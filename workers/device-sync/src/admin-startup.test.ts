@@ -65,7 +65,8 @@ function openConsole() {
       path === "/admin/api/overview" ? overview : path === "/admin/api/intervals" ? {
         capture: { default: 86400, options: [
           { value: 900, label: "15 minutes" }, { value: 1800, label: "30 minutes" },
-          { value: 3600, label: "1 hour" }, { value: 21600, label: "6 hours" }, { value: 86400, label: "24 hours" },
+          { value: 3600, label: "1 hour" }, { value: 10800, label: "3 hours" },
+          { value: 21600, label: "6 hours" }, { value: 43200, label: "12 hours" }, { value: 86400, label: "24 hours" },
         ] },
         rotation: { default: "90s", options: [
           { value: "30s", label: "30 seconds" }, { value: "60s", label: "60 seconds" },
@@ -183,6 +184,9 @@ test("site search, naming, and schedule review send the selected site data", asy
       event.preventDefault();
     });
     const intervalSelect = window.document.querySelector('[aria-label="Screenshot interval for https://status.example/"]');
+    assert.deepEqual(Array.from(intervalSelect.options, ({ textContent }) => textContent), [
+      "15 minutes", "30 minutes", "1 hour", "3 hours", "6 hours", "12 hours", "24 hours",
+    ]);
     intervalSelect.value = "3600";
     intervalSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
     assert.deepEqual(intervalErrors, [], "changing a screenshot interval does not raise a runtime error");
