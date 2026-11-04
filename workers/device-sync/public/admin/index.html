@@ -33,6 +33,7 @@
         <a href="#dashboard">All modules</a>
         <a href="#overview-section">Overview</a>
         <a href="#sites-section">Capture sites</a>
+        <a href="#capture-efficiency-section">Capture efficiency</a>
         <a href="#playlist-section">Playlists</a>
         <a href="#device-section">Devices</a>
         <a href="#activity-section">Recent activity</a>
@@ -41,6 +42,7 @@
       <nav id="dashboard-tiles" class="tile-grid" aria-label="Management modules">
         <a class="module-tile" href="#overview-section"><strong>Overview</strong><span>Fleet snapshot and items needing attention</span></a>
         <a class="module-tile" href="#sites-section"><strong>Capture sites</strong><span id="sites-tile-status">Sites, schedules and screenshots</span></a>
+        <a class="module-tile" href="#capture-efficiency-section"><strong>Capture efficiency and Browser Run usage</strong><span id="capture-efficiency-tile-status">Daily usage, runtime forecast and efficiency</span></a>
         <a class="module-tile" href="#playlist-section"><strong>Playlists</strong><span id="playlists-tile-status">Versions, images and content</span></a>
         <a class="module-tile" href="#device-section"><strong>Devices</strong><span id="devices-tile-status">Fleet health and approvals</span></a>
         <a class="module-tile" href="#activity-section"><strong>Recent activity</strong><span>Management history</span></a>
@@ -74,6 +76,12 @@
         </div>
         <p id="capture-filter-empty" class="muted" hidden>No sites match your search and filters.</p>
         <div id="capture-target-list" class="capture-target-list" role="region" aria-label="Capture sites" aria-live="polite"></div>
+      </section>
+
+      <section id="capture-efficiency-section" class="panel" aria-labelledby="capture-efficiency-title">
+        <div class="section-heading"><div><p class="eyebrow">Capture operations</p><h2 id="capture-efficiency-title">Capture efficiency and Browser Run usage</h2></div></div>
+        <p class="muted">Review daily Browser Run usage, the estimated cost of current schedules, and recent capture outcomes.</p>
+        <div id="capture-efficiency-content" role="region" aria-label="Browser Run usage and capture forecast" aria-live="polite"></div>
       </section>
 
       <section id="playlist-section" class="panel" aria-labelledby="playlist-title">

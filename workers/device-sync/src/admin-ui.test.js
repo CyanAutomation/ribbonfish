@@ -726,9 +726,13 @@ test("module shell provides persistent navigation and an on-demand site form", a
   assert.ok(nav);
   assert.equal(attribute(nav, "aria-label"), "Management modules");
   const links = descendants(nav).filter((item) => item.tagName === "a");
-  for (const id of ["dashboard", "overview-section", "sites-section", "playlist-section", "device-section", "activity-section", "analysis-section"]) {
+  for (const id of ["dashboard", "overview-section", "sites-section", "capture-efficiency-section", "playlist-section", "device-section", "activity-section", "analysis-section"]) {
     assert.ok(links.some((link) => attribute(link, "href") === `#${id}`), `${id} is reachable`);
   }
+  const efficiencyTile = descendants(byID(nodes, "dashboard-tiles")).find((item) =>
+    item.tagName === "a" && attribute(item, "href") === "#capture-efficiency-section");
+  assert.ok(efficiencyTile, "capture efficiency has its own dashboard tile");
+  assert.equal(attribute(byID(nodes, "capture-efficiency-section"), "aria-labelledby"), "capture-efficiency-title");
   const siteEditor = byID(nodes, "capture-site-editor");
   assert.equal(siteEditor.tagName, "details");
   assert.ok(descendants(siteEditor).some((item) => attribute(item, "id") === "capture-site-form"));

@@ -1,7 +1,7 @@
 import { api } from "./api.ts";
-import { renderCaptureUsageForecast } from "./capture-forecast-view.ts";
-import { formatCaptureObservation, formatJevCaptureOutcomeSummary, formatRunTime } from "./capture-presentation.ts";
+import { formatCaptureObservation, formatRunTime } from "./capture-presentation.ts";
 import { node, button, statusBadge, actionDisclosure } from "./ui-primitives.ts";
+import { renderCaptureEfficiencyModule } from "./capture-efficiency-module.ts";
 import { initModuleNavigation } from "./module-navigation.ts";
 import {
   createFleetOpenUI,
@@ -513,37 +513,10 @@ function filterCaptureTargets() {
 document.querySelector("#capture-search").addEventListener("input", filterCaptureTargets);
 document.querySelector("#capture-filter").addEventListener("change", filterCaptureTargets);
 
-function renderCaptureTargets(targets, decisions = [], efficiency = null) {
+function renderCaptureTargets(targets, decisions = []) {
   const decisionByTarget = new Map(decisions.map((decision) => [decision.capture_id, decision]));
   const container = document.querySelector("#capture-target-list");
   container.replaceChildren();
-  if (efficiency) {
-    const daily = efficiency.daily_usage ?? {};
-    const recent = efficiency.last_30_days ?? {};
-    const runTime = recent.browser_run_ms ?? {};
-    const usage = node("details", undefined, "usage-details");
-    usage.append(node("summary", "Capture efficiency and Browser Run usage"));
-    const forecastContainer = node("div", undefined, "browser-usage-forecast-container");
-    const forecastTargets = targets.map((target) => ({
-      capture_id: target.capture_id,
-      display_label: target.name || target.display_url,
-      capture_interval_seconds: target.capture_interval_seconds,
-      active_in_playlist: target.active_in_playlist === true,
-      schedule_reviewed: target.schedule_reviewed === true,
-      average_browser_ms: target.average_browser_ms ?? null,
-      browser_ms_samples: Number(target.browser_ms_samples) || 0,
-    }));
-    const intervalOverrides = new Map();
-    const updateForecast = () => renderCaptureUsageForecast(forecastContainer, forecastTargets, daily, intervalOverrides);
-    updateForecast();
-    usage.append(forecastContainer);
-    usage.append(node("p",
-      `Last 30 days: ${recent.successful_screenshots ?? 0} screenshots completed, ${recent.validator_unchanged ?? 0} unchanged validator checks skipped Browser Run, ` +
-      `${recent.successful_unclassified ?? 0} older results unclassified. Browser Run time: ${formatRunTime(runTime.response_header)} measured, ` +
-      `${formatRunTime(runTime.reserve)} reserve-estimated, ${runTime.unclassified_jobs ?? 0} older jobs unclassified. ` +
-      formatJevCaptureOutcomeSummary(recent), "muted"));
-    container.append(usage);
-  }
   if (!targets.length) {
     container.append(node("p", "No capture sites yet. Add a site above to configure its screenshot schedule.", "muted"));
     return;
@@ -629,10 +602,6 @@ function renderCaptureTargets(targets, decisions = [], efficiency = null) {
       item.selected = option.value === target.capture_interval_seconds;
       intervalSelect.append(item);
     }
-    intervalSelect.addEventListener("change", () => {
-      intervalOverrides.set(target.capture_id, Number(intervalSelect.value));
-      updateForecast();
-    });
     intervalLabel.append(intervalSelect);
     const saveInterval = button(target.schedule_reviewed ? "Save screenshot schedule" : "Confirm schedule", "secondary");
     saveInterval.addEventListener("click", async () => {
@@ -1170,7 +1139,17 @@ async function refresh() {
   renderHealth(overview.asset_health);
   renderFleetAttention(overview, enrollmentRequests);
   renderPlaylists(overview.playlists);
-  renderCaptureTargets(overview.capture_targets ?? [], captureDecisions, overview.capture_efficiency);
+  const captureForecast = renderCaptureEfficiencyModule(
+    document.querySelector("#capture-efficiency-content"),
+    overview.capture_targets ?? [],
+    overview.capture_efficiency,
+  );
+  document.querySelector("#capture-efficiency-tile-status").textContent = captureForecast
+    ? captureForecast.total_estimated_ms === null
+      ? "Waiting for active runtime samples"
+      : formatRunTime(captureForecast.total_estimated_ms) + " forecast per day"
+    : "Forecast unavailable";
+  renderCaptureTargets(overview.capture_targets ?? [], captureDecisions);
   renderAvailableSites(overview.capture_targets ?? []);
   renderDevices(overview.devices);
   renderPendingEnrollments(enrollmentRequests);
