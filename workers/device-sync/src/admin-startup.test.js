@@ -91,6 +91,7 @@ test("management page starts, renders its data, and dismisses errors", async () 
     assert.equal(window.document.querySelector("#device-section").hidden, true);
     assert.equal(window.document.activeElement.id, "sites-title");
     assert.equal(window.document.querySelector('#module-navigation a[href="#sites-section"]').getAttribute("aria-current"), "page");
+    assert.equal(window.document.querySelector("#capture-site-editor").open, false);
     await navigate(() => window.document.querySelector('#module-navigation a[href="#dashboard"]').click());
     const efficiencyTile = window.document.querySelector('#dashboard-tiles a[href="#capture-efficiency-section"]');
     assert.ok(efficiencyTile);
@@ -108,10 +109,6 @@ test("management page starts, renders its data, and dismisses errors", async () 
     assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /10 site samples/);
     assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /8m 0s measured, 2m 0s reserve-estimated/);
     assert.doesNotMatch(window.document.querySelector("#capture-target-list").textContent, /Capture efficiency and Browser Run usage/);
-    await navigate(() => window.document.querySelector('#module-navigation a[href="#dashboard"]').click());
-    assert.equal(window.document.activeElement.id, "sites-title");
-    assert.equal(window.document.querySelector('#module-navigation a[href="#sites-section"]').getAttribute("aria-current"), "page");
-    assert.equal(window.document.querySelector("#capture-site-editor").open, false);
     await navigate(() => window.document.querySelector('#module-navigation a[href="#dashboard"]').click());
     assert.equal(window.document.querySelector("#sites-section").hidden, true);
     const analysisLink = window.document.querySelector('#dashboard-tiles a[href="#analysis-section"]');
