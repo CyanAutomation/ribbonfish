@@ -834,13 +834,14 @@ test("playlist API defaults omitted rotation intervals to 90 seconds", async () 
   assert.equal((await response.json()).rotation_interval, "90s");
 });
 
-test("interval API exposes the supported choices and defaults", async () => {
+test("interval API exposes the seven supported capture choices and defaults", async () => {
   const response = await handleAdminRequest(request("/admin/api/intervals"), testEnvironment());
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
     capture: { unit: "seconds", default: 86400, options: [
       { value: 900, label: "15 minutes" }, { value: 1800, label: "30 minutes" },
-      { value: 3600, label: "1 hour" }, { value: 21600, label: "6 hours" }, { value: 86400, label: "24 hours" },
+      { value: 3600, label: "1 hour" }, { value: 10800, label: "3 hours" },
+      { value: 21600, label: "6 hours" }, { value: 43200, label: "12 hours" }, { value: 86400, label: "24 hours" },
     ] },
     rotation: { unit: "duration", default: "90s", options: [
       { value: "30s", label: "30 seconds" }, { value: "60s", label: "60 seconds" },
@@ -859,6 +860,19 @@ test("capture target interval can be changed through the API", async () => {
   assert.deepEqual(await response.json(), { capture_id: captureID, capture_interval_seconds: 21600 });
   assert.equal(env.DB.captureTarget.capture_interval_seconds, 21600);
   assert.ok(Number.isSafeInteger(env.DB.captureTarget.schedule_reviewed_at));
+});
+
+test("capture target API accepts the new three-hour and twelve-hour intervals", async () => {
+  for (const interval of [10800, 43200]) {
+    const env = testEnvironment();
+    env.DB.captureTarget = { capture_id: captureID, capture_interval_seconds: 3600, next_due_at: 123, last_success_at: null };
+    const response = await handleAdminRequest(request(`/admin/api/captures/${captureID}`, {
+      method: "PATCH", body: { capture_interval_seconds: interval },
+    }), env);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { capture_id: captureID, capture_interval_seconds: interval });
+    assert.equal(env.DB.captureTarget.capture_interval_seconds, interval);
+  }
 });
 
 test("an existing pending site can be retrieved with the default unreviewed schedule", async () => {

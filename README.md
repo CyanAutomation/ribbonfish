@@ -100,7 +100,7 @@ flowchart TD
 
 ## Scheduling Constraint
 
-Ribbonfish supports five browser capture intervals: **15 minutes, 30 minutes, 1 hour, 6 hours, and 24 hours**. The default is 24 hours. Agent display rotation supports **30, 60, 90, or 120 seconds, or 5 minutes**; the default is 90 seconds. A once-per-minute Cloudflare Cron Trigger dispatches due screenshot work using D1 scheduling state and Queues. Capture intervals are configuration values, not promises of exact wall-clock execution; browser rendering and device synchronisation add further freshness latency.
+Ribbonfish supports seven browser capture intervals: **15 minutes, 30 minutes, 1 hour, 3 hours, 6 hours, 12 hours, and 24 hours**. The default is 24 hours. Agent display rotation supports **30, 60, 90, or 120 seconds, or 5 minutes**; the default is 90 seconds. A once-per-minute Cloudflare Cron Trigger dispatches due screenshot work using D1 scheduling state and Queues. Capture intervals are configuration values, not promises of exact wall-clock execution; browser rendering and device synchronisation add further freshness latency.
 
 **Durable Objects are explicitly out of scope**, including for device presence, push commands, and display coordination. Devices poll for configuration and the globally active playlist, and all playlist rotation is local. Reconsidering this decision requires a new, demonstrated product requirement rather than speculative extensibility.
 
@@ -135,7 +135,7 @@ Wrangler's local D1/R2 emulation.
 See [`workers/device-sync/README.md`](workers/device-sync/README.md) for
 deployment and API details.
 
-The current management Worker uses screenshot Quick Actions, not persistent browser sessions. Capture targets accept public HTTPS URLs without credentials, one of the five supported capture intervals, and bounded viewport sizes. Its production config caps Browser Run time at 10 minutes per UTC day, matching the Workers Free daily allowance, reserves 60 seconds before each request when usage is unavailable, and spaces requests by at least 10 seconds. The allowance is account-level, so other Browser Run workloads can use part of it first. Authenticated pages, cookies, and arbitrary browser interaction are not supported.
+The current management Worker uses screenshot Quick Actions, not persistent browser sessions. Capture targets accept public HTTPS URLs without credentials, one of the seven supported capture intervals, and bounded viewport sizes. Its production config caps Browser Run time at 10 minutes per UTC day, matching the Workers Free daily allowance, reserves 60 seconds before each request when usage is unavailable, and spaces requests by at least 10 seconds. The allowance is account-level, so other Browser Run workloads can use part of it first. Authenticated pages, cookies, and arbitrary browser interaction are not supported.
 
 ---
 

@@ -75,7 +75,7 @@ export function validateCaptureSettings(value: { capture_interval_seconds?: unkn
   const interval = value?.capture_interval_seconds;
   const viewport = value?.viewport;
   if (!isSupportedCaptureInterval(interval)) {
-    throw new Error("Capture interval must be one of the supported values: 15m, 30m, 1h, 6h, or 24h.");
+    throw new Error("Capture interval must be one of the supported values: 15m, 30m, 1h, 3h, 6h, 12h, or 24h.");
   }
   if (!viewport || typeof viewport.width !== "number" || typeof viewport.height !== "number" || !Number.isSafeInteger(viewport.width) || !Number.isSafeInteger(viewport.height) ||
       viewport.width < 320 || viewport.width > 3840 || viewport.height < 240 || viewport.height > 2160 ||

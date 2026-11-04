@@ -2,7 +2,9 @@ export const CAPTURE_INTERVALS = Object.freeze([
   Object.freeze({ value: 15 * 60, label: "15 minutes" }),
   Object.freeze({ value: 30 * 60, label: "30 minutes" }),
   Object.freeze({ value: 60 * 60, label: "1 hour" }),
+  Object.freeze({ value: 3 * 60 * 60, label: "3 hours" }),
   Object.freeze({ value: 6 * 60 * 60, label: "6 hours" }),
+  Object.freeze({ value: 12 * 60 * 60, label: "12 hours" }),
   Object.freeze({ value: 24 * 60 * 60, label: "24 hours" }),
 ]);
 export const DEFAULT_CAPTURE_INTERVAL_SECONDS = 24 * 60 * 60;
