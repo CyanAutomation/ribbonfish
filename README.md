@@ -267,7 +267,7 @@ The consumer processes one message and awaits the full browser capture and image
 
 JEV 1.14 can be evaluated as a **low-cost, optional decision engine** to reduce unnecessary Browser Run activity, improve cache reuse and make retries more resilient. Its main input should be **compact structured operational data**, not an image on every capture. Image assessment is an optional later experiment, not a prerequisite.
 
-The management Worker now includes a reusable JEV decisions adapter for an advisory fleet analysis and per-screenshot skip assessment. Those UI recommendations do not change capture scheduling. The adaptive scheduler described below remains a separate future extension; any automated skip would need explicit freshness limits and deterministic hard-rule overrides.
+The management Worker provides deterministic, evidence-backed fleet findings and a separate JEV per-screenshot skip assessment. The fleet findings link operators to the records behind each issue; screenshot recommendations remain advisory and require explicit confirmation. The adaptive scheduler described below remains a separate future extension; any automated skip would need explicit freshness limits and deterministic hard-rule overrides.
 
 The optimiser sits **after deterministic eligibility checks and before the single serial capture queue**:
 

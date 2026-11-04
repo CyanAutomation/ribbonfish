@@ -3,9 +3,7 @@ import assert from "node:assert/strict";
 import { callJevDecision, validateAnswers, JEVRequestError } from "./jev.ts";
 import {
   buildCaptureAssessmentState,
-  buildFleetAnalysisState,
   captureAssessmentQuestions,
-  fleetAnalysisQuestions,
 } from "./jev-use-cases.ts";
 
 const sampleAnswers = {
@@ -111,32 +109,6 @@ test("answer validation enforces choices, types, probabilities, confidence, and 
   assert.equal(validateAnswers({ ...sampleAnswers, risk: { ...sampleAnswers.risk, legend: { 0: "Wrong", 1: "Moderate", 2: "High" } } }, captureAssessmentQuestions), false);
 });
 
-test("fleet analysis state contains bounded operational signals without sensitive identifiers or URLs", () => {
-  const input = {
-    devices: [
-      { device_id: "private-name", enabled: 1, health: { status: "healthy", reported_state: "ready", sync_status: "ok", applied_playlist_id: "private-list", applied_revision: "secret-revision" } },
-      { device_id: "another-name", enabled: 1, health: { status: "degraded", reported_state: "degraded", sync_status: "failed", applied_playlist_id: "private-list", applied_revision: "old-revision" } },
-      { device_id: "disabled", enabled: 0, health: { status: "disabled" } },
-    ],
-    playlists: [{ active: 1 }, { active: 0 }],
-    active_playlist: { playlist_id: "private-list", revision: "secret-revision" },
-    asset_health: { missing: [{ sha256: "secret-digest" }], integrity_issues: [{ issue_type: "size_mismatch" }] },
-    capture_targets: [{ display_url: "https://secret.example/private", job_status: "queued", last_error: "raw failure" }],
-  };
-  const state = buildFleetAnalysisState(input);
-  assert.deepEqual(JSON.parse(state), {
-    devices: { healthy: 1, degraded: 1, stale: 0, offline: 0, unknown: 0, disabled: 1 },
-    agent_states: { ready: 1, starting: 0, degraded: 1, startup_failed: 0, stopping: 0, unknown: 0 },
-    sync: { ok: 1, failed: 1, unknown: 0 },
-    playlist: { active: true, inactive_versions: 1, device_sync: { current: 1, behind: 1, unknown: 0 } },
-    assets: { missing_active: 1, integrity_issues: 1 },
-    screenshots: { total: 1, queued_or_running: 1, with_recent_errors: 1 },
-  });
-  assert.doesNotMatch(state, /private-name|secret|https|raw failure/);
-  assert.equal(JSON.parse(state).screenshots.with_recent_errors, 1);
-  assert.ok(fleetAnalysisQuestions.analysis_status);
-});
-
 test("capture assessment state includes only allowlisted metadata and no private URL parts", () => {
   const input = {
     url: "https://user:pass@example.com/private?token=secret#fragment",
@@ -167,7 +139,6 @@ test("capture assessment state includes only allowlisted metadata and no private
     unchanged_capture_streak: 1,
   });
   assert.doesNotMatch(state, /example\.com|user|pass|private|token|secret|Raw stack/);
-  assert.ok(fleetAnalysisQuestions.analysis_status);
 });
 
 test("JEV state must be a bounded JSON object and the requested model cannot be overridden", async () => {
@@ -197,6 +168,5 @@ test("JEV state must be a bounded JSON object and the requested model cannot be 
 });
 
 test("fixed JEV schemas declare expected answer keys", () => {
-  assert.deepEqual(Object.keys(fleetAnalysisQuestions), ["analysis_status", "focus", "urgency"]);
   assert.deepEqual(Object.keys(captureAssessmentQuestions), ["recommendation", "risk"]);
 });

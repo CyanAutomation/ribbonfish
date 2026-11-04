@@ -27,10 +27,11 @@ import {
   playlistDeleteActionStates,
   formatScreenshotStatus,
   formatTimestamp,
-  summarizeFleetAttention,
+  buildFleetInsights,
   prioritizeCaptureTargets,
   summarizeCaptureErrors,
 } from "../public/admin/ui-utils.ts";
+import { renderFindingCard, renderFindingList } from "../public/admin/ui-components.ts";
 
 // Contract source: ../README.md#local-development and ../README.md#management-api.
 // Device health presentation contract: ../README.md#management-api.
@@ -160,7 +161,7 @@ test("management page prioritizes task navigation and defers optional panels", a
     assert.ok(nodes.some((node) => node.tagName === "a" && attribute(node, "href") === `#${sectionID}`));
     assert.ok(byID(nodes, sectionID));
   }
-  for (const id of ["analysis-section", "playlist-editor"]) {
+  for (const id of ["playlist-editor"]) {
     const panel = byID(nodes, id);
     assert.equal(panel.tagName, "details", `${id} can be opened on demand`);
     assert.equal(attribute(panel, "open"), undefined, `${id} starts collapsed`);
@@ -178,46 +179,114 @@ test("pending enrollment details start collapsed in a native disclosure", async 
   assert.ok(descendants(pending).some((node) => node.tagName === "summary"));
 });
 
-test("fleet attention shows only actionable health and content issues", () => {
-  const items = summarizeFleetAttention({
+test("fleet insights explain prioritized current issues with evidence and next actions", () => {
+  const items = buildFleetInsights({
     devices: [
-      { enabled: 1, health: { status: "healthy" } },
-      { enabled: 1, health: { status: "offline" } },
-      { enabled: 1, health: { status: "unknown" } },
+      { device_id: "offline", enabled: 1, health: { status: "offline", received_at: 90 } },
+      { device_id: "behind", enabled: 1, health: { status: "degraded", sync_status: "failed", applied_playlist_id: "ops", applied_revision: "old", received_at: 100 } },
       { enabled: 0, health: { status: "offline" } },
     ],
+    active_playlist: { playlist_id: "ops", revision: "current" },
     asset_health: {
       missing: [{ sha256: "a" }, { sha256: "b" }],
       integrity_issues: [{ sha256: "a" }, { sha256: "c" }],
     },
     capture_targets: [
-      { last_error: "failed" },
-      { last_error: null, job_status: "queued" },
-      { last_error: "old failure", job_status: "queued" },
-      { last_error: null },
+      { name: "Problem site", last_error: "failed", last_attempt_at: 110 },
+      { last_error: "still running", job_status: "queued", last_attempt_at: 115 },
+      { name: "Unreviewed site", last_error: null, schedule_reviewed: false },
     ],
-  }, [{ request_id: "r1" }]);
+    generated_at: 120,
+  }, [{ request_id: "r1", created_at: 105 }]);
 
-  assert.deepEqual(items, [
-    { key: "enrollments", count: 1, singular: "device awaiting approval", plural: "devices awaiting approval", href: "#pending-enrollments-title" },
-    { key: "devices", count: 2, singular: "device needing health review", plural: "devices needing health review", href: "#device-section" },
-    { key: "assets", count: 3, singular: "image availability issue", plural: "image availability issues", href: "#asset-health" },
-    { key: "captures", count: 1, singular: "screenshot needing attention", plural: "screenshots needing attention", href: "#sites-section" },
+  assert.deepEqual(items.map(({ key, title, severity, action }) => ({ key, title, severity, action })), [
+    { key: "devices", title: "2 devices need a health or sync review", severity: "action", action: { label: "Review devices", href: "#device-section" } },
+    { key: "assets", title: "3 active playlist assets have issues", severity: "action", action: { label: "Review playlist assets", href: "#playlist-section" } },
+    { key: "captures", title: "1 screenshot capture failed", severity: "action", action: { label: "Review capture sites", href: "#sites-section" } },
+    { key: "schedules", title: "1 capture schedule needs review", severity: "review", action: { label: "Review schedules", href: "#sites-section" } },
+    { key: "enrollments", title: "1 device is waiting for approval", severity: "review", action: { label: "Review approvals", href: "#pending-enrollments-title" } },
   ]);
-  assert.deepEqual(summarizeFleetAttention({ devices: [], asset_health: { missing: [] }, capture_targets: [] }, []), []);
+  assert.match(items[0].evidence, /1 offline device/);
+  assert.match(items[0].evidence, /1 degraded device/);
+  assert.match(items[0].evidence, /1 sync failure/);
+  assert.match(items[0].evidence, /1 device behind the active playlist/);
+  assert.match(items[0].evidence, /Affected devices: offline, behind/);
+  assert.match(items[1].evidence, /2 missing/);
+  assert.match(items[1].evidence, /2 integrity issues/);
+  assert.match(items[2].evidence, /Latest failed attempt at .*1970/);
+  assert.match(items[2].evidence, /Problem site/);
+  assert.equal(items[2].updatedAt, 110);
+  assert.match(items[3].evidence, /1 schedule has not been reviewed before adding its site/);
+  assert.match(items[3].evidence, /Unreviewed site/);
+  assert.match(items[4].evidence, /Verify each device fingerprint/);
 });
 
-test("fleet analysis is an optional advisory action that does not change fleet state", async () => {
+test("fleet insights detect a missing active playlist and stay clear for a healthy fleet", () => {
+  const missing = buildFleetInsights({ devices: [{ device_id: "pi-1", enabled: 1, health: { status: "healthy" } }] }, []);
+  assert.equal(missing[0].key, "playlist");
+  assert.match(missing[0].evidence, /1 enabled device/);
+  assert.equal(missing[0].action.href, "#playlist-section");
+
+  const clear = buildFleetInsights({
+    devices: [{ device_id: "pi-1", enabled: 1, health: { status: "healthy", sync_status: "ok", applied_playlist_id: "ops", applied_revision: "current" } }],
+    active_playlist: { playlist_id: "ops", revision: "current" },
+    asset_health: { missing: [], integrity_issues: [] },
+    capture_targets: [{ last_error: null, schedule_reviewed: true }],
+  }, []);
+  assert.deepEqual(clear, []);
+});
+
+test("reusable finding components render accessible evidence, actions and responsive card styles", async () => {
+  const priorDocument = globalThis.document;
+  const dom = new JSDOM();
+  globalThis.document = dom.window.document;
+  try {
+    const finding = {
+      key: "devices",
+      title: "Devices need a health or sync review",
+      severity: "action",
+      evidence: "1 offline · 1 sync failure · last report 4 minutes ago",
+      updatedAt: 1_700_000_000_000,
+      action: { label: "Review devices", href: "#device-section" },
+    };
+    const card = renderFindingCard(finding);
+    assert.equal(card.tagName, "ARTICLE");
+    assert.match(card.className, /finding-card--action/);
+    assert.match(card.textContent, /1 offline/);
+    assert.match(card.textContent, /Updated/);
+    assert.equal(card.querySelector('a[href="#device-section"]').textContent, "Review devices");
+    assert.equal(card.getAttribute("aria-labelledby"), "finding-card-devices-title");
+
+    const list = renderFindingList([finding]);
+    assert.equal(list.getAttribute("role"), "list");
+    assert.equal(list.querySelectorAll("article").length, 1);
+    const empty = renderFindingList([]);
+    assert.match(empty.textContent, /No current issues need attention/);
+
+    const styles = await readFile(new URL("../public/admin/styles.css", import.meta.url), "utf8");
+    const stylesheet = postcss.parse(styles);
+    let findingListUsesResponsiveGrid = false;
+    stylesheet.walkRules(".finding-list", (rule) => {
+      findingListUsesResponsiveGrid ||= rule.nodes.some((node) => node.type === "decl" && node.prop === "display" && node.value === "grid");
+      findingListUsesResponsiveGrid ||= rule.nodes.some((node) => node.type === "decl" && node.prop === "grid-template-columns" && node.value.includes("auto-fit"));
+    });
+    assert.ok(findingListUsesResponsiveGrid, "the reusable finding list adapts to available width");
+  } finally {
+    if (priorDocument === undefined) delete globalThis.document;
+    else globalThis.document = priorDocument;
+    dom.window.close();
+  }
+});
+
+test("fleet insights live in the overview and no longer open in a modal", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const nodes = parseHTML(html);
-  const analysis = byID(nodes, "analysis-section");
-  assert.equal(analysis.tagName, "details");
-  assert.ok(nodes.some((node) => node.tagName === "a" && attribute(node, "href") === "#analysis-section"));
-  const button = byID(nodes, "run-fleet-analysis");
-  assert.equal(button.tagName, "button");
-  assert.equal(attribute(button, "type"), "button");
-  const visibleCopy = nodes.filter((node) => node.nodeName === "#text").map((node) => node.value).join(" ");
-  assert.match(visibleCopy, /Recommendations are advisory and do not change fleet state/i);
+  const overview = byID(nodes, "overview-section");
+  const findings = byID(nodes, "fleet-attention");
+  assert.ok(overview && descendants(overview).includes(findings));
+  assert.ok(nodes.some((node) => node.tagName === "a" && attribute(node, "href") === "#fleet-insights"));
+  assert.equal(byID(nodes, "analysis-dialog"), undefined);
+  assert.equal(byID(nodes, "run-fleet-analysis"), undefined);
 });
 
 test("management records switch to cards on narrow screens", async () => {
@@ -710,13 +779,13 @@ test("playlist delete action is visible once per group and explains the active-p
   assert.equal(afterSwitchStates[1].hint, "Deleting removes all 3 saved versions.");
 });
 
-test('visible analysis copy is branded as Ribbonfish and omits provider metadata', async () => {
+test('management UI does not display model confidence or probability percentages', async () => {
   const html = await readFile(new URL('../public/admin/index.html', import.meta.url), 'utf8');
   const script = await readFile(new URL('../public/admin/app.js', import.meta.url), 'utf8');
   const visible = parseHTML(html).filter((item) => item.nodeName === '#text').map((item) => item.value).join(' ');
   assert.doesNotMatch(visible, /\bJEV\b/i);
-  assert.match(visible, /Ribbonfish reviews/i);
-  assert.doesNotMatch(script, /result\.model|result\.usage/);
+  assert.doesNotMatch(visible, /confidence|probability/i);
+  assert.doesNotMatch(script, /answer\.probabilities|answer\.confidence|result\.model|result\.usage/);
 });
 
 test("module shell provides persistent navigation and an on-demand site form", async () => {
@@ -726,7 +795,7 @@ test("module shell provides persistent navigation and an on-demand site form", a
   assert.ok(nav);
   assert.equal(attribute(nav, "aria-label"), "Management modules");
   const links = descendants(nav).filter((item) => item.tagName === "a");
-  for (const id of ["dashboard", "overview-section", "sites-section", "capture-efficiency-section", "playlist-section", "device-section", "activity-section", "analysis-section"]) {
+  for (const id of ["dashboard", "overview-section", "sites-section", "capture-efficiency-section", "playlist-section", "device-section", "activity-section", "fleet-insights"]) {
     assert.ok(links.some((link) => attribute(link, "href") === `#${id}`), `${id} is reachable`);
   }
   const efficiencyTile = descendants(byID(nodes, "dashboard-tiles")).find((item) =>

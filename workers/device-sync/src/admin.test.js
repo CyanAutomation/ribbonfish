@@ -61,6 +61,14 @@ class FakeDatabase {
       async all() {
         if (sql.includes("AVG(browser_ms)")) return { results: database.captureRuntimeAverages ?? [] };
         if (sql.includes("FROM capture_targets t")) return { results: database.captureTargets ?? [] };
+        if (sql.includes("FROM playlist_capture_items p JOIN capture_targets t")) {
+          const target = database.playlistCaptureTarget;
+          if (!target) return { results: [] };
+          return { results: [{
+            sha256: target.last_success_at >= values[0] ? target.current_sha256 : target.placeholder_sha256,
+            size: target.last_success_at >= values[1] ? target.current_size : target.placeholder_size,
+          }] };
+        }
         if (sql.includes("FROM capture_history")) return { results: database.captureHistory ?? [] };
         if (sql.includes("FROM playlists WHERE playlist_id")) {
           return { results: [...database.playlists.values()]
@@ -233,59 +241,54 @@ test("management routes fail closed when the environment flag is disabled", asyn
   assert.equal(env.DB.auditEvents.length, 0);
 });
 
-test("JEV fleet analysis is Access protected, validates its request, and sends only summarized signals", async () => {
-  const protectedEnv = testEnvironment({ accessRequired: true });
-  const blocked = await handleAdminRequest(request("/admin/api/jev/fleet-analysis", { method: "POST", body: {} }), protectedEnv);
-  assert.equal(blocked.status, 401);
-
+test("obsolete fleet analysis endpoint is not available", async () => {
   const env = testEnvironment();
-  env.OPENROUTER_API_KEY = "test-secret";
-  let rateLimitKey;
-  env.ENROLLMENT_RATE_LIMITER.limit = async ({ key }) => { rateLimitKey = key; return { success: true }; };
-  let sentState;
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (_url, options) => {
-    const body = JSON.parse(options.body);
-    sentState = body.state;
-    assert.equal(body.questions.focus.type, "choice");
-    return Response.json({ model: "typesafe/jev-test", id: "test-id", answers: {
-      analysis_status: { type: "choice", choice: "routine", probabilities: { routine: 1, review: 0, urgent: 0 }, confidence: 0.9 },
-      focus: { type: "choice", choice: "none", probabilities: { devices: 0, playlist: 0, screenshots: 0, assets: 0, none: 1 }, confidence: 0.9 },
-      urgency: { type: "score", score: 0, legend: { 0: "Routine", 1: "Review", 2: "Urgent" }, probabilities: { 0: 1, 1: 0, 2: 0 }, confidence: 0.9 },
-    } });
-  };
-  try {
-    const invalid = await handleAdminRequest(request("/admin/api/jev/fleet-analysis", { method: "POST", body: { state: "attacker-controlled" } }), env);
-    assert.equal(invalid.status, 400);
-    const response = await handleAdminRequest(request("/admin/api/jev/fleet-analysis", { method: "POST", body: {} }), env);
-    assert.equal(response.status, 200);
-    const data = await response.json();
-    assert.equal(data.answers.focus.choice, "none");
-    assert.equal(rateLimitKey, "jev:anonymous");
-    assert.doesNotMatch(JSON.stringify(sentState), /pi-office|do-not-return-this|welcome|revision-1/);
-  } finally { globalThis.fetch = originalFetch; }
+  const response = await handleAdminRequest(request("/admin/api/jev/fleet-analysis", { method: "POST", body: {} }), env);
+  assert.equal(response.status, 404);
 });
 
 test("JEV provider failures do not expose provider authentication or response details", async () => {
   const env = testEnvironment();
   env.OPENROUTER_API_KEY = "test-secret";
+  env.DB.captureTarget = {
+    url: "https://status.example/",
+    capture_interval_seconds: 300,
+    last_success_at: 1000,
+    next_due_at: 2000,
+    failure_count: 0,
+    last_error: null,
+    job_status: null,
+  };
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response("private provider details", { status: 401 });
   try {
-    const response = await handleAdminRequest(request("/admin/api/jev/fleet-analysis", { method: "POST", body: {} }), env);
+    const response = await handleAdminRequest(request("/admin/api/jev/capture-assessment", {
+      method: "POST", body: { capture_id: captureID },
+    }), env);
     assert.equal(response.status, 502);
     assert.deepEqual(await response.json(), { error: "Analysis is temporarily unavailable. Try again shortly." });
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("JEV decision routes stop before provider calls when the per-admin limit is reached", async () => {
+test("JEV screenshot assessments stop before provider calls when the per-admin limit is reached", async () => {
   const env = testEnvironment();
   env.OPENROUTER_API_KEY = "test-secret";
+  env.DB.captureTarget = {
+    url: "https://status.example/",
+    capture_interval_seconds: 300,
+    last_success_at: 1000,
+    next_due_at: 2000,
+    failure_count: 0,
+    last_error: null,
+    job_status: null,
+  };
   env.ENROLLMENT_RATE_LIMITER.limit = async () => ({ success: false });
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => assert.fail("rate-limited requests must not call JEV");
   try {
-    const response = await handleAdminRequest(request("/admin/api/jev/fleet-analysis", { method: "POST", body: {} }), env);
+    const response = await handleAdminRequest(request("/admin/api/jev/capture-assessment", {
+      method: "POST", body: { capture_id: captureID },
+    }), env);
     assert.equal(response.status, 429);
   } finally { globalThis.fetch = originalFetch; }
 });
@@ -431,6 +434,23 @@ test("R2 failures while serving management assets become an admin error response
 
 test("overview omits device token hashes and reports missing active assets", async () => {
   const env = testEnvironment();
+  env.DB.captureTargets = [{
+    capture_id: captureID,
+    url: "https://status.example/",
+    name: "Status page",
+    capture_interval_seconds: 300,
+    viewport_width: 1920,
+    viewport_height: 1080,
+    wait_for_selector: null,
+    sha256: null,
+    size: null,
+    last_attempt_at: 123,
+    last_success_at: 100,
+    last_error: "capture failed",
+    next_due_at: 400,
+    schedule_reviewed_at: 90,
+    job_status: null,
+  }];
   env.DB.assetIntegrityIssues.push({ sha256: "b".repeat(64), issue_type: "missing_playlist_asset", first_seen_at: 1, last_seen_at: 2 });
   const response = await handleAdminRequest(request("/admin/api/overview"), env);
   assert.equal(response.status, 200);
@@ -439,8 +459,63 @@ test("overview omits device token hashes and reports missing active assets", asy
   assert.equal(body.devices[0].device_id, "pi-office");
   assert.equal(body.devices[0].auth_type, "token");
   assert.equal(body.environment, "development");
+  assert.ok(Number.isSafeInteger(body.generated_at));
+  assert.equal(body.capture_targets[0].last_attempt_at, 123);
   assert.deepEqual(body.asset_health.missing, [{ sha256: digest, expected_size: 4, actual_size: null }]);
   assert.deepEqual(body.asset_health.integrity_issues, env.DB.assetIntegrityIssues);
+});
+
+test("overview uses one freshness window for capture summaries and active playlist assets", async () => {
+  const env = testEnvironment();
+  const currentDigest = "c".repeat(64);
+  const placeholderDigest = "d".repeat(64);
+  const currentBytes = new Uint8Array(8);
+  const placeholderBytes = new Uint8Array(3);
+  env.objects.set(`assets/${digest}`, new Uint8Array(4));
+  env.objects.set(`assets/${currentDigest}`, currentBytes);
+  env.objects.set(`assets/${placeholderDigest}`, placeholderBytes);
+  const now = 30 * 24 * 60 * 60 * 1000 + 10_000;
+  const target = {
+    capture_id: captureID,
+    url: "https://status.example/",
+    name: "Status page",
+    capture_interval_seconds: 300,
+    viewport_width: 1920,
+    viewport_height: 1080,
+    wait_for_selector: null,
+    sha256: currentDigest,
+    size: currentBytes.byteLength,
+    last_attempt_at: now,
+    last_success_at: 10_001,
+    last_error: null,
+    next_due_at: now,
+    schedule_reviewed_at: now,
+    job_status: null,
+    active_in_playlist: 1,
+  };
+  env.DB.captureTargets = [target];
+  env.DB.playlistCaptureTarget = {
+    ...target,
+    current_sha256: currentDigest,
+    current_size: currentBytes.byteLength,
+    placeholder_sha256: placeholderDigest,
+    placeholder_size: placeholderBytes.byteLength,
+  };
+
+  const originalNow = Date.now;
+  const clockValues = [now, now + 1, now + 2];
+  Date.now = () => clockValues.shift() ?? now + 2;
+  let response;
+  try {
+    response = await handleAdminRequest(request("/admin/api/overview"), env);
+  } finally {
+    Date.now = originalNow;
+  }
+
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.capture_targets[0].sha256, currentDigest);
+  assert.deepEqual(body.asset_health.missing, []);
 });
 
 test("overview returns active site runtime samples and both daily usage limits", async () => {
