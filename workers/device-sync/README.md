@@ -352,14 +352,15 @@ For static playlists, a matching ETag is checked from the active playlist row
 and capture-slot existence before loading the asset lists; dynamic capture
 playlists still resolve their current screenshot state before returning `304`.
 
-Capture targets can avoid Browser Run when a source has a validator that is known
-to represent the rendered screenshot. Add exact hostnames to the comma-separated
-`CAPTURE_VALIDATOR_HOSTS` Worker variable to opt those sources in. The Worker
-sends a bounded `HEAD` request with saved ETag/Last-Modified validators and skips
-Browser Run only on an unchanged response while the current R2 image is present.
-Unapproved hosts, redirects, errors, missing validators, and changed validators
-fall back to a screenshot. Only opt in sources whose owners guarantee those
-headers track screenshot changes; this is disabled by default.
+Before every capture, the Worker sends a bounded `HEAD` request to the recorded
+target URL with its saved ETag and Last-Modified validators. Any recorded target
+whose URL passes `CAPTURE_ALLOWED_HOSTS` is checked; no separate validator-host
+configuration is required. Browser Run is skipped only when the response says
+the resource is unchanged and the current R2 image is present and intact.
+Redirects, errors, missing validators, changed validators, and missing or
+inconsistent cached images fall back to a screenshot. A validator may not track
+all changes that affect a rendered page, so validator-only results are reported
+separately from screenshot-verified outcomes.
 
 The management UI uses private browser caching: HTML is fresh for 60 seconds,
 JavaScript and CSS for five minutes, and the holding image for one hour. Each
