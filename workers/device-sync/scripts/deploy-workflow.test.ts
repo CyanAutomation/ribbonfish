@@ -125,17 +125,21 @@ test("Go and workflow validation run on pull requests through their intended job
 
 test("workflow caches include each workflow's tool pins and Go module inputs", async () => {
   const cases = [
-    ["verify-agent.yml", "golang.org/x/vuln/cmd/govulncheck@v1.1.4"],
-    ["workflow-lint.yml", "github.com/rhysd/actionlint/cmd/actionlint@v1.7.12"],
+    ["verify-agent.yml", "golang.org/x/vuln/cmd/govulncheck@v1.1.4", "Check for known Go vulnerabilities"],
+    ["workflow-lint.yml", "github.com/rhysd/actionlint/cmd/actionlint@v1.7.12", "Check workflow syntax and expressions"],
   ];
-  for (const [file, tool] of cases) {
+  for (const [file, tool, validationStepName] of cases) {
     const workflow = await readYaml(`.github/workflows/${file}`);
     const setupGo = Object.values(workflow.jobs).flatMap((job) => job.steps ?? [])
       .find((step) => step.uses?.startsWith("actions/setup-go@"));
     assert.ok(setupGo);
-    assert.match(setupGo.with["cache-dependency-path"], /agent\/go\.mod/);
-    assert.ok(setupGo.with["cache-dependency-path"].includes(`.github/workflows/${file}`));
-    assert.ok(JSON.stringify(workflow).includes(tool));
+    const cacheInputs = setupGo.with["cache-dependency-path"].split(/\r?\n/).map((input) => input.trim()).filter(Boolean);
+    assert.ok(cacheInputs.includes("agent/go.mod"), `${file} cache includes Go module inputs`);
+    assert.ok(cacheInputs.includes(`.github/workflows/${file}`), `${file} cache invalidates when its workflow changes`);
+    const validationStep = Object.values(workflow.jobs).flatMap((job) => job.steps ?? [])
+      .find((step) => step.name === validationStepName);
+    assert.ok(validationStep, `${file} includes its validation step`);
+    assert.ok(validationStep.run.includes(tool), `${file} runs its pinned validation tool`);
   }
 });
 

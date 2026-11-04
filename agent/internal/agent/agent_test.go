@@ -217,10 +217,11 @@ func TestRunSkipsUnavailableDisplaysAndReportsDegradedHealth(t *testing.T) {
 			t.Fatalf("health did not report the disconnected output: %#v", report)
 		}
 	}
-	select {
-	case frame := <-output.frames:
-		t.Fatalf("unavailable display was rendered: %#v", frame)
-	case <-time.After(20 * time.Millisecond):
+	if !output.wasPresented("connected") {
+		t.Fatal("connected display did not receive its frame")
+	}
+	if output.wasPresented("disconnected") {
+		t.Fatal("unavailable display was rendered")
 	}
 }
 
@@ -246,13 +247,7 @@ func TestDynamicDisplayRecoversFromNoPlayableAssetsAndReportsHealth(t *testing.T
 	done := make(chan error, 1)
 	go func() { done <- app.Run(ctx) }()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for tracker.Snapshot(time.Now()).Outputs[0].Status != "failed" {
-		if time.Now().After(deadline) {
-			t.Fatal("display health did not report the empty playlist")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	waitForOutputStatus(t, tracker, "display-main", "failed")
 
 	assetPath := filepath.Join(dir, "available.png")
 	writePNG(t, assetPath, color.RGBA{G: 200, A: 255})
@@ -278,13 +273,7 @@ func TestDynamicDisplayRecoversFromNoPlayableAssetsAndReportsHealth(t *testing.T
 		t.Fatal("ApplyConfig() stayed blocked after the empty schedule released its reader")
 	}
 	_ = receiveFrame(t, output.frames)
-	deadline = time.Now().Add(2 * time.Second)
-	for tracker.Snapshot(time.Now()).Outputs[0].Status != "ready" {
-		if time.Now().After(deadline) {
-			t.Fatal("display health did not recover after the output accepted a frame")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	waitForOutputStatus(t, tracker, "display-main", "ready")
 	cancel()
 	if err := <-done; err != nil {
 		t.Errorf("Run() after cancellation = %v", err)
@@ -617,7 +606,11 @@ func (clock *sequenceClock) Wait(ctx context.Context, duration time.Duration) er
 	return ctx.Err()
 }
 
-type recordingOutput struct{ frames chan frameEvent }
+type recordingOutput struct {
+	frames       chan frameEvent
+	mu           sync.Mutex
+	presentedIDs []string
+}
 
 type availabilityRecordingOutput struct {
 	*recordingOutput
@@ -632,9 +625,23 @@ func (o *recordingOutput) Present(ctx context.Context, displayID string, frame i
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	o.mu.Lock()
+	o.presentedIDs = append(o.presentedIDs, displayID)
+	o.mu.Unlock()
 	pixel := color.RGBAModel.Convert(frame.At(frame.Bounds().Min.X, frame.Bounds().Min.Y)).(color.RGBA)
 	o.frames <- frameEvent{displayID: displayID, pixel: pixel}
 	return nil
+}
+
+func (o *recordingOutput) wasPresented(displayID string) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, presentedID := range o.presentedIDs {
+		if presentedID == displayID {
+			return true
+		}
+	}
+	return false
 }
 
 func (*recordingOutput) Close() error { return nil }
@@ -667,6 +674,25 @@ func waitForTimers(t *testing.T, clock *testClock, count int) {
 		case <-clock.waiting:
 		case <-time.After(2 * time.Second):
 			t.Fatal("timed out waiting for display scheduler timers")
+		}
+	}
+}
+
+func waitForOutputStatus(t *testing.T, tracker *health.Tracker, displayID, status string) {
+	t.Helper()
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for {
+		report := tracker.Snapshot(time.Now())
+		for _, output := range report.Outputs {
+			if output.DisplayID == displayID && output.Status == status {
+				return
+			}
+		}
+		select {
+		case <-tracker.Changes():
+		case <-deadline.C:
+			t.Fatalf("display %q did not reach %q status: %#v", displayID, status, report.Outputs)
 		}
 	}
 }
