@@ -362,6 +362,7 @@ async function authenticateDevice(
     return device;
   }
 
+  if (!device.token_hash) throw new HTTPError(401, "device authentication failed");
   const authorization = request.headers.get("Authorization") ?? "";
   const match = authorization.match(/^Bearer ([A-Za-z0-9_-]{32,256})$/);
   if (!match) throw new HTTPError(401, "device authentication failed");
