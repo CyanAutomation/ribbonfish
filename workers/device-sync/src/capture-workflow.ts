@@ -259,13 +259,8 @@ async function processCaptureMessage(message: CaptureMessage, env: CaptureEnv, n
 }
 
 export async function probeCaptureValidator(target: ValidatorTarget, env: CaptureEnv, fetcher = globalThis.fetch): Promise<ValidatorResult> {
-  const approvedHosts = new Set(String(env.CAPTURE_VALIDATOR_HOSTS ?? "")
-    .split(",").map((host) => host.trim().toLowerCase()).filter(Boolean));
   let url;
   try { url = new URL(validateCaptureTargetURL(target.url, env.CAPTURE_ALLOWED_HOSTS)); } catch {
-    return { unchanged: false, outcome: "disabled", etag: target.validator_etag, lastModified: target.validator_last_modified };
-  }
-  if (!approvedHosts.has(url.hostname)) {
     return { unchanged: false, outcome: "disabled", etag: target.validator_etag, lastModified: target.validator_last_modified };
   }
 
