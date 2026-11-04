@@ -59,6 +59,8 @@ class FakeDatabase {
         return null;
       },
       async all() {
+        if (sql.includes("WITH measured_ranked AS")) return { results: database.captureDurationAggregates ?? [] };
+        if (sql.includes("FROM capture_duration_samples")) return { results: database.captureDurationSamples ?? [] };
         if (sql.includes("AVG(browser_ms)")) return { results: database.captureRuntimeAverages ?? [] };
         if (sql.includes("FROM capture_targets t")) return { results: database.captureTargets ?? [] };
         if (sql.includes("FROM playlist_capture_items p JOIN capture_targets t")) {
@@ -203,6 +205,7 @@ function testEnvironment({ enabled = true, accessRequired = false, allowedEmails
     ADMIN_ENABLED: enabled ? "true" : "false",
     ADMIN_ACCESS_REQUIRED: accessRequired ? "true" : "false",
     ADMIN_ALLOWED_EMAILS: allowedEmails,
+    CAPTURE_BUDGET_RESERVE_MS: "60000",
     ENROLLMENT_RATE_LIMITER: { async limit() { return { success: true }; } },
     ASSETS: {
       async get(key) {
@@ -316,7 +319,9 @@ test("JEV screenshot skip recommendations are advisory and cause no capture writ
     const body = JSON.parse(options.body);
     sentState = body.state;
     assert.equal(body.questions.recommendation.type, "choice");
+    assert.equal(body.questions.duration_review.type, "choice");
     return Response.json({ model: "typesafe/jev-test", answers: {
+      duration_review: { type: "choice", choice: "review_duration", probabilities: { keep_current: 0.1, review_duration: 0.9 }, confidence: 0.85 },
       recommendation: { type: "choice", choice: "skip_once", probabilities: { capture_now: 0.1, skip_once: 0.9 }, confidence: 0.85 },
       risk: { type: "score", score: 0.2, legend: { 0: "Low", 1: "Moderate", 2: "High" }, probabilities: { 0: 0.8, 1: 0.2, 2: 0 }, confidence: 0.85 },
     } });
@@ -328,6 +333,7 @@ test("JEV screenshot skip recommendations are advisory and cause no capture writ
     assert.equal(response.status, 200);
     const result = await response.json();
     assert.equal(result.answers.recommendation.choice, "skip_once");
+    assert.equal(result.duration_review, "insufficient_data");
     assert.equal(result.skip_eligibility.eligible, false);
     assert.match(result.skip_eligibility.reason, /successful screenshot/i);
     assert.doesNotMatch(JSON.stringify(sentState), /user|pass|private|token|secret/);
@@ -541,6 +547,19 @@ test("overview returns active site runtime samples and both daily usage limits",
     active_in_playlist: 1,
   }];
   env.DB.captureRuntimeAverages = [{ capture_id: captureID, average_browser_ms: 2100, sample_count: 4 }];
+  env.DB.captureDurationAggregates = [{
+    capture_id: captureID,
+    total_samples: 25,
+    measured_sample_count: 20,
+    reserve_estimated_sample_count: 3,
+    unknown_sample_count: 2,
+    failed_attempt_count: 2,
+    retry_attempt_count: 1,
+    measured_average_ms: 10_500,
+    measured_p50_ms: 10_500,
+    measured_p90_ms: 18_000,
+    reserve_estimated_total_ms: 180_000,
+  }];
 
   const response = await handleAdminRequest(request("/admin/api/overview"), env);
   const body = await response.json();
@@ -557,6 +576,11 @@ test("overview returns active site runtime samples and both daily usage limits",
   assert.equal(body.capture_targets[0].schedule_reviewed, true);
   assert.equal(body.capture_targets[0].average_browser_ms, 2100);
   assert.equal(body.capture_targets[0].browser_ms_samples, 4);
+  assert.equal(body.capture_targets[0].duration_summary.measured_p90_ms, 18_000);
+  assert.equal(body.capture_targets[0].duration_summary.failed_attempt_count, 2);
+  assert.equal(body.capture_targets[0].duration_summary.retry_attempt_count, 1);
+  assert.equal(body.capture_targets[0].duration_summary.capture_attempt_failure_rate, 2 / 25);
+  assert.equal(body.capture_targets[0].duration_summary.conservative_review, "review");
 });
 
 test("capture forecast API returns a queryable daily projection and account-wide quota metadata", async () => {
@@ -610,6 +634,49 @@ test("capture forecast API is read-only", async () => {
   const response = await handleAdminRequest(request("/admin/api/capture-forecast", { method: "POST", body: {} }), env);
   assert.equal(response.status, 405);
   assert.equal(response.headers.get("allow"), "GET");
+});
+
+test("capture duration API returns bounded per-attempt samples with source-separated summary", async () => {
+  const env = testEnvironment();
+  env.DB.captureTarget = { capture_id: captureID };
+  env.DB.captureDurationSamples = [
+    { sample_id: "attempt-3", capture_id: captureID, job_id: "job-3", attempt: 1, sampled_at: 3000,
+      browser_ms: 1200, browser_ms_source: "response_header", reserve_ms: 60_000,
+      browser_run_elapsed_ms: 1400, capture_elapsed_ms: 1800, outcome: "succeeded", readiness_mode: "domcontentloaded", readiness_selector: null },
+    { sample_id: "attempt-2", capture_id: captureID, job_id: "job-2", attempt: 1, sampled_at: 2000,
+      browser_ms: 60_000, browser_ms_source: "reserve", reserve_ms: 60_000,
+      browser_run_elapsed_ms: 61_000, capture_elapsed_ms: 62_000, outcome: "failed", readiness_mode: "selector", readiness_selector: "main.ready" },
+    { sample_id: "attempt-1", capture_id: captureID, job_id: "job-1", attempt: 1, sampled_at: 1000,
+      browser_ms: 0, browser_ms_source: "unknown", reserve_ms: 60_000,
+      browser_run_elapsed_ms: 500, capture_elapsed_ms: 500, outcome: "failed", readiness_mode: "domcontentloaded", readiness_selector: null },
+  ];
+
+  const response = await handleAdminRequest(request(`/admin/api/captures/${captureID}/duration-samples?limit=2`), env);
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.capture_id, captureID);
+  assert.equal(body.configured_reserve_ms, 60_000);
+  assert.deepEqual(body.samples.map(({ sample_id, browser_ms_source }) => [sample_id, browser_ms_source]), [
+    ["attempt-3", "response_header"], ["attempt-2", "reserve"],
+  ]);
+  assert.equal(body.samples[1].readiness_selector, "main.ready");
+  assert.equal(body.next_before, 2000);
+  assert.equal(body.summary.measured_sample_count, 1);
+  assert.equal(body.summary.reserve_estimated_sample_count, 1);
+  assert.equal(body.summary.unknown_sample_count, 1);
+  assert.equal(body.summary.measured_p50_ms, 1200);
+});
+
+test("capture duration API validates site IDs and query bounds and stays read-only", async () => {
+  const env = testEnvironment();
+  assert.equal((await handleAdminRequest(request("/admin/api/captures/not-a-uuid/duration-samples"), env)).status, 400);
+  env.DB.captureTarget = { capture_id: captureID };
+  assert.equal((await handleAdminRequest(request(`/admin/api/captures/${captureID}/duration-samples?limit=1000`), env)).status, 400);
+  const response = await handleAdminRequest(request(`/admin/api/captures/${captureID}/duration-samples`, { method: "POST", body: {} }), env);
+  assert.equal(response.status, 405);
+  assert.equal(response.headers.get("allow"), "GET");
+  assert.equal(env.DB.mutationCalls, 0);
 });
 
 test("overview identifies an Access-protected management deployment", async () => {
