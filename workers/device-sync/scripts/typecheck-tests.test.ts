@@ -10,9 +10,10 @@ test("Node test typechecking accepts Node fixtures and rejects Worker globals or
   const source = await mkdtemp(join(tmpdir(), "ribbonfish-typecheck-fixture-"));
   t.after(() => rm(source, { recursive: true, force: true }));
   const fixture = join(source, "boundary.test.ts");
-  await writeFile(fixture, 'import type { DeviceHealthReport } from "./device-health.ts";\nconst local = { caches: 1 };\nconst report: DeviceHealthReport | null = null;\nvoid [local.caches, report, process.version];\n');
+  await writeFile(fixture, '// @typecheck-node-test\nimport type { DeviceHealthReport } from "./device-health.ts";\nconst local = { caches: 1 };\nconst report: DeviceHealthReport | null = null;\nvoid [local.caches, report, process.version];\n');
   assert.equal(checkNodeTests(source).status, 0);
   await writeFile(fixture, [
+    "// @typecheck-node-test",
     "void caches;",
     "void globalThis.caches;",
     'import type { DeviceHealthReport } from "./device-health.ts";',

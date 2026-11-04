@@ -14,7 +14,7 @@ await Promise.all(["index.html", "styles.css"].map((file) =>
   copyFile(resolve(sourceDirectory, file), resolve(outputDirectory, file))));
 
 await build({
-  entryPoints: [resolve(sourceDirectory, "app.js")],
+  entryPoints: [resolve(sourceDirectory, "app.ts")],
   outfile: resolve(outputDirectory, "app.js"),
   bundle: true,
   minify: true,

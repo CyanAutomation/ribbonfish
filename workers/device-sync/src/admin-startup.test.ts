@@ -11,7 +11,7 @@ let appBundle;
 
 before(async () => {
   const bundle = await build({
-    entryPoints: [fileURLToPath(new URL("../public/admin/app.js", import.meta.url))],
+    entryPoints: [fileURLToPath(new URL("../public/admin/app.ts", import.meta.url))],
     bundle: true,
     format: "iife",
     platform: "browser",
