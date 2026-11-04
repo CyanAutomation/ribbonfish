@@ -1,6 +1,31 @@
 type Playlist = { playlist_id?: string; revision_count?: number; active?: boolean | number; created_at?: number };
-type CaptureSummary = { last_error?: string | null; job_status?: string; schedule_reviewed?: boolean | number };
-type FleetOverview = { devices?: { enabled?: boolean | number; health?: { status?: string } }[]; asset_health?: { missing?: { sha256?: string }[]; integrity_issues?: { sha256?: string }[] }; capture_targets?: CaptureSummary[] };
+type CaptureSummary = { name?: string | null; display_url?: string; last_error?: string | null; last_attempt_at?: number | null; job_status?: string | null; schedule_reviewed?: boolean | number };
+type FleetDevice = {
+  device_id?: string;
+  enabled?: boolean | number;
+  health?: {
+    status?: string;
+    sync_status?: string;
+    applied_playlist_id?: string | null;
+    applied_revision?: string | number | null;
+    received_at?: number | null;
+  } | null;
+};
+type FleetOverview = {
+  active_playlist?: { playlist_id?: string; revision?: string | number } | null;
+  devices?: FleetDevice[];
+  asset_health?: { missing?: { sha256?: string; last_seen_at?: number }[]; integrity_issues?: { sha256?: string; last_seen_at?: number }[] };
+  capture_targets?: CaptureSummary[];
+};
+export type FleetInsight = {
+  key: string;
+  title: string;
+  severity: "action" | "review";
+  evidence: string;
+  updatedAt: number | null;
+  action: { label: string; href: string };
+};
+type EnrollmentRequestSummary = { created_at?: number | null };
 type HealthOutput = { connector?: string; error_code?: string; last_frame_age_seconds: number | null; display_id: string; status: string };
 type HealthReport = { sync?: { last_success_age_seconds?: number | null; status?: string; applied_playlist_id?: string; applied_revision?: number }; agent_version: string; agent_uptime_seconds: number; startup_error_code?: string; outputs?: HealthOutput[]; host?: { uptime_seconds: number; temperature_millicelsius: number; memory_available_bytes: number; state_disk_free_bytes: number; load_1m: number } };
 type HealthHistory = { events?: { metadata?: { health_status?: string; previous_health_status?: string }; received_at: number; event_type: string; error_code?: string }[]; samples?: unknown[] };
@@ -131,58 +156,145 @@ export function formatScreenshotStatus(jobStatus: string | null, lastError: stri
   return { label: "Waiting for first screenshot", tone: "neutral" };
 }
 
-export function summarizeFleetAttention(overview: FleetOverview = {}, enrollmentRequests: unknown[] = []) {
-  const items = [];
+export function buildFleetInsights(overview: FleetOverview = {}, enrollmentRequests: EnrollmentRequestSummary[] = []) {
+  const items: FleetInsight[] = [];
   const devices = Array.isArray(overview.devices) ? overview.devices : [];
-  const healthReviewCount = devices.filter((device) => {
-    if (device.enabled === false || device.enabled === 0) return false;
-    return ["degraded", "stale", "offline", "unknown"].includes(device.health?.status ?? "unknown");
-  }).length;
-  const assetIssues = [
-    ...(overview.asset_health?.missing ?? []),
-    ...(overview.asset_health?.integrity_issues ?? []),
-  ];
-  const uniqueAssetIssues = new Set(assetIssues.map((asset, index) => asset.sha256 ?? `issue-${index}`));
-  const failedCaptures = (overview.capture_targets ?? []).filter((target) =>
-    Boolean(target.last_error) && !["queued", "running"].includes(target.job_status ?? "")).length;
+  const enabledDevices = devices.filter((device) => device.enabled !== false && device.enabled !== 0);
+  const activePlaylist = overview.active_playlist;
 
-  if (enrollmentRequests.length) {
+  if (!activePlaylist && enabledDevices.length) {
     items.push({
-      key: "enrollments",
-      count: enrollmentRequests.length,
-      singular: "device awaiting approval",
-      plural: "devices awaiting approval",
-      href: "#pending-enrollments-title",
+      key: "playlist",
+      title: "No active playlist is assigned",
+      severity: "action",
+      evidence: `${enabledDevices.length} enabled ${enabledDevices.length === 1 ? "device is" : "devices are"} waiting for a playlist to be activated.`,
+      updatedAt: null,
+      action: { label: "Choose a playlist", href: "#playlist-section" },
     });
   }
-  if (healthReviewCount) {
+
+  const reviewedDevices = enabledDevices.filter((device) =>
+    ["degraded", "stale", "offline", "unknown"].includes(device.health?.status ?? "unknown") ||
+    device.health?.sync_status === "failed" ||
+    isPlaylistSyncUnknown(device, activePlaylist) ||
+    (device.health?.sync_status !== "ok" && device.health?.sync_status !== "failed") ||
+    isBehindActivePlaylist(device, activePlaylist),
+  );
+  if (reviewedDevices.length) {
+    const statuses = new Map<string, number>();
+    for (const device of reviewedDevices) {
+      const status = device.health?.status ?? "unknown";
+      if (["degraded", "stale", "offline", "unknown"].includes(status)) statuses.set(status, (statuses.get(status) ?? 0) + 1);
+    }
+    const offline = statuses.get("offline") ?? 0;
+    const degraded = statuses.get("degraded") ?? 0;
+    const stale = statuses.get("stale") ?? 0;
+    const unknown = statuses.get("unknown") ?? 0;
+    const failedSync = reviewedDevices.filter((device) => device.health?.sync_status === "failed").length;
+    const syncUnknown = reviewedDevices.filter((device) => device.health?.sync_status !== "ok" && device.health?.sync_status !== "failed").length;
+    const behind = reviewedDevices.filter((device) => isBehindActivePlaylist(device, activePlaylist)).length;
+    const affected = formatAffectedLabels(reviewedDevices.map((device) => device.device_id));
+    const evidence = [
+      countLabel(offline, "offline device", "offline devices"),
+      countLabel(degraded, "degraded device", "degraded devices"),
+      countLabel(stale, "stale report"),
+      countLabel(unknown, "unknown health status", "unknown health statuses"),
+      countLabel(failedSync, "sync failure"),
+      countLabel(syncUnknown, "sync status unavailable", "sync statuses unavailable"),
+      countLabel(behind, "device behind the active playlist", "devices behind the active playlist"),
+      affected ? `Affected devices: ${affected}` : "",
+    ].filter(Boolean).join(" · ");
     items.push({
       key: "devices",
-      count: healthReviewCount,
-      singular: "device needing health review",
-      plural: "devices needing health review",
-      href: "#device-section",
+      title: `${reviewedDevices.length} ${reviewedDevices.length === 1 ? "device needs" : "devices need"} a health or sync review`,
+      severity: offline || degraded || failedSync || behind ? "action" : "review",
+      evidence,
+      updatedAt: latestTimestamp(reviewedDevices.map((device) => device.health?.received_at)),
+      action: { label: "Review devices", href: "#device-section" },
     });
   }
-  if (uniqueAssetIssues.size) {
+
+  const missingAssets = overview.asset_health?.missing ?? [];
+  const integrityIssues = overview.asset_health?.integrity_issues ?? [];
+  const assetIssues = [...missingAssets, ...integrityIssues];
+  const uniqueAssets = new Set(assetIssues.map((asset, index) => asset.sha256 ?? `issue-${index}`));
+  if (uniqueAssets.size) {
     items.push({
       key: "assets",
-      count: uniqueAssetIssues.size,
-      singular: "image availability issue",
-      plural: "image availability issues",
-      href: "#asset-health",
+      title: `${uniqueAssets.size} active playlist ${uniqueAssets.size === 1 ? "asset has" : "assets have"} issues`,
+      severity: "action",
+      evidence: [countLabel(missingAssets.length, "missing asset"), countLabel(integrityIssues.length, "integrity issue")].filter(Boolean).join(" · "),
+      updatedAt: latestTimestamp(assetIssues.map((asset) => asset.last_seen_at)),
+      action: { label: "Review playlist assets", href: "#playlist-section" },
     });
   }
-  if (failedCaptures) {
+
+  const captureTargets = Array.isArray(overview.capture_targets) ? overview.capture_targets : [];
+  const failedCaptures = captureTargets.filter((target) =>
+    Boolean(target.last_error) && !["queued", "running"].includes(target.job_status ?? ""));
+  if (failedCaptures.length) {
+    const lastAttempt = latestTimestamp(failedCaptures.map((target) => target.last_attempt_at));
+    const affected = formatAffectedLabels(failedCaptures.map((target) => target.name || target.display_url));
     items.push({
       key: "captures",
-      count: failedCaptures,
-      singular: "screenshot needing attention",
-      plural: "screenshots needing attention",
-      href: "#sites-section",
+      title: `${failedCaptures.length} ${failedCaptures.length === 1 ? "screenshot capture failed" : "screenshot captures failed"}`,
+      severity: "action",
+      evidence: `${failedCaptures.length} ${failedCaptures.length === 1 ? "site has" : "sites have"} a failed latest capture${lastAttempt !== null ? ` · Latest failed attempt at ${formatTimestamp(lastAttempt)}` : ""}${affected ? ` · Affected sites: ${affected}` : ""}`,
+      updatedAt: lastAttempt,
+      action: { label: "Review capture sites", href: "#sites-section" },
+    });
+  }
+
+  const unreviewedSchedules = captureTargets.filter((target) => target.schedule_reviewed === false || target.schedule_reviewed === 0);
+  if (unreviewedSchedules.length) {
+    const affected = formatAffectedLabels(unreviewedSchedules.map((target) => target.name || target.display_url));
+    items.push({
+      key: "schedules",
+      title: `${unreviewedSchedules.length} ${unreviewedSchedules.length === 1 ? "capture schedule needs" : "capture schedules need"} review`,
+      severity: "review",
+      evidence: `${unreviewedSchedules.length} ${unreviewedSchedules.length === 1 ? "schedule has not been reviewed before adding its site to a playlist" : "schedules have not been reviewed before adding those sites to a playlist"}.${affected ? ` Affected sites: ${affected}.` : ""}`,
+      updatedAt: null,
+      action: { label: "Review schedules", href: "#sites-section" },
+    });
+  }
+
+  if (enrollmentRequests.length) {
+    const createdAt = latestTimestamp(enrollmentRequests.map((request) => request.created_at));
+    items.push({
+      key: "enrollments",
+      title: `${enrollmentRequests.length} ${enrollmentRequests.length === 1 ? "device is" : "devices are"} waiting for approval`,
+      severity: "review",
+      evidence: `${countLabel(enrollmentRequests.length, "pending enrollment")} · Verify each device fingerprint before approving.`,
+      updatedAt: createdAt,
+      action: { label: "Review approvals", href: "#pending-enrollments-title" },
     });
   }
   return items;
+}
+
+function countLabel(count: number, singular: string, plural = `${singular}s`) {
+  return count ? `${count} ${count === 1 ? singular : plural}` : "";
+}
+
+function latestTimestamp(values: unknown[]) {
+  const timestamps = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  return timestamps.length ? Math.max(...timestamps) : null;
+}
+
+function isBehindActivePlaylist(device: FleetDevice, activePlaylist: FleetOverview["active_playlist"]) {
+  return Boolean(activePlaylist && device.health?.applied_playlist_id && device.health?.applied_revision !== undefined && device.health?.applied_revision !== null &&
+    (device.health.applied_playlist_id !== activePlaylist.playlist_id || String(device.health.applied_revision) !== String(activePlaylist.revision)));
+}
+
+function isPlaylistSyncUnknown(device: FleetDevice, activePlaylist: FleetOverview["active_playlist"]) {
+  return Boolean(activePlaylist && (!device.health?.applied_playlist_id || device.health?.applied_revision === undefined || device.health.applied_revision === null));
+}
+
+function formatAffectedLabels(labels: unknown[]) {
+  const normalized = labels.filter((label): label is string => typeof label === "string" && Boolean(label.trim())).map((label) => label.trim());
+  const visible = normalized.slice(0, 3);
+  if (normalized.length > visible.length) visible.push(`+${normalized.length - visible.length} more`);
+  return visible.join(", ");
 }
 
 export function formatCaptureInterval(seconds: number) {

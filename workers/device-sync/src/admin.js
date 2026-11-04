@@ -24,9 +24,7 @@ import {
 } from "./capture-forecast.ts";
 import {
   buildCaptureAssessmentState,
-  buildFleetAnalysisState,
   captureAssessmentQuestions,
-  fleetAnalysisQuestions,
 } from "./jev-use-cases.ts";
 
 const MAX_JSON_BYTES = 64 << 10;
@@ -98,17 +96,6 @@ export async function handleAdminRequest(request, env, ctx) {
         "LIMIT 1000",
       ).all();
       return jsonResponse(rows.results ?? []);
-    }
-
-    if (url.pathname === "/admin/api/jev/fleet-analysis") {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      const data = await readJSON(request);
-      if (!hasExactKeys(data, [])) throw new HTTPError(400, "request body must be an empty JSON object");
-      await enforceJevRateLimit(env, actorID);
-      return jsonResponse(await callJevDecision(env, {
-        state: buildFleetAnalysisState(await readOverview(env)),
-        questions: fleetAnalysisQuestions,
-      }));
     }
 
     if (url.pathname === "/admin/api/jev/capture-assessment") {
@@ -427,7 +414,7 @@ async function readOverview(env) {
       "SELECT t.capture_id, t.url, t.name, t.capture_interval_seconds, t.viewport_width, t.viewport_height, t.wait_for_selector, " +
       "CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
       "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size, " +
-      "t.last_success_at, " +
+      "t.last_attempt_at, t.last_success_at, " +
       "t.last_error, t.next_due_at, t.schedule_reviewed_at, " +
       "EXISTS (SELECT 1 FROM playlist_capture_items p JOIN active_playlist a " +
       "ON a.playlist_id = p.playlist_id AND a.revision = p.revision WHERE p.capture_id = t.capture_id) AS active_in_playlist, " +
@@ -518,6 +505,7 @@ async function readOverview(env) {
       viewport: { width: target.viewport_width, height: target.viewport_height },
       sha256: target.sha256,
       size: target.size,
+      last_attempt_at: target.last_attempt_at,
       last_success_at: target.last_success_at,
       last_error: target.last_error,
       job_status: target.job_status,
@@ -532,6 +520,7 @@ async function readOverview(env) {
   const captureUsageSummary = buildCaptureUsageSummary(captureTargetSummaries, captureUsage, budgetMs, now);
 
   return {
+    generated_at: now,
     environment: env.ADMIN_ACCESS_REQUIRED === "true" ? "production" : "development",
     devices: (devices.results ?? []).map((device) => summarizeDeviceHealth(device, now)),
     playlists: playlists.results ?? [],
