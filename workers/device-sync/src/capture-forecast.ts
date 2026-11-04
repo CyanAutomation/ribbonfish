@@ -59,7 +59,7 @@ export function calculateDailyCaptureForecast(
     : null;
 
   let knownEstimatedMs = 0;
-  let isComplete = true;
+  let isComplete = eligible.length > 0;
   const sites = eligible.map((target): CaptureSiteForecast => {
     const override = intervalOverrides.get(target.capture_id);
     const interval = Number.isSafeInteger(override) && Number(override) > 0
