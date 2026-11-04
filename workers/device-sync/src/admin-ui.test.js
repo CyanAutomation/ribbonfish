@@ -810,7 +810,9 @@ test("module shell provides persistent navigation and an on-demand site form", a
 test("fleet insights have a dashboard tile with a direct link to findings", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const nodes = parseHTML(html);
-  const tile = descendants(byID(nodes, "dashboard-tiles")).find((item) =>
+  const tiles = byID(nodes, "dashboard-tiles");
+  assert.ok(tiles, "dashboard-tiles container exists");
+  const tile = descendants(tiles).find((item) =>
     item.tagName === "a" && attribute(item, "href") === "#fleet-insights");
   assert.ok(tile, "fleet insights are reachable from the dashboard tiles");
   const tileText = descendants(tile).filter((item) => item.nodeName === "#text").map((item) => item.value).join(" ");
