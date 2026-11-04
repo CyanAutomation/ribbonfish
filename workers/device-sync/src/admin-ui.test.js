@@ -807,6 +807,19 @@ test("module shell provides persistent navigation and an on-demand site form", a
   assert.ok(descendants(siteEditor).some((item) => attribute(item, "id") === "capture-site-form"));
 });
 
+test("fleet insights have a dashboard tile with a direct link to findings", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const nodes = parseHTML(html);
+  const tiles = byID(nodes, "dashboard-tiles");
+  assert.ok(tiles, "dashboard-tiles container exists");
+  const tile = descendants(tiles).find((item) =>
+    item.tagName === "a" && attribute(item, "href") === "#fleet-insights");
+  assert.ok(tile, "fleet insights are reachable from the dashboard tiles");
+  const tileText = descendants(tile).filter((item) => item.nodeName === "#text").map((item) => item.value).join(" ");
+  assert.match(tileText, /Fleet insights/);
+  assert.match(tileText, /Prioritized findings and recommended actions/);
+});
+
 
 test("capture issues are grouped and surfaced before healthy sites without changing input", () => {
   const targets = [
