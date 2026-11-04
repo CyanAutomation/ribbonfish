@@ -861,6 +861,47 @@ test("Browser Run forecast component exposes actual usage, quota markers, and pe
   assert.match(forecast.querySelector("[data-testid='forecast-total']")?.textContent ?? "", /8s/);
 });
 
+test("used-today meter scales from the larger limit plus 10 percent, independently of the forecast", () => {
+  const dom = new JSDOM("<section id='forecast'></section>");
+  const container = dom.window.document.querySelector("#forecast");
+  const targets = [{
+    capture_id: "long-running",
+    display_label: "Long running site",
+    capture_interval_seconds: 3600,
+    active_in_playlist: true,
+    schedule_reviewed: true,
+    average_browser_ms: 394_625,
+    browser_ms_samples: 1,
+  }];
+  const used = { accounted_ms: 600_000, budget_ms: 540_000, free_plan_limit_ms: 600_000 };
+  const fillPercent = (meter) => parseFloat(meter.querySelector(".scale-meter__fill").style.width);
+  const markerPercent = (meter, name) => parseFloat(meter.querySelector(`[data-quota-marker='${name}']`).style.left);
+
+  renderCaptureUsageForecast(container, targets, used);
+
+  const meters = [...container.querySelectorAll(".scale-meter")];
+  const usedMeter = meters[0];
+  const forecastMeter = meters[1];
+  assert.match(usedMeter.getAttribute("aria-label"), /Scale from 0 to 11m 0s/);
+  assert.ok(Math.abs(fillPercent(usedMeter) - (600_000 / 660_000 * 100)) < 0.001);
+  assert.ok(Math.abs(markerPercent(usedMeter, "worker-budget") - (540_000 / 660_000 * 100)) < 0.001);
+  assert.ok(Math.abs(markerPercent(usedMeter, "free-plan") - (600_000 / 660_000 * 100)) < 0.001);
+  assert.match(usedMeter.nextElementSibling.textContent, /Scale: 11m 0s/);
+  assert.match(forecastMeter.getAttribute("aria-label"), /Scale from 0 to 157m 51s/);
+  assert.match(forecastMeter.nextElementSibling.textContent, /Scale: 157m 51s/);
+
+  used.budget_ms = 720_000;
+  used.accounted_ms = 720_000;
+  renderCaptureUsageForecast(container, targets, used);
+
+  const largerBudgetMeter = container.querySelector(".scale-meter");
+  assert.match(largerBudgetMeter.getAttribute("aria-label"), /Scale from 0 to 13m 12s/);
+  assert.ok(Math.abs(fillPercent(largerBudgetMeter) - (720_000 / 792_000 * 100)) < 0.001);
+  assert.ok(Math.abs(markerPercent(largerBudgetMeter, "worker-budget") - (720_000 / 792_000 * 100)) < 0.001);
+  assert.ok(Math.abs(markerPercent(largerBudgetMeter, "free-plan") - (600_000 / 792_000 * 100)) < 0.001);
+  assert.match(largerBudgetMeter.nextElementSibling.textContent, /Scale: 13m 12s/);
+});
+
 test("Browser Run forecast component requests a sample before inventing a runtime", () => {
   const dom = new JSDOM("<section id='forecast'></section>");
   const forecast = dom.window.document.querySelector("#forecast");
