@@ -17,11 +17,12 @@
     "publish:admin:local": "node scripts/publish-admin-assets.ts --config wrangler.management.toml --bucket ribbonfish-assets --local",
     "migrate:management": "wrangler d1 migrations apply ribbonfish-devices --remote --config wrangler.management.toml",
     "typecheck:bindings": "wrangler types src/management-bindings.d.ts --config wrangler.management.toml --env-interface ManagementBindings --include-runtime=false --strict-vars=false --check",
-    "typecheck": "npm run typecheck:bindings && tsc -p tsconfig.worker.json && tsc -p tsconfig.admin.json && tsc -p tsconfig.scripts.json && node scripts/typecheck-tests.ts"
+    "typecheck": "npm run typecheck:bindings && tsc -p tsconfig.worker.json && tsc -p tsconfig.admin.json && tsc -p tsconfig.admin-entry.json && tsc -p tsconfig.scripts.json && tsc -p tsconfig.tdd-tests.json && node scripts/typecheck-tests.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261103.1",
     "@openuidev/lang-core": "^1.0.2",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^24.19.2",
     "esbuild": "^0.28.2",
     "jsdom": "^30.1.3",

@@ -1,4 +1,5 @@
 import { api } from "./api.ts";
+import { requiredElement, requiredElements, requiredFormControl } from "./dom.ts";
 import { formatCaptureObservation, formatRunTime } from "./capture-presentation.ts";
 import { node, button, statusBadge, actionDisclosure } from "./ui-primitives.ts";
 import { renderCaptureEfficiencyModule } from "./capture-efficiency-module.ts";
@@ -32,30 +33,30 @@ import {
   summarizeCaptureErrors,
 } from "./ui-utils.ts";
 
-const fleetSummary = document.querySelector("#fleet-summary");
-const fleetAttention = document.querySelector("#fleet-attention");
-const fleetDataAsOf = document.querySelector("#fleet-data-as-of");
-const confirmDialog = document.querySelector("#confirm-dialog");
-const confirmTitle = document.querySelector("#confirm-title");
-const confirmDescription = document.querySelector("#confirm-description");
-const confirmButton = document.querySelector("#confirm-submit");
-const confirmCancel = document.querySelector("#confirm-cancel");
-const environmentTag = document.querySelector("#environment-tag");
-const environmentNotice = document.querySelector("#environment-notice");
-let latestOverview = null;
+const fleetSummary = requiredElement(document, "#fleet-summary");
+const fleetAttention = requiredElement(document, "#fleet-attention");
+const fleetDataAsOf = requiredElement(document, "#fleet-data-as-of");
+const confirmDialog = requiredElement(document, "#confirm-dialog");
+const confirmTitle = requiredElement(document, "#confirm-title");
+const confirmDescription = requiredElement(document, "#confirm-description");
+const confirmButton = requiredElement(document, "#confirm-submit");
+const confirmCancel = requiredElement(document, "#confirm-cancel");
+const environmentTag = requiredElement(document, "#environment-tag");
+const environmentNotice = requiredElement(document, "#environment-notice");
+let latestOverview: any = null;
 let fleetSummaryInitialized = false;
 let pendingEnrollmentsLoaded = false;
-let pendingEnrollmentIDs = new Set();
-let playlistEditSource = null;
-let intervalDefinitions = null;
+let pendingEnrollmentIDs = new Set<string>();
+let playlistEditSource: { playlist_id: string; revision: string } | null = null;
+let intervalDefinitions: any = null;
 const fleetViewRuntime = createFleetOpenUI({ getOverview: async () => latestOverview });
 
 fleetViewRuntime.subscribe(renderFleetSummary);
 
-const feedbackSlots = new Map([...document.querySelectorAll("[data-feedback-slot]")].map((element) => {
+const feedbackSlots = new Map([...requiredElements(document, "[data-feedback-slot]")].map((element) => {
   const slot = {
     element,
-    text: element.querySelector("[data-feedback-text]"),
+    text: requiredElement(element, "[data-feedback-text]"),
     hovered: false,
     focused: false,
     transient: false,
@@ -69,11 +70,11 @@ const feedbackSlots = new Map([...document.querySelectorAll("[data-feedback-slot
   });
   element.addEventListener("focusin", () => { slot.focused = true; slot.timer.pause(); });
   element.addEventListener("focusout", (event) => {
-    if (element.contains(event.relatedTarget)) return;
+    if (event.relatedTarget instanceof Node && element.contains(event.relatedTarget)) return;
     slot.focused = false;
     if (!slot.hovered && slot.transient) slot.timer.resume();
   });
-  element.querySelector("[data-dismiss-feedback]").addEventListener("click", () => {
+  requiredElement(element, "[data-dismiss-feedback]").addEventListener("click", () => {
     slot.timer.clear();
     slot.transient = false;
     element.hidden = true;
@@ -129,7 +130,7 @@ function table(caption, headers, rows, emptyState) {
   return element;
 }
 
-function cell(label, value, className) {
+function cell(label, value, className = undefined) {
   const element = node("td", undefined, className);
   element.dataset.label = label;
   if (value instanceof Node) element.append(value);
@@ -145,7 +146,7 @@ function renderEmptyState(messageTextValue, actionLabel, href, compact = false) 
     action.href = href;
     if (href === "#playlist-editor") {
       action.addEventListener("click", () => {
-        document.querySelector("#playlist-editor").open = true;
+        requiredElement(document, "#playlist-editor").open = true;
       });
     }
     card.append(action);
@@ -161,7 +162,7 @@ function renderResponsiveRecords({
   fields,
   emptyState,
   cardTitleField,
-  cardStatusField,
+  cardStatusField = undefined,
   cardActionField = "Actions",
   cardClass = "data-card",
 }) {
@@ -174,7 +175,7 @@ function renderResponsiveRecords({
     valuesFor(record, "table").forEach(({ label, value }) => row.append(cell(label, value)));
     return row;
   });
-  const tableContainer = typeof tableSelector === "string" ? document.querySelector(tableSelector) : tableSelector;
+  const tableContainer = typeof tableSelector === "string" ? requiredElement(document, tableSelector) : tableSelector;
   tableContainer.replaceChildren(table(
     caption,
     fields.map(({ label }) => label),
@@ -182,7 +183,7 @@ function renderResponsiveRecords({
     emptyState,
   ));
 
-  const cards = typeof cardsSelector === "string" ? document.querySelector(cardsSelector) : cardsSelector;
+  const cards = typeof cardsSelector === "string" ? requiredElement(document, cardsSelector) : cardsSelector;
   cards.replaceChildren();
   if (!records.length) {
     cards.append(emptyCard(emptyState.message, emptyState.actionLabel, emptyState.href));
@@ -262,7 +263,7 @@ async function copyValue(value, successMessage, context = "global") {
 }
 
 function playlistForm() {
-  return document.querySelector("#playlist-form");
+  return requiredElement(document, "#playlist-form");
 }
 
 function playlistVersionKey(playlist) {
@@ -271,18 +272,18 @@ function playlistVersionKey(playlist) {
 
 function resetPlaylistEditor() {
   const form = playlistForm();
-  const editor = document.querySelector("#playlist-editor");
+  const editor = requiredElement(document, "#playlist-editor");
   playlistEditSource = null;
-  editor.querySelector("summary").textContent = "Create playlist version";
+  requiredElement(editor, "summary").textContent = "Create playlist version";
   editor.open = false;
-  form.querySelector("#playlist-form-help").textContent =
+  requiredElement(form, "#playlist-form-help").textContent =
     "Add PNG images and select reviewed sites from the library. Saved versions stay available until you delete the playlist.";
-  form.querySelector("[name=assets]").required = false;
-  form.querySelector("#playlist-submit").textContent = "Save playlist version";
-  form.querySelector("#cancel-playlist-edit").hidden = true;
+  requiredElement(form, "[name=assets]").required = false;
+  requiredElement(form, "#playlist-submit").textContent = "Save playlist version";
+  requiredElement(form, "#cancel-playlist-edit").hidden = true;
   for (const selector of ["#playlist-current-assets"]) {
-    const selection = document.querySelector(selector);
-    selection.querySelector(".asset-selection__list").replaceChildren();
+    const selection = requiredElement(document, selector);
+    requiredElement(selection, ".asset-selection__list").replaceChildren();
     selection.hidden = true;
   }
   renderAvailableSites(latestOverview?.capture_targets ?? [], new Set());
@@ -298,17 +299,17 @@ async function startPlaylistEdit(playlist) {
     resetPlaylistEditor();
     resetIntervalSelections(form);
     playlistEditSource = { playlist_id: detail.playlist_id, revision: detail.revision };
-    document.querySelector("#playlist-editor").open = true;
-    document.querySelector("#playlist-editor-summary").textContent = `Edit ${detail.playlist_id} playlist version`;
-    form.elements.namedItem("id").value = detail.playlist_id;
-    form.elements.namedItem("rotation_interval").value = detail.rotation_interval;
-    form.querySelector("#playlist-form-help").textContent =
+    requiredElement(document, "#playlist-editor").open = true;
+    requiredElement(document, "#playlist-editor-summary").textContent = `Edit ${detail.playlist_id} playlist version`;
+    requiredFormControl<HTMLInputElement>(form, "id").value = detail.playlist_id;
+    requiredFormControl<HTMLSelectElement>(form, "rotation_interval").value = detail.rotation_interval;
+    requiredElement(form, "#playlist-form-help").textContent =
       `Editing ${detail.playlist_id}, version ${compactIdentifier(detail.revision)}. Keep the images and sites you want, then save a new version. Saved versions do not change.`;
-    form.querySelector("[name=assets]").required = false;
-    form.querySelector("#playlist-submit").textContent = "Save as new version";
-    form.querySelector("#cancel-playlist-edit").hidden = false;
-    const selection = document.querySelector("#playlist-current-assets");
-    const assetList = selection.querySelector(".asset-selection__list");
+    requiredElement(form, "[name=assets]").required = false;
+    requiredElement(form, "#playlist-submit").textContent = "Save as new version";
+    requiredElement(form, "#cancel-playlist-edit").hidden = false;
+    const selection = requiredElement(document, "#playlist-current-assets");
+    const assetList = requiredElement(selection, ".asset-selection__list");
     assetList.replaceChildren();
     detail.assets.forEach((asset, index) => {
       const label = node("label", undefined, "asset-option");
@@ -329,9 +330,9 @@ async function startPlaylistEdit(playlist) {
     });
     selection.hidden = false;
     renderAvailableSites(latestOverview?.capture_targets ?? [], new Set((detail.captures ?? []).map((capture) => capture.capture_id)));
-    document.querySelector("#playlist-feedback").hidden = true;
+    requiredElement(document, "#playlist-feedback").hidden = true;
     form.scrollIntoView({ behavior: "smooth", block: "start" });
-    form.elements.namedItem("id").focus({ preventScroll: true });
+    requiredFormControl<HTMLInputElement>(form, "id").focus({ preventScroll: true });
   } catch (error) {
     showMessage(error.message, true, "playlist");
   }
@@ -402,7 +403,7 @@ function playlistActionButtons(playlist, deleteAction, layout) {
 }
 
 function renderHealth(health) {
-  const panel = document.querySelector("#asset-health");
+  const panel = requiredElement(document, "#asset-health");
   panel.replaceChildren();
   const issues = health.integrity_issues ?? [];
   if (!health.missing.length && !issues.length) {
@@ -460,8 +461,8 @@ function renderPlaylists(playlists) {
       ),
     },
   ];
-  const desktop = document.querySelector("#playlists");
-  const mobile = document.querySelector("#playlists-mobile");
+  const desktop = requiredElement(document, "#playlists");
+  const mobile = requiredElement(document, "#playlists-mobile");
   desktop.replaceChildren();
   mobile.replaceChildren();
   const groups = new Map();
@@ -504,20 +505,20 @@ function renderPlaylists(playlists) {
 
 let openCaptureID = null;
 function filterCaptureTargets() {
-  const query = document.querySelector("#capture-search").value.trim().toLocaleLowerCase();
-  const filter = document.querySelector("#capture-filter").value;
-  const cards = [...document.querySelectorAll("#capture-target-list .capture-target")];
+  const query = requiredElement(document, "#capture-search").value.trim().toLocaleLowerCase();
+  const filter = requiredElement(document, "#capture-filter").value;
+  const cards = [...requiredElements(document, "#capture-target-list .capture-target")];
   for (const card of cards) {
     card.hidden = !card.dataset.search.includes(query) || (filter !== "all" && card.dataset.filter !== filter);
   }
-  document.querySelector("#capture-filter-empty").hidden = !cards.length || cards.some((card) => !card.hidden);
+  requiredElement(document, "#capture-filter-empty").hidden = !cards.length || cards.some((card) => !card.hidden);
 }
-document.querySelector("#capture-search").addEventListener("input", filterCaptureTargets);
-document.querySelector("#capture-filter").addEventListener("change", filterCaptureTargets);
+requiredElement(document, "#capture-search").addEventListener("input", filterCaptureTargets);
+requiredElement(document, "#capture-filter").addEventListener("change", filterCaptureTargets);
 
 function renderCaptureTargets(targets, decisions = []) {
   const decisionByTarget = new Map(decisions.map((decision) => [decision.capture_id, decision]));
-  const container = document.querySelector("#capture-target-list");
+  const container = requiredElement(document, "#capture-target-list");
   container.replaceChildren();
   if (!targets.length) {
     container.append(node("p", "No capture sites yet. Add a site above to configure its screenshot schedule.", "muted"));
@@ -560,7 +561,7 @@ function renderCaptureTargets(targets, decisions = []) {
     detail.addEventListener("toggle", () => {
       if (detail.open) {
         openCaptureID = target.capture_id;
-        for (const other of container.querySelectorAll(".capture-target__panel[open]")) {
+        for (const other of requiredElements<HTMLDetailsElement>(container, ".capture-target__panel[open]")) {
           if (other !== detail) other.open = false;
         }
       } else if (openCaptureID === target.capture_id) openCaptureID = null;
@@ -732,8 +733,8 @@ function renderCaptureTargets(targets, decisions = []) {
 }
 
 function renderAvailableSites(targets, selectedIDs = null) {
-  const list = document.querySelector("#available-sites .asset-selection__list");
-  const prior = new Map([...list.querySelectorAll("input[data-capture-id]")].map((input) => [input.dataset.captureId, input.checked]));
+  const list = requiredElement(document, "#available-sites .asset-selection__list");
+  const prior = new Map([...requiredElements<HTMLInputElement>(list, "input[data-capture-id]")].map((input) => [input.dataset.captureId, input.checked]));
   list.replaceChildren();
   const eligible = targets.filter((target) => target.schedule_reviewed);
   if (!eligible.length) {
@@ -1017,10 +1018,10 @@ function pendingRequestActions(request, layout) {
 }
 
 function renderPendingEnrollments(requests) {
-  const pendingDetails = document.querySelector("#pending-enrollments-details");
-  const requestIDs = new Set(requests.map((request) => request.request_id));
+  const pendingDetails = requiredElement(document, "#pending-enrollments-details");
+  const requestIDs = new Set<string>(requests.map((request) => request.request_id as string));
   const hasNewRequest = requests.some((request) => !pendingEnrollmentIDs.has(request.request_id));
-  document.querySelector("#pending-enrollment-count").textContent = requests.length
+  requiredElement(document, "#pending-enrollment-count").textContent = requests.length
     ? `${requests.length} pending`
     : "No pending requests";
   if (!requests.length) pendingDetails.open = false;
@@ -1059,9 +1060,10 @@ function renderFleetAttention(overview, enrollmentRequests) {
 }
 
 fleetAttention.addEventListener("click", (event) => {
+  if (!(event.target instanceof Element)) return;
   const link = event.target.closest("a[href^='#']");
   if (!link) return;
-  const target = document.querySelector(link.getAttribute("href"));
+  const target = requiredElement(document, link.getAttribute("href"));
   const disclosure = target?.closest("details");
   if (disclosure) disclosure.open = true;
 });
@@ -1125,22 +1127,22 @@ async function refresh() {
     api("/admin/api/intervals"),
   ]);
   intervalDefinitions = intervals;
-  populateIntervalSelect(document.querySelector("#playlist-form [name=rotation_interval]"), intervals.rotation.options,
+  populateIntervalSelect(requiredElement(document, "#playlist-form [name=rotation_interval]"), intervals.rotation.options,
     intervals.rotation.default, (option) => option.value);
   latestOverview = overview;
-  document.querySelector("#sites-tile-status").textContent = `${(overview.capture_targets ?? []).length} sites`;
-  document.querySelector("#playlists-tile-status").textContent = `${overview.playlists.length} playlist versions`;
-  document.querySelector("#devices-tile-status").textContent = `${overview.devices.length} devices · ${enrollmentRequests.length} awaiting approval`;
+  requiredElement(document, "#sites-tile-status").textContent = `${(overview.capture_targets ?? []).length} sites`;
+  requiredElement(document, "#playlists-tile-status").textContent = `${overview.playlists.length} playlist versions`;
+  requiredElement(document, "#devices-tile-status").textContent = `${overview.devices.length} devices · ${enrollmentRequests.length} awaiting approval`;
   renderEnvironment(overview.environment);
   renderHealth(overview.asset_health);
   renderFleetAttention(overview, enrollmentRequests);
   renderPlaylists(overview.playlists);
   const captureForecast = renderCaptureEfficiencyModule(
-    document.querySelector("#capture-efficiency-content"),
+    requiredElement(document, "#capture-efficiency-content"),
     overview.capture_targets ?? [],
     overview.capture_efficiency,
   );
-  document.querySelector("#capture-efficiency-tile-status").textContent = captureForecast
+  requiredElement(document, "#capture-efficiency-tile-status").textContent = captureForecast
     ? captureForecast.total_estimated_ms === null
       ? "Waiting for active runtime samples"
       : formatRunTime(captureForecast.total_estimated_ms) + " forecast per day"
@@ -1206,7 +1208,15 @@ function renderFleetSummary(view) {
   }
 }
 
-function renderJevDecision(result, title, { captureID } = {}) {
+function renderJevDecision(
+  result: {
+    answers?: Record<string, { type?: string; choice?: string; score?: number; legend?: Record<string, string> }>;
+    duration_review?: string;
+    skip_eligibility?: { eligible?: boolean; due_at?: number; reason?: string };
+  },
+  title: string,
+  { captureID }: { captureID?: string } = {},
+) {
   const card = node("article", undefined, "jev-result");
   card.append(node("h3", title));
   const answers = node("div", undefined, "jev-result__answers");
@@ -1224,7 +1234,7 @@ function renderJevDecision(result, title, { captureID } = {}) {
           : "Keep the current accounting reserve based on the available timing evidence.";
       item.append(node("p", advice));
     }
-    else if (answer.type === "choice") item.append(node("p", `Recommendation: ${answer.choice.replaceAll("_", " ")}`));
+    else if (answer.type === "choice" && typeof answer.choice === "string") item.append(node("p", `Recommendation: ${answer.choice.replaceAll("_", " ")}`));
     else if (answer.type === "score") {
       const level = answer.legend?.[String(Math.round(answer.score))];
       if (typeof level === "string") item.append(node("p", `${label}: ${level}`));
@@ -1275,7 +1285,7 @@ function showConfirmDialog({ title, description, confirmLabel, destructive = fal
   confirmButton.className = `button button--${destructive ? "danger" : "primary"}`;
   confirmCancel.textContent = "Cancel";
   confirmDialog.returnValue = "cancel";
-  return new Promise((resolve) => {
+  return new Promise<boolean>((resolve) => {
     confirmDialog.addEventListener("close", () => resolve(confirmDialog.returnValue === "confirm"), { once: true });
     confirmDialog.showModal();
   });
@@ -1283,26 +1293,26 @@ function showConfirmDialog({ title, description, confirmLabel, destructive = fal
 
 initModuleNavigation();
 
-document.querySelector("#capture-site-form").addEventListener("submit", async (event) => {
+requiredElement(document, "#capture-site-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const form = event.currentTarget;
-  const feedback = document.querySelector("#capture-site-feedback");
-  const submit = form.querySelector("button[type=submit]");
+  const form = event.currentTarget as HTMLFormElement;
+  const feedback = requiredElement(document, "#capture-site-feedback");
+  const submit = requiredElement(form, "button[type=submit]");
   submit.disabled = true;
   try {
     const result = await api("/admin/api/capture-sites", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        url: form.elements.namedItem("url").value,
+        url: requiredFormControl<HTMLInputElement>(form, "url").value,
         viewport: {
-          width: Number(form.elements.namedItem("viewport_width").value),
-          height: Number(form.elements.namedItem("viewport_height").value),
+          width: Number(requiredFormControl<HTMLInputElement>(form, "viewport_width").value),
+          height: Number(requiredFormControl<HTMLInputElement>(form, "viewport_height").value),
         },
       }),
     });
     form.reset();
-    form.elements.namedItem("viewport_width").value = "1920";
-    form.elements.namedItem("viewport_height").value = "1080";
+    requiredFormControl<HTMLInputElement>(form, "viewport_width").value = "1920";
+    requiredFormControl<HTMLInputElement>(form, "viewport_height").value = "1080";
     showInlineMessage(feedback, result.schedule_reviewed
       ? "This site already exists and its schedule has been reviewed."
       : "Site added with the default daily schedule. Review or confirm that schedule below.");
@@ -1312,15 +1322,15 @@ document.querySelector("#capture-site-form").addEventListener("submit", async (e
 });
 
 function displaySecret(title, value) {
-  document.querySelector("#secret-title").textContent = title;
-  document.querySelector("#secret-value").textContent = value;
-  document.querySelector("#secret-panel").hidden = false;
-  document.querySelector("#secret-panel").scrollIntoView({ behavior: "smooth", block: "center" });
+  requiredElement(document, "#secret-title").textContent = title;
+  requiredElement(document, "#secret-value").textContent = value;
+  requiredElement(document, "#secret-panel").hidden = false;
+  requiredElement(document, "#secret-panel").scrollIntoView({ behavior: "smooth", block: "center" });
   showMessage(`${title} created. Copy it before leaving this page.`, false, "credential");
 }
 
-document.querySelector("#reload").addEventListener("click", async (event) => {
-  const refreshButton = event.currentTarget;
+requiredElement(document, "#reload").addEventListener("click", async (event) => {
+  const refreshButton = event.currentTarget as HTMLButtonElement;
   refreshButton.disabled = true;
   try {
     await refresh();
@@ -1332,20 +1342,20 @@ setInterval(() => {
   if (!document.hidden) refresh().catch(() => {});
 }, 60_000);
 
-document.querySelector("#playlist-form").addEventListener("submit", async (event) => {
+requiredElement(document, "#playlist-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const formElement = event.currentTarget;
-  const feedback = document.querySelector("#playlist-feedback");
-  const submitButton = formElement.querySelector("button[type=submit]");
+  const formElement = event.currentTarget as HTMLFormElement;
+  const feedback = requiredElement(document, "#playlist-feedback");
+  const submitButton = requiredElement(formElement, "button[type=submit]");
   const form = new FormData(formElement);
-  const files = [...form.getAll("assets")].filter((value) => value instanceof File && value.size > 0);
+  const files = form.getAll("assets").filter((value): value is File => value instanceof File && value.size > 0);
   const assets = playlistEditSource
-    ? [...document.querySelectorAll("#playlist-current-assets input:checked")].map((input) => ({
+    ? [...requiredElements(document, "#playlist-current-assets input:checked")].map((input) => ({
       sha256: input.dataset.sha256,
       size: Number(input.dataset.size),
     }))
     : [];
-  const selectedSites = [...document.querySelectorAll("#available-sites input:checked")].map((input) => ({
+  const selectedSites = [...requiredElements<HTMLInputElement>(document, "#available-sites input:checked")].map((input) => ({
     capture_id: input.dataset.captureId,
   }));
   if (!files.length && !assets.length && !selectedSites.length) {
@@ -1382,20 +1392,20 @@ document.querySelector("#playlist-form").addEventListener("submit", async (event
   finally { submitButton.disabled = false; }
 });
 
-document.querySelector("#cancel-playlist-edit").addEventListener("click", () => {
+requiredElement(document, "#cancel-playlist-edit").addEventListener("click", () => {
   playlistForm().reset();
   resetPlaylistEditor();
   resetIntervalSelections(playlistForm());
   showMessage("Editing cancelled. Your saved versions are unchanged.", false, "playlist");
 });
 
-document.querySelector("#copy-secret").addEventListener("click", async () => {
-  await copyValue(document.querySelector("#secret-value").textContent, "Value copied. Store it securely on the device.", "credential");
+requiredElement(document, "#copy-secret").addEventListener("click", async () => {
+  await copyValue(requiredElement(document, "#secret-value").textContent, "Value copied. Store it securely on the device.", "credential");
 });
 
-document.querySelector("#hide-secret").addEventListener("click", () => {
-  document.querySelector("#secret-value").textContent = "";
-  document.querySelector("#secret-panel").hidden = true;
+requiredElement(document, "#hide-secret").addEventListener("click", () => {
+  requiredElement(document, "#secret-value").textContent = "";
+  requiredElement(document, "#secret-panel").hidden = true;
 });
 
 refresh().catch((error) => showMessage(error.message, true));

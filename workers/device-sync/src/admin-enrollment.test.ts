@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { createHash, webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { handleAdminRequest } from "./admin.js";
-import { fetchHandler } from "./index.js";
+import { handleAdminRequest } from "./admin.ts";
+import { fetchHandler } from "./index.ts";
 
 const requestID = "a".repeat(64);
 const publicKey = Buffer.alloc(32, 7).toString("base64url");

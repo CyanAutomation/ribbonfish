@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { handleAdminRequest, sha256Hex } from "./admin.js";
+import { handleAdminRequest, sha256Hex } from "./admin.ts";
 
 const digest = "a".repeat(64);
 const rotation = "90s";
