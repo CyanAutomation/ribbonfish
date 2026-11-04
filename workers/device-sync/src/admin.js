@@ -457,6 +457,10 @@ async function readOverview(env) {
       "SUM(CASE WHEN action = 'defer_once' THEN 1 ELSE 0 END) AS candidate_deferrals, " +
       "SUM(CASE WHEN action = 'defer_once' AND observed_result = 'changed' THEN 1 ELSE 0 END) AS candidate_changed, " +
       "SUM(CASE WHEN action = 'defer_once' AND observed_result = 'unchanged' THEN 1 ELSE 0 END) AS candidate_unchanged, " +
+      "SUM(CASE WHEN action = 'defer_once' AND observed_result = 'validator_unchanged' THEN 1 ELSE 0 END) AS candidate_validator_unchanged, " +
+      "SUM(CASE WHEN action = 'defer_once' AND observed_result = 'failed' THEN 1 ELSE 0 END) AS candidate_failed, " +
+      "SUM(CASE WHEN action = 'defer_once' AND observed_result = 'budget_deferred' THEN 1 ELSE 0 END) AS candidate_budget_deferred, " +
+      "SUM(CASE WHEN action = 'defer_once' AND observed_result IS NULL THEN 1 ELSE 0 END) AS candidate_unobserved, " +
       "SUM(CASE WHEN action = 'defer_once' AND (observed_result IN ('validator_unchanged', 'failed', 'budget_deferred') OR observed_result IS NULL) THEN 1 ELSE 0 END) AS candidate_unverified, " +
       "SUM(CASE WHEN action = 'error' THEN 1 ELSE 0 END) AS errors " +
       "FROM capture_decisions WHERE assessed_at >= ? AND action != 'pending'",
@@ -527,6 +531,10 @@ async function readOverview(env) {
         jev_candidate_deferrals: captureDecisions?.candidate_deferrals ?? 0,
         jev_candidate_changed: captureDecisions?.candidate_changed ?? 0,
         jev_candidate_unchanged: captureDecisions?.candidate_unchanged ?? 0,
+        jev_candidate_validator_unchanged: captureDecisions?.candidate_validator_unchanged ?? 0,
+        jev_candidate_failed: captureDecisions?.candidate_failed ?? 0,
+        jev_candidate_budget_deferred: captureDecisions?.candidate_budget_deferred ?? 0,
+        jev_candidate_unobserved: captureDecisions?.candidate_unobserved ?? 0,
         jev_candidate_unverified: captureDecisions?.candidate_unverified ?? 0,
         jev_errors: captureDecisions?.errors ?? 0,
         validator_outcomes: {
