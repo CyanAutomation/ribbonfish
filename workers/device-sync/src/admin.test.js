@@ -321,7 +321,7 @@ test("JEV screenshot skip recommendations are advisory and cause no capture writ
     assert.equal(body.questions.recommendation.type, "choice");
     assert.equal(body.questions.duration_review.type, "choice");
     return Response.json({ model: "typesafe/jev-test", answers: {
-      duration_review: { type: "choice", choice: "review_duration", probabilities: { keep_current: 0.1, review_duration: 0.9 }, confidence: 0.85 },
+      duration_review: { type: "choice", choice: "review_overestimate", probabilities: { keep_current: 0.1, review_overestimate: 0.8, review_underestimate: 0.1 }, confidence: 0.85 },
       recommendation: { type: "choice", choice: "skip_once", probabilities: { capture_now: 0.1, skip_once: 0.9 }, confidence: 0.85 },
       risk: { type: "score", score: 0.2, legend: { 0: "Low", 1: "Moderate", 2: "High" }, probabilities: { 0: 0.8, 1: 0.2, 2: 0 }, confidence: 0.85 },
     } });
@@ -580,7 +580,7 @@ test("overview returns active site runtime samples and both daily usage limits",
   assert.equal(body.capture_targets[0].duration_summary.failed_attempt_count, 2);
   assert.equal(body.capture_targets[0].duration_summary.retry_attempt_count, 1);
   assert.equal(body.capture_targets[0].duration_summary.capture_attempt_failure_rate, 2 / 25);
-  assert.equal(body.capture_targets[0].duration_summary.conservative_review, "review");
+  assert.equal(body.capture_targets[0].duration_summary.reserve_review, "possible_overestimate");
 });
 
 test("capture forecast API returns a queryable daily projection and account-wide quota metadata", async () => {

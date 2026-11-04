@@ -18,7 +18,7 @@ import { normalizeCaptureSelector, validateCaptureSettings, validateCaptureTarge
 import { CaptureTargetNotAllowedError, dispatchDueCaptures, enqueueCapture } from "./capture-workflow.ts";
 import { AssetDeletionInProgressError, markAssetLiveStatement } from "./asset-registry.ts";
 import { callJevDecision, JEVRequestError } from "./jev.ts";
-import { classifyConservativeDurationReview, summarizeCaptureDurations } from "./capture-duration.ts";
+import { classifyReserveReview, summarizeCaptureDurations } from "./capture-duration.ts";
 import {
   calculateDailyCaptureForecast,
   CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS,
@@ -467,7 +467,7 @@ function summarizeDurationAggregate(row, reserveMs) {
     measured_average_ms: finiteNonNegativeOrNull(row?.measured_average_ms),
     reserve_estimated_total_ms: Number(row?.reserve_estimated_total_ms ?? 0),
     configured_reserve_ms: reserveMs,
-    conservative_review: classifyConservativeDurationReview(measuredCount, measuredCoverage, measuredP90, reserveMs),
+    reserve_review: classifyReserveReview(measuredCount, measuredCoverage, measuredP90, reserveMs),
   };
 }
 

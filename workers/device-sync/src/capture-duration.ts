@@ -23,7 +23,7 @@ export interface CaptureDurationSummary {
   measured_average_ms: number | null;
   reserve_estimated_total_ms: number;
   configured_reserve_ms: number;
-  conservative_review: "review" | "insufficient_data" | "not_flagged";
+  reserve_review: "possible_overestimate" | "possible_underestimate" | "insufficient_data" | "not_flagged";
 }
 
 const MIN_MEASURED_SAMPLES_FOR_REVIEW = 20;
@@ -57,7 +57,7 @@ export function summarizeCaptureDurations(
   const measuredHeaderCoverage = samples.length ? measuredCount / samples.length : 0;
   const reserveMs = nonNegative(configuredReserveMs);
   const p90 = percentile(measured, 0.9);
-  const conservativeReview = classifyConservativeDurationReview(
+  const reserveReview = classifyReserveReview(
     measuredCount,
     measuredHeaderCoverage,
     p90,
@@ -79,20 +79,22 @@ export function summarizeCaptureDurations(
     measured_average_ms: measuredCount ? measured.reduce((sum, value) => sum + value, 0) / measuredCount : null,
     reserve_estimated_total_ms: reserveEstimatedTotalMs,
     configured_reserve_ms: reserveMs,
-    conservative_review: conservativeReview,
+    reserve_review: reserveReview,
   };
 }
 
-export function classifyConservativeDurationReview(
+export function classifyReserveReview(
   measuredCount: number,
   measuredHeaderCoverage: number,
   measuredP90Ms: number | null,
   configuredReserveMs: number,
-): CaptureDurationSummary["conservative_review"] {
+): CaptureDurationSummary["reserve_review"] {
   if (measuredCount < MIN_MEASURED_SAMPLES_FOR_REVIEW ||
       measuredHeaderCoverage < MIN_MEASURED_COVERAGE_FOR_REVIEW ||
       configuredReserveMs <= 0 || measuredP90Ms === null) return "insufficient_data";
-  return measuredP90Ms <= configuredReserveMs * MAX_P90_SHARE_OF_RESERVE_FOR_REVIEW ? "review" : "not_flagged";
+  if (measuredP90Ms <= configuredReserveMs * MAX_P90_SHARE_OF_RESERVE_FOR_REVIEW) return "possible_overestimate";
+  if (measuredP90Ms > configuredReserveMs) return "possible_underestimate";
+  return "not_flagged";
 }
 
 function percentile(sorted: number[], quantile: number): number | null {

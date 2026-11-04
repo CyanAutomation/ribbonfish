@@ -31,7 +31,7 @@ test("capture duration summary separates measured samples from reserve estimates
     measured_average_ms: 10_500,
     reserve_estimated_total_ms: 180_000,
     configured_reserve_ms: 60_000,
-    conservative_review: "review",
+    reserve_review: "possible_overestimate",
   });
 });
 
@@ -40,7 +40,7 @@ test("reserve-estimated and unknown samples cannot create a conservative-runtime
     ...Array.from({ length: 19 }, () => ({ browser_ms: 1000, browser_ms_source: "response_header", reserve_ms: 60_000 })),
     ...Array.from({ length: 20 }, () => ({ browser_ms: 60_000, browser_ms_source: "reserve", reserve_ms: 60_000 })),
   ];
-  assert.equal(summarizeCaptureDurations(samples, 60_000).conservative_review, "insufficient_data");
+  assert.equal(summarizeCaptureDurations(samples, 60_000).reserve_review, "insufficient_data");
 });
 
 test("potential-overestimate flag requires measured coverage as well as a low measured p90", () => {
@@ -49,5 +49,14 @@ test("potential-overestimate flag requires measured coverage as well as a low me
     ...Array.from({ length: 6 }, () => ({ browser_ms: 60_000, browser_ms_source: "reserve", reserve_ms: 60_000 })),
   ];
   assert.equal(summarizeCaptureDurations(samples, 60_000).measured_header_coverage, 20 / 26);
-  assert.equal(summarizeCaptureDurations(samples, 60_000).conservative_review, "insufficient_data");
+  assert.equal(summarizeCaptureDurations(samples, 60_000).reserve_review, "insufficient_data");
+});
+
+test("reserve review distinguishes possible underestimates from in-range measurements", () => {
+  const measured = (duration: number) => Array.from({ length: 20 }, () => ({
+    browser_ms: duration, browser_ms_source: "response_header", reserve_ms: 60_000,
+  }));
+  assert.equal(summarizeCaptureDurations(measured(60_001), 60_000).reserve_review, "possible_underestimate");
+  assert.equal(summarizeCaptureDurations(measured(30_001), 60_000).reserve_review, "not_flagged");
+  assert.equal(summarizeCaptureDurations(measured(30_000), 60_000).reserve_review, "possible_overestimate");
 });

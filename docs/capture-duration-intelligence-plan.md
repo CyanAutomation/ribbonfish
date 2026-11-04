@@ -36,8 +36,8 @@ The existing conditional ETag/Last-Modified check can reuse a valid cached scree
 
 - Added `GET /admin/api/captures/{capture_id}/duration-samples`. It pages through per-attempt rows, clamps queries to 90-day retention, and returns source-separated p50/p90, sample coverage, reserve totals, failure and retry counts. Summary work is capped at 50,000 rows.
 - Added one sample for each attempt that started Browser Run, including failed attempts. Rows record measured versus reserve-estimated usage, reserve snapshot, attempt number, elapsed Browser Run and capture operation time, result, readiness mode, and the exact configured selector. Validator hits and budget deferrals do not create a Browser Run attempt row. JEV receives the readiness mode but not the selector text.
-- Added a trailing-30-day per-site summary to the overview API and Capture Efficiency page. It separates measured p50/p90 and coverage from reserve estimates, reports failures/retries and readiness mode, and flags a possible reserve overestimate only after 20 measured attempts, 80% measured-header coverage, and p90 at most half the configured reserve.
-- Extended the existing pre-due JEV shadow assessment with the latest 500 duration attempts from the trailing 30-day review window. It can recommend `review_duration`; the server returns that recommendation only when the deterministic evidence rule passes and JEV confidence is at least 0.8. It cannot change reserve, readiness settings, screenshot scheduling, or queue behavior.
+- Added a trailing-30-day per-site summary to the overview API and Capture Efficiency page. It separates measured p50/p90 and coverage from reserve estimates, reports failures/retries and readiness mode, and flags a possible reserve overestimate when p90 is at most half the configured reserve or a possible underestimate when p90 exceeds the reserve. Both cues require at least 20 measured attempts and 80% measured-header coverage.
+- Extended the existing pre-due JEV shadow assessment with the latest 500 duration attempts from the trailing 30-day review window. It can recommend `review_overestimate` or `review_underestimate`; the server returns a review suggestion only when it matches the deterministic evidence direction and JEV confidence is at least 0.8. It cannot change reserve, readiness settings, screenshot scheduling, or queue behavior.
 - Added migration `0015_capture_duration_samples.sql`; apply it before deploying the Worker and management assets.
 
 The existing daily forecast still uses its successful-history average, which can include legacy and reserve-estimated rows. The new per-site duration section and API expose the source mix for analysis; splitting the forecast projection by source remains follow-up work.
@@ -52,7 +52,7 @@ The existing daily forecast still uses its successful-history average, which can
 ### 2. Expand Capture Efficiency
 
 - [x] Show source-separated per-target p50/p90, sample counts, header coverage, failure/retry counts, readiness mode, and configured reserve.
-- [x] Add a possible-overestimate review cue; it does not change the reserve and does not infer measured runtime for headerless attempts.
+- [x] Add possible-overestimate and possible-underestimate review cues; each requires 20 measured samples and 80% measured-header coverage. Cues do not change the reserve and do not infer measured runtime for headerless attempts.
 - [ ] Split the daily forecast projection into measured and reserve-estimated source totals.
 
 ### 3. Calibrate readiness settings with reviewed captures
@@ -65,7 +65,7 @@ The existing daily forecast still uses its successful-history average, which can
 
 ### 4. Extend JEV pre-capture advice, then add readiness recommendations
 
-- [x] Extend the pre-due JEV schema with an advisory to keep the current reserve or request operator review. Include measured timing distribution, source coverage, attempt failures/retries, and readiness mode; omit URLs, selectors, and screenshot pixels.
+- [x] Extend the pre-due JEV schema with an advisory to keep the current reserve or request direction-specific operator review. Include measured timing distribution, source coverage, attempt failures/retries, and readiness mode; omit URLs, selectors, and screenshot pixels.
 - [x] Save the advisory with the existing due-time shadow decision; low confidence, insufficient evidence, or provider failure leaves settings and schedule unchanged.
 - [ ] Collect reviewed screenshot completeness outcomes before asking JEV to advise page-readiness policy.
 - [ ] Only compare recommendations with completed, content-verified or human-reviewed outcomes; validator-only skips, budget deferrals, and failures do not verify screenshot quality.

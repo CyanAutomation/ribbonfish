@@ -10,8 +10,8 @@ import {
 const sampleAnswers = {
   duration_review: {
     type: "choice",
-    choice: "review_duration",
-    probabilities: { keep_current: 0.2, review_duration: 0.8 },
+    choice: "review_overestimate",
+    probabilities: { keep_current: 0.2, review_overestimate: 0.4, review_underestimate: 0.4 },
     confidence: 0.8,
   },
   recommendation: {
@@ -145,7 +145,7 @@ test("capture assessment state includes only allowlisted metadata and no private
       measured_average_ms: 11_000,
       reserve_estimated_total_ms: 180_000,
       configured_reserve_ms: 60_000,
-      conservative_review: "review" as const,
+      reserve_review: "possible_overestimate" as const,
     },
   };
   const state = buildCaptureAssessmentState(input, 10_000);
@@ -174,7 +174,7 @@ test("capture assessment state includes only allowlisted metadata and no private
       measured_average_ms: 11_000,
       reserve_estimated_total_ms: 180_000,
       configured_reserve_ms: 60_000,
-      conservative_review: "review",
+      reserve_review: "possible_overestimate",
     },
     readiness_mode: "domcontentloaded",
     recent_content_change_count: 1,
@@ -185,13 +185,17 @@ test("capture assessment state includes only allowlisted metadata and no private
 
 test("JEV duration review remains bounded by server-side evidence and confidence", () => {
   const eligible = {
-    conservative_review: "review" as const,
+    reserve_review: "possible_overestimate" as const,
   } as import("./capture-duration.ts").CaptureDurationSummary;
-  assert.equal(durationReviewRecommendation({ duration_review: { choice: "review_duration", confidence: 0.9 } }, eligible), "review");
-  assert.equal(durationReviewRecommendation({ duration_review: { choice: "review_duration", confidence: 0.79 } }, eligible), "keep_current");
+  assert.equal(durationReviewRecommendation({ duration_review: { choice: "review_overestimate", confidence: 0.9 } }, eligible), "review_overestimate");
+  assert.equal(durationReviewRecommendation({ duration_review: { choice: "review_overestimate", confidence: 0.79 } }, eligible), "keep_current");
   assert.equal(durationReviewRecommendation({ duration_review: { choice: "keep_current", confidence: 0.99 } }, eligible), "keep_current");
-  assert.equal(durationReviewRecommendation({ duration_review: { choice: "review_duration", confidence: 0.99 } }, {
-    ...eligible, conservative_review: "insufficient_data",
+  assert.equal(durationReviewRecommendation({ duration_review: { choice: "review_underestimate", confidence: 0.99 } }, eligible), "keep_current");
+  const underReserve = { ...eligible, reserve_review: "possible_underestimate" as const };
+  assert.equal(durationReviewRecommendation({ duration_review: { choice: "review_underestimate", confidence: 0.99 } }, underReserve), "review_underestimate");
+  assert.equal(durationReviewRecommendation({ duration_review: { choice: "review_overestimate", confidence: 0.99 } }, underReserve), "keep_current");
+  assert.equal(durationReviewRecommendation({ duration_review: { choice: "review_overestimate", confidence: 0.99 } }, {
+    ...eligible, reserve_review: "insufficient_data",
   }), "insufficient_data");
 });
 

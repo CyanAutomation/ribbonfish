@@ -651,8 +651,10 @@ function renderCaptureTargets(targets, decisions = []) {
     if (backgroundDecision) {
       const suggestion = backgroundDecision.action === "defer_once" ? "A later capture could be suitable" :
         backgroundDecision.action === "error" ? "Assessment unavailable" : "Keep the scheduled capture";
-      const durationSuggestion = backgroundDecision.duration_review === "review"
-        ? " JEV recommends an operator review of capture timing; no settings were changed."
+      const durationSuggestion = backgroundDecision.duration_review === "review_overestimate"
+        ? " JEV recommends an operator review for a possible reserve overestimate; no settings were changed."
+        : backgroundDecision.duration_review === "review_underestimate"
+          ? " JEV recommends an operator review for a possible reserve underestimate; no settings were changed."
         : "";
       metadata.dataset.assessment = `Background assessment ${formatTimestamp(backgroundDecision.assessed_at)} for ${formatTimestamp(backgroundDecision.due_at)}: ${suggestion}. ${backgroundDecision.reason} ${formatCaptureObservation(backgroundDecision)}${durationSuggestion} The schedule was unchanged.`;
     }
@@ -1213,8 +1215,10 @@ function renderJevDecision(result, title, { captureID } = {}) {
     const label = key.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
     item.append(node("h4", label));
     if (key === "duration_review") {
-      const advice = result.duration_review === "review"
-        ? "The measured timing evidence supports an operator review of the accounting reserve. No setting was changed."
+      const advice = result.duration_review === "review_overestimate"
+        ? "Measured p90 is at most half the configured reserve. Review the accounting reserve for possible overestimation; no setting was changed."
+        : result.duration_review === "review_underestimate"
+          ? "Measured p90 exceeds the configured reserve. Review the accounting reserve for possible underestimation; no setting was changed."
         : result.duration_review === "insufficient_data"
           ? "There is not enough measured timing evidence to recommend a reserve review."
           : "Keep the current accounting reserve based on the available timing evidence.";

@@ -72,7 +72,7 @@ export function renderCaptureEfficiencyModule(
   durationSection.append(node("h3", "Per-site capture duration samples", undefined, ownerDocument));
   durationSection.append(node(
     "p",
-    "Measured Browser Run time, reserve estimates, and screenshot readiness are separate signals. A possible reserve overestimate is a review cue only; it does not change the configured reserve.",
+    "Measured Browser Run time, reserve estimates, and screenshot readiness are separate signals. Reserve review cues identify possible overestimates or underestimates; they do not change the configured reserve.",
     "muted",
     ownerDocument,
   ));
@@ -105,13 +105,15 @@ export function renderCaptureEfficiencyModule(
         "muted",
         ownerDocument,
       ));
-      const assessment = summary.conservative_review === "review"
-        ? "Possible reserve overestimate: measured p90 is at most half the configured reserve. Review this target; the reserve remains unchanged."
-        : summary.conservative_review === "not_flagged"
-          ? "No possible reserve overestimate indicated by the current measured samples."
+      const assessment = summary.reserve_review === "possible_overestimate"
+        ? "Possible reserve overestimate: measured p90 is at most half the configured reserve. Review the accounting reserve; it remains unchanged."
+        : summary.reserve_review === "possible_underestimate"
+          ? "Possible reserve underestimate: measured p90 exceeds the configured reserve. Review the accounting reserve; it remains unchanged."
+          : summary.reserve_review === "not_flagged"
+            ? "No possible reserve overestimate or underestimate indicated by the current measured samples."
           : "Not enough measured samples and coverage to assess the reserve.";
       item.append(node("p", assessment,
-        summary.conservative_review === "review" ? "capture-duration-analysis__review" : "muted", ownerDocument));
+        summary.reserve_review === "possible_overestimate" || summary.reserve_review === "possible_underestimate" ? "capture-duration-analysis__review" : "muted", ownerDocument));
     }
     durationList.append(item);
   }
