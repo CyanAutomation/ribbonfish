@@ -602,10 +602,6 @@ function renderCaptureTargets(targets, decisions = []) {
       item.selected = option.value === target.capture_interval_seconds;
       intervalSelect.append(item);
     }
-    intervalSelect.addEventListener("change", () => {
-      intervalOverrides.set(target.capture_id, Number(intervalSelect.value));
-      updateForecast();
-    });
     intervalLabel.append(intervalSelect);
     const saveInterval = button(target.schedule_reviewed ? "Save screenshot schedule" : "Confirm schedule", "secondary");
     saveInterval.addEventListener("click", async () => {
