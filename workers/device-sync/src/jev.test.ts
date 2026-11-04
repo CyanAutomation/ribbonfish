@@ -4,9 +4,16 @@ import { callJevDecision, validateAnswers, JEVRequestError } from "./jev.ts";
 import {
   buildCaptureAssessmentState,
   captureAssessmentQuestions,
+  durationReviewRecommendation,
 } from "./jev-use-cases.ts";
 
 const sampleAnswers = {
+  duration_review: {
+    type: "choice",
+    choice: "review_overestimate",
+    probabilities: { keep_current: 0.2, review_overestimate: 0.4, review_underestimate: 0.4 },
+    confidence: 0.8,
+  },
   recommendation: {
     type: "choice",
     choice: "skip_once",
@@ -123,6 +130,23 @@ test("capture assessment state includes only allowlisted metadata and no private
       { browser_ms: 3000, browser_ms_source: "response_header", sha256: "a", captured_at: 9000 },
       { browser_ms: 2000, browser_ms_source: "response_header", sha256: "b", captured_at: 9500 },
     ],
+    duration_summary: {
+      total_samples: 25,
+      measured_sample_count: 20,
+      reserve_estimated_sample_count: 3,
+      unknown_sample_count: 2,
+      failed_attempt_count: 1,
+      retry_attempt_count: 2,
+      capture_attempt_failure_rate: 0.04,
+      retry_attempt_rate: 0.08,
+      measured_header_coverage: 0.8,
+      measured_p50_ms: 10_000,
+      measured_p90_ms: 18_000,
+      measured_average_ms: 11_000,
+      reserve_estimated_total_ms: 180_000,
+      configured_reserve_ms: 60_000,
+      reserve_review: "possible_overestimate" as const,
+    },
   };
   const state = buildCaptureAssessmentState(input, 10_000);
   assert.deepEqual(JSON.parse(state), {
@@ -135,10 +159,44 @@ test("capture assessment state includes only allowlisted metadata and no private
     recent_capture_count: 3,
     browser_duration_sample_count: 2,
     median_browser_ms: 2500,
+    capture_duration: {
+      total_samples: 25,
+      measured_sample_count: 20,
+      reserve_estimated_sample_count: 3,
+      unknown_sample_count: 2,
+      failed_attempt_count: 1,
+      retry_attempt_count: 2,
+      capture_attempt_failure_rate: 0.04,
+      retry_attempt_rate: 0.08,
+      measured_header_coverage: 0.8,
+      measured_p50_ms: 10_000,
+      measured_p90_ms: 18_000,
+      measured_average_ms: 11_000,
+      reserve_estimated_total_ms: 180_000,
+      configured_reserve_ms: 60_000,
+      reserve_review: "possible_overestimate",
+    },
+    readiness_mode: "domcontentloaded",
     recent_content_change_count: 1,
     unchanged_capture_streak: 1,
   });
   assert.doesNotMatch(state, /example\.com|user|pass|private|token|secret|Raw stack/);
+});
+
+test("JEV duration review remains bounded by server-side evidence and confidence", () => {
+  const eligible = {
+    reserve_review: "possible_overestimate" as const,
+  } as import("./capture-duration.ts").CaptureDurationSummary;
+  assert.equal(durationReviewRecommendation({ duration_review: { choice: "review_overestimate", confidence: 0.9 } }, eligible), "review_overestimate");
+  assert.equal(durationReviewRecommendation({ duration_review: { choice: "review_overestimate", confidence: 0.79 } }, eligible), "keep_current");
+  assert.equal(durationReviewRecommendation({ duration_review: { choice: "keep_current", confidence: 0.99 } }, eligible), "keep_current");
+  assert.equal(durationReviewRecommendation({ duration_review: { choice: "review_underestimate", confidence: 0.99 } }, eligible), "keep_current");
+  const underReserve = { ...eligible, reserve_review: "possible_underestimate" as const };
+  assert.equal(durationReviewRecommendation({ duration_review: { choice: "review_underestimate", confidence: 0.99 } }, underReserve), "review_underestimate");
+  assert.equal(durationReviewRecommendation({ duration_review: { choice: "review_overestimate", confidence: 0.99 } }, underReserve), "keep_current");
+  assert.equal(durationReviewRecommendation({ duration_review: { choice: "review_overestimate", confidence: 0.99 } }, {
+    ...eligible, reserve_review: "insufficient_data",
+  }), "insufficient_data");
 });
 
 test("JEV state must be a bounded JSON object and the requested model cannot be overridden", async () => {
@@ -168,5 +226,5 @@ test("JEV state must be a bounded JSON object and the requested model cannot be 
 });
 
 test("fixed JEV schemas declare expected answer keys", () => {
-  assert.deepEqual(Object.keys(captureAssessmentQuestions), ["recommendation", "risk"]);
+  assert.deepEqual(Object.keys(captureAssessmentQuestions), ["duration_review", "recommendation", "risk"]);
 });

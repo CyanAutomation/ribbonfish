@@ -1,5 +1,6 @@
 import { buildCaptureAssessmentState, captureAssessmentQuestions, type CaptureAssessmentTarget } from './jev-use-cases.ts';
 import { callJevDecision, type JevDecisionResult } from './jev.ts';
+import { summarizeCaptureDurations } from './capture-duration.ts';
 
 interface PolicyTarget extends CaptureAssessmentTarget {
   current_sha256: string | null;
@@ -9,11 +10,15 @@ interface CaptureTarget extends PolicyTarget {
   capture_id: string;
   current_size: number | null;
 }
-type AssessmentEnv = Pick<ManagementBindings, 'DB' | 'ASSETS'> & { OPENROUTER_API_KEY?: string };
+type AssessmentEnv = Pick<ManagementBindings, 'DB' | 'ASSETS'> & {
+  OPENROUTER_API_KEY?: string;
+  CAPTURE_BUDGET_RESERVE_MS?: string;
+};
 type Decision = Pick<JevDecisionResult, 'answers'>;
 
 
 const MIN_JEV_CONFIDENCE = 0.8;
+const DURATION_REVIEW_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 // The model supplies a suggestion; deterministic rules bound any prospective deferral.
 export function decideCapturePolicy(target: PolicyTarget, decision: Decision | null, now: number) {
@@ -39,6 +44,8 @@ export function decideCapturePolicy(target: PolicyTarget, decision: Decision | n
 
 // Shadow decisions are recorded ahead of time and never modify capture schedules.
 export async function assessUpcomingCaptures(env: AssessmentEnv, now = Date.now(), decide = callJevDecision) {
+  const reserveValue = Number(env.CAPTURE_BUDGET_RESERVE_MS);
+  const reserveMs = Number.isSafeInteger(reserveValue) && reserveValue >= 0 ? reserveValue : 60_000;
   const rows = await env.DB.prepare(
     "SELECT t.*, (SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued','running') LIMIT 1) AS job_status " +
     "FROM capture_targets t WHERE t.enabled = 1 AND t.next_due_at > ? AND t.next_due_at <= ? " +
@@ -51,11 +58,16 @@ export async function assessUpcomingCaptures(env: AssessmentEnv, now = Date.now(
       .bind(target.capture_id, target.next_due_at, now, now - 120_000).run();
     if (claim.meta?.changes !== 1) continue;
     try {
-      const [history, asset] = await Promise.all([
+      const [history, durationSamples, asset] = await Promise.all([
         env.DB.prepare('SELECT sha256, browser_ms, browser_ms_source, captured_at FROM capture_history WHERE capture_id = ? ORDER BY captured_at DESC LIMIT 10').bind(target.capture_id).all<NonNullable<CaptureAssessmentTarget['history']>[number]>(),
+        env.DB.prepare(
+          "SELECT browser_ms, browser_ms_source, reserve_ms, attempt, outcome FROM capture_duration_samples " +
+          "WHERE capture_id = ? AND sampled_at >= ? ORDER BY sampled_at DESC LIMIT 500",
+        ).bind(target.capture_id, now - DURATION_REVIEW_WINDOW_MS).all<{ browser_ms: number; browser_ms_source: string; reserve_ms: number; attempt: number; outcome: string }>(),
         target.current_sha256 ? env.ASSETS.head(`assets/${target.current_sha256}`) : Promise.resolve(null),
       ]);
       target.history = history.results ?? [];
+      target.duration_summary = summarizeCaptureDurations(durationSamples.results ?? [], reserveMs);
       target.current_asset_present = Boolean(asset && asset.size === target.current_size);
       const state = buildCaptureAssessmentState(target, now);
       const result = await decide(env, { state, questions: captureAssessmentQuestions });
