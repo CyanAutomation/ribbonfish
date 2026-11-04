@@ -198,7 +198,8 @@ in Wrangler's local mode.
 | Method and path | Behavior |
 | --- | --- |
 | `GET /admin/` | Browser management panel |
-| `GET /admin/api/overview` | Devices, playlist revisions, current pointer, missing active assets, unresolved asset integrity issues, and recent audit events |
+| `GET /admin/api/overview` | Devices, playlist revisions, current pointer, missing active assets, unresolved asset integrity issues, recent audit events, and capture usage forecast |
+| `GET /admin/api/capture-forecast` | Current daily Ribbonfish Browser Run usage, free-plan quota, and per-site forecast; read-only |
 | `GET /admin/api/intervals` | Supported screenshot and rotation interval values and defaults |
 | `GET /admin/api/devices/{device_id}/health` | Latest validated report, current derived health status, and up to 50 recent health transitions |
 | `GET /admin/api/devices/{device_id}/health-history?limit=100&since={unix_ms}` | Five-minute health samples and health transitions; default window is 30 days, maximum 500 rows per stream |
@@ -221,6 +222,27 @@ in Wrangler's local mode.
 | `DELETE /admin/api/playlists/{playlist_id}` | Delete all revisions of an inactive playlist and its D1 image references; the active playlist is protected |
 | `PUT /admin/api/active-playlist` | Activate or roll back to an existing revision; body: `{"playlist_id":"operations","revision":"r-…"}` |
 | `GET /healthz` | Minimal readiness check; returns 503 if the active playlist or any referenced R2 object is missing |
+
+`GET /admin/api/capture-forecast` returns `generated_at`, `plan`, `quota_scope`,
+`other_account_usage_included`, `daily_usage`, and a `forecast` object. The
+forecast includes a daily total, completeness flag, quota and Worker-budget
+limits, and one entry per reviewed site in the active playlist. Each entry
+reports its interval, expected captures per day, runtime estimate, sample count,
+runtime source, and predicted milliseconds per day. The runtime is the average
+of that site's retained successful screenshot samples (up to 10 per site and
+30 days). Sites without samples use the active sites' weighted runtime average;
+the forecast stays incomplete until some active site has a sample. Changing a
+site interval through `PATCH /admin/api/captures/{capture_id}` changes the next
+forecast response. The overview API includes the same projection under
+`capture_efficiency.forecast`.
+
+The free-plan allowance is 600,000 ms per UTC day. The reported `daily_usage`
+and projection cover Ribbonfish's captures only; Cloudflare shares browser
+hours across the account, and usage from other Browser Run workloads is not
+included. The projection assumes every scheduled capture starts Browser Run;
+trusted unchanged validators may reduce real usage, while manual runs and
+failures can increase it. Cloudflare's Browser Run dashboard remains the
+account-wide source of actual usage.
 
 `GET /admin/api/intervals` returns the five supported values and defaults:
 capture values are 900, 1800, 3600, 21600, and 86400 seconds (default 86400);
