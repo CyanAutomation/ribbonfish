@@ -1,4 +1,5 @@
 import { api } from "./api.ts";
+import { renderCaptureUsageForecast } from "./capture-forecast-view.ts";
 import { formatCaptureObservation, formatJevCaptureOutcomeSummary, formatRunTime } from "./capture-presentation.ts";
 import { node, button, statusBadge, actionDisclosure } from "./ui-primitives.ts";
 import { initModuleNavigation } from "./module-navigation.ts";
@@ -522,8 +523,21 @@ function renderCaptureTargets(targets, decisions = [], efficiency = null) {
     const runTime = recent.browser_run_ms ?? {};
     const usage = node("details", undefined, "usage-details");
     usage.append(node("summary", "Capture efficiency and Browser Run usage"));
+    const forecastContainer = node("div", undefined, "browser-usage-forecast-container");
+    const forecastTargets = targets.map((target) => ({
+      capture_id: target.capture_id,
+      display_label: target.name || target.display_url,
+      capture_interval_seconds: target.capture_interval_seconds,
+      active_in_playlist: target.active_in_playlist === true,
+      schedule_reviewed: target.schedule_reviewed === true,
+      average_browser_ms: target.average_browser_ms ?? null,
+      browser_ms_samples: Number(target.browser_ms_samples) || 0,
+    }));
+    const intervalOverrides = new Map();
+    const updateForecast = () => renderCaptureUsageForecast(forecastContainer, forecastTargets, daily, intervalOverrides);
+    updateForecast();
+    usage.append(forecastContainer);
     usage.append(node("p",
-      `Browser Run today: ${formatRunTime(daily.accounted_ms)} of ${formatRunTime(daily.budget_ms)} accounted. ` +
       `Last 30 days: ${recent.successful_screenshots ?? 0} screenshots completed, ${recent.validator_unchanged ?? 0} unchanged validator checks skipped Browser Run, ` +
       `${recent.successful_unclassified ?? 0} older results unclassified. Browser Run time: ${formatRunTime(runTime.response_header)} measured, ` +
       `${formatRunTime(runTime.reserve)} reserve-estimated, ${runTime.unclassified_jobs ?? 0} older jobs unclassified. ` +
@@ -615,6 +629,10 @@ function renderCaptureTargets(targets, decisions = [], efficiency = null) {
       item.selected = option.value === target.capture_interval_seconds;
       intervalSelect.append(item);
     }
+    intervalSelect.addEventListener("change", () => {
+      intervalOverrides.set(target.capture_id, Number(intervalSelect.value));
+      updateForecast();
+    });
     intervalLabel.append(intervalSelect);
     const saveInterval = button(target.schedule_reviewed ? "Save screenshot schedule" : "Confirm schedule", "secondary");
     saveInterval.addEventListener("click", async () => {

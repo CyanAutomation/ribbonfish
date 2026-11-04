@@ -410,6 +410,40 @@ label { display: grid; gap: var(--space-1); color: var(--color-text-label); font
 .usage-details { margin: var(--space-4) 0; color: var(--color-muted); }
 .usage-details > summary { color: var(--color-brand); font-weight: 650; cursor: pointer; }
 .usage-details p { margin: var(--space-2) 0; line-height: 1.5; }
+.browser-usage-forecast { display: grid; gap: var(--space-4); margin-top: var(--space-4); color: var(--color-ink); }
+.browser-usage-forecast__metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: var(--space-3); }
+.browser-usage-forecast__metric { display: grid; gap: var(--space-1); padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface); }
+.browser-usage-forecast__metric span { color: var(--color-muted); font-size: var(--font-size-small); }
+.browser-usage-forecast__metric strong { color: var(--color-heading); font-size: var(--font-size-emphasis); }
+.browser-usage-chart { display: grid; gap: var(--space-3); margin: 0; padding: var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-control); background: var(--color-surface); }
+.browser-usage-chart__caption { color: var(--color-heading); font-weight: 650; }
+.browser-usage-chart__row { display: grid; gap: var(--space-2); }
+.browser-usage-chart__heading { display: flex; justify-content: space-between; gap: var(--space-3); color: var(--color-muted); font-size: var(--font-size-small); }
+.browser-usage-chart__heading strong { color: var(--color-heading); white-space: nowrap; }
+.browser-usage-chart__track { position: relative; height: 1rem; border-radius: var(--radius-pill); background: var(--color-neutral-bg); }
+.browser-usage-chart__bar, .browser-usage-chart__stack { position: absolute; inset: 0 auto 0 0; height: 100%; border-radius: inherit; }
+.browser-usage-chart__bar--actual { background: var(--color-brand); }
+.browser-usage-chart__stack { display: flex; overflow: hidden; max-width: 100%; }
+.browser-usage-chart__segment { display: block; flex: none; height: 100%; }
+.browser-usage-chart__segment--0 { background: #175cd3; }
+.browser-usage-chart__segment--1 { background: #0e9384; }
+.browser-usage-chart__segment--2 { background: #7f56d9; }
+.browser-usage-chart__segment--3 { background: #dc6803; }
+.browser-usage-chart__segment--4 { background: #c11574; }
+.browser-usage-chart__segment--5 { background: #039855; }
+.browser-usage-chart__marker { position: absolute; z-index: 1; top: -.25rem; bottom: -.25rem; border-left: 2px solid var(--color-danger); pointer-events: none; }
+.browser-usage-chart__marker--worker-budget { border-left-color: var(--color-warning-border); border-left-style: dashed; }
+.browser-usage-chart__axis { display: flex; justify-content: space-between; color: var(--color-muted-soft); font-size: var(--font-size-caption); }
+.browser-usage-forecast__legend { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin: 0; padding: 0; list-style: none; font-size: var(--font-size-small); }
+.browser-usage-forecast__legend-item::before { display: inline-block; width: .7rem; height: .7rem; margin-right: var(--space-2); border-radius: 50%; background: var(--color-danger); content: ""; }
+.browser-usage-forecast__legend-item--worker::before { background: var(--color-warning-border); }
+.browser-usage-forecast__note { margin: 0; color: var(--color-muted); font-size: var(--font-size-small); line-height: 1.5; }
+.browser-usage-forecast__sites { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.browser-usage-forecast__site { display: grid; grid-template-columns: .75rem minmax(0, 1fr); gap: var(--space-1) var(--space-2); padding: var(--space-2) 0; border-top: 1px solid var(--color-border-subtle); }
+.browser-usage-forecast__site strong, .browser-usage-forecast__site span:not(.browser-usage-forecast__site-swatch) { grid-column: 2; }
+.browser-usage-forecast__site strong { color: var(--color-heading); }
+.browser-usage-forecast__site span:not(.browser-usage-forecast__site-swatch) { color: var(--color-muted); font-size: var(--font-size-small); line-height: 1.45; }
+.browser-usage-forecast__site-swatch { grid-row: 1 / span 2; width: .65rem; height: .65rem; margin-top: .2rem; border-radius: 50%; }
 @media (max-width: 420px) { .section-heading { align-items: flex-start; flex-wrap: wrap; } }
 .playlist-group + .playlist-group { margin-top: var(--space-6); }
 .playlist-group > h3 { margin: 0 0 var(--space-3); overflow-wrap: anywhere; }
