@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { JSDOM } from "jsdom";
 import { parse } from "parse5";
 import postcss from "postcss";
+import { renderCaptureUsageForecast } from "../public/admin/capture-forecast-view.ts";
 import {
   createFleetOpenUI,
   OPENUI_STARTER_SOURCE,
@@ -743,4 +745,49 @@ test("capture issues are grouped and surfaced before healthy sites without chang
   assert.deepEqual(prioritizeCaptureTargets(targets).map((item) => item.display_url), ["first", "second", "review", "healthy"]);
   assert.deepEqual(summarizeCaptureErrors(targets), [{ message: "Budget reached", count: 2 }]);
   assert.equal(targets[0].display_url, "healthy");
+});
+
+test("Browser Run forecast component exposes actual usage, quota markers, and per-site estimates", () => {
+  const dom = new JSDOM("<section id='forecast'></section>");
+  const forecast = dom.window.document.querySelector("#forecast");
+  const targets = [{
+    capture_id: "hourly",
+    display_label: "Hourly site",
+    capture_interval_seconds: 3600,
+    active_in_playlist: true,
+    schedule_reviewed: true,
+    average_browser_ms: 2000,
+    browser_ms_samples: 4,
+  }];
+  const dailyUsage = { accounted_ms: 12_000, budget_ms: 540_000, free_plan_limit_ms: 600_000 };
+
+  renderCaptureUsageForecast(forecast, targets, dailyUsage);
+
+  assert.equal(forecast.querySelector("figure")?.getAttribute("aria-label"), "Daily Browser Run usage forecast");
+  assert.match(forecast.querySelector("[data-testid='forecast-total']")?.textContent ?? "", /48s/);
+  assert.match(forecast.textContent, /0m 12s of 10m 0s/);
+  assert.match(forecast.textContent, /Hourly site/);
+  assert.match(forecast.textContent, /Cloudflare account-wide allowance/);
+  assert.ok(forecast.querySelector("[data-quota-marker='free-plan']"));
+  assert.ok(forecast.querySelector("[data-quota-marker='worker-budget']"));
+
+  renderCaptureUsageForecast(forecast, targets, dailyUsage, new Map([["hourly", 21_600]]));
+  assert.match(forecast.querySelector("[data-testid='forecast-total']")?.textContent ?? "", /8s/);
+});
+
+test("Browser Run forecast component requests a sample before inventing a runtime", () => {
+  const dom = new JSDOM("<section id='forecast'></section>");
+  const forecast = dom.window.document.querySelector("#forecast");
+  renderCaptureUsageForecast(forecast, [{
+    capture_id: "new",
+    display_label: "New site",
+    capture_interval_seconds: 86400,
+    active_in_playlist: true,
+    schedule_reviewed: true,
+    average_browser_ms: null,
+    browser_ms_samples: 0,
+  }], { accounted_ms: 0, budget_ms: 600_000, free_plan_limit_ms: 600_000 });
+
+  assert.match(forecast.textContent, /Forecast unavailable until at least one active capture completes/);
+  assert.match(forecast.textContent, /New site/);
 });

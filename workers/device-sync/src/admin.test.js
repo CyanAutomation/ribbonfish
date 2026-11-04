@@ -39,6 +39,7 @@ class FakeDatabase {
       bind(...boundValues) { values = boundValues; return this; },
       get values() { return values; },
       async first() {
+        if (sql.includes("FROM capture_usage")) return database.captureUsage ?? null;
         if (sql.includes("FROM capture_targets")) return database.captureTarget ?? null;
         if (sql.includes("FROM active_playlist")) return database.activePlaylist;
         if (sql.includes("FROM playlists WHERE playlist_id")) {
@@ -58,6 +59,8 @@ class FakeDatabase {
         return null;
       },
       async all() {
+        if (sql.includes("AVG(browser_ms)")) return { results: database.captureRuntimeAverages ?? [] };
+        if (sql.includes("FROM capture_targets t")) return { results: database.captureTargets ?? [] };
         if (sql.includes("FROM capture_history")) return { results: database.captureHistory ?? [] };
         if (sql.includes("FROM playlists WHERE playlist_id")) {
           return { results: [...database.playlists.values()]
@@ -438,6 +441,100 @@ test("overview omits device token hashes and reports missing active assets", asy
   assert.equal(body.environment, "development");
   assert.deepEqual(body.asset_health.missing, [{ sha256: digest, expected_size: 4, actual_size: null }]);
   assert.deepEqual(body.asset_health.integrity_issues, env.DB.assetIntegrityIssues);
+});
+
+test("overview returns active site runtime samples and both daily usage limits", async () => {
+  const env = testEnvironment();
+  const day = new Date().toISOString().slice(0, 10);
+  env.DAILY_BROWSER_BUDGET_MS = "540000";
+  env.DB.captureUsage = { usage_day: day, browser_ms: 42_000 };
+  env.DB.captureTargets = [{
+    capture_id: captureID,
+    url: "https://status.example.com/",
+    name: "Status",
+    capture_interval_seconds: 3600,
+    viewport_width: 1920,
+    viewport_height: 1080,
+    wait_for_selector: null,
+    sha256: digest,
+    size: 4,
+    last_success_at: 100,
+    last_error: null,
+    next_due_at: 200,
+    schedule_reviewed_at: 100,
+    job_status: null,
+    active_in_playlist: 1,
+  }];
+  env.DB.captureRuntimeAverages = [{ capture_id: captureID, average_browser_ms: 2100, sample_count: 4 }];
+
+  const response = await handleAdminRequest(request("/admin/api/overview"), env);
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(body.capture_efficiency.daily_usage, {
+    day,
+    accounted_ms: 42_000,
+    budget_ms: 540_000,
+    free_plan_limit_ms: 600_000,
+    remaining_ms: 498_000,
+  });
+  assert.equal(body.capture_targets[0].active_in_playlist, true);
+  assert.equal(body.capture_targets[0].schedule_reviewed, true);
+  assert.equal(body.capture_targets[0].average_browser_ms, 2100);
+  assert.equal(body.capture_targets[0].browser_ms_samples, 4);
+});
+
+test("capture forecast API returns a queryable daily projection and account-wide quota metadata", async () => {
+  const env = testEnvironment();
+  const day = new Date().toISOString().slice(0, 10);
+  env.DAILY_BROWSER_BUDGET_MS = "540000";
+  env.DB.captureUsage = { usage_day: day, browser_ms: 42_000 };
+  const scheduledTarget = {
+    capture_id: captureID,
+    url: "https://status.example.com/",
+    name: "Status",
+    capture_interval_seconds: 3600,
+    last_success_at: 100,
+    schedule_reviewed_at: 100,
+    active_in_playlist: 1,
+  };
+  env.DB.captureTarget = scheduledTarget;
+  env.DB.captureTargets = [scheduledTarget];
+  env.DB.captureRuntimeAverages = [{ capture_id: captureID, average_browser_ms: 2100, sample_count: 4 }];
+
+  const response = await handleAdminRequest(request("/admin/api/capture-forecast"), env);
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.plan, "workers-free");
+  assert.equal(body.quota_scope, "account-wide");
+  assert.equal(body.other_account_usage_included, false);
+  assert.deepEqual(body.daily_usage, {
+    day,
+    accounted_ms: 42_000,
+    budget_ms: 540_000,
+    free_plan_limit_ms: 600_000,
+    remaining_ms: 498_000,
+  });
+  assert.equal(body.forecast.total_estimated_ms, 50_400);
+  assert.equal(body.forecast.sites[0].capture_id, captureID);
+  assert.equal(body.forecast.sites[0].estimated_browser_ms_per_day, 50_400);
+  assert.equal(body.forecast.sites[0].runtime_source, "site-history");
+
+  const scheduleResponse = await handleAdminRequest(request(`/admin/api/captures/${captureID}`, {
+    method: "PATCH",
+    body: { capture_interval_seconds: 21_600 },
+  }), env);
+  assert.equal(scheduleResponse.status, 200);
+  const refreshed = await handleAdminRequest(request("/admin/api/capture-forecast"), env);
+  assert.equal((await refreshed.json()).forecast.total_estimated_ms, 8400);
+});
+
+test("capture forecast API is read-only", async () => {
+  const env = testEnvironment();
+  const response = await handleAdminRequest(request("/admin/api/capture-forecast", { method: "POST", body: {} }), env);
+  assert.equal(response.status, 405);
+  assert.equal(response.headers.get("allow"), "GET");
 });
 
 test("overview identifies an Access-protected management deployment", async () => {
