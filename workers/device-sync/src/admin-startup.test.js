@@ -33,6 +33,7 @@ test("management page starts, renders its data, and dismisses errors", async () 
   const requests = [];
   let fail = false;
   const overview = {
+    generated_at: 1_700_000_000_000,
     environment: { production: true },
     asset_health: { missing: [] },
     playlists: [], devices: [], audit: [], capture_targets: [{
@@ -120,16 +121,16 @@ test("management page starts, renders its data, and dismisses errors", async () 
     assert.doesNotMatch(window.document.querySelector("#capture-target-list").textContent, /Capture efficiency and Browser Run usage/);
     await navigate(() => window.document.querySelector('#module-navigation a[href="#dashboard"]').click());
     assert.equal(window.document.querySelector("#sites-section").hidden, true);
-    const analysisLink = window.document.querySelector('#dashboard-tiles a[href="#analysis-section"]');
-    const analysisDialog = window.document.querySelector("#analysis-dialog");
-    analysisLink.focus();
-    await navigate(() => analysisLink.click());
-    assert.equal(analysisDialog.open, true);
+    const insightsLink = window.document.querySelector('#module-navigation a[href="#fleet-insights"]');
+    await navigate(() => insightsLink.click());
     assert.equal(window.document.querySelector("#dashboard-tiles").hidden, true);
-    assert.equal(window.document.activeElement.id, "close-analysis");
-    await navigate(() => analysisDialog.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    assert.equal(analysisDialog.open, false);
-    assert.equal(window.document.activeElement, analysisLink);
+    assert.equal(window.document.querySelector("#overview-section").hidden, false);
+    assert.equal(window.document.activeElement.id, "fleet-insights-title");
+    assert.equal(insightsLink.getAttribute("aria-current"), "page");
+    assert.match(window.document.querySelector("#fleet-attention").textContent, /schedule needs review/);
+    assert.match(window.document.querySelector("#fleet-data-as-of").textContent, /Data as of/);
+    await navigate(() => window.document.querySelector('#fleet-attention a[href="#sites-section"]').click());
+    assert.equal(window.document.querySelector("#sites-section").hidden, false);
     assert.match(window.document.querySelector("#capture-target-list").textContent, /https:\/\/status.example\//);
     assert.match(window.document.querySelector("#capture-target-list").textContent, /Schedule review needed/);
     assert.match(window.document.querySelector("#capture-target-list").textContent, /fbo QA status/);
