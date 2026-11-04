@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fetchHandler, sha256Hex } from "./index.js";
 
+// Device-sync contract: ../README.md (enrolled-device authorization and global playlist).
 const token = "a-secure-device-token-with-at-least-32-characters";
 const digest = "a".repeat(64);
 const playlist = {
@@ -187,7 +188,7 @@ test("conditional playlist reads throttle last-seen writes in D1", async () => {
   assert.equal(db.device.last_seen_at, firstSeen, "a second poll inside the throttle window does not rewrite telemetry");
 });
 
-test("last-seen telemetry runs in the background and cannot block playlist delivery", async () => {
+test("last-seen telemetry runs in the background and cannot block playlist delivery", { timeout: 5000 }, async () => {
   const { env, db } = testEnvironment();
   await authorize(db);
   let rejectUpdate;
@@ -197,19 +198,15 @@ test("last-seen telemetry runs in the background and cannot block playlist deliv
   const request = new Request("https://worker.test/v2/playlist", {
     headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office" },
   });
-  const responsePromise = fetchHandler(request, env, context);
-  let timeout;
-  const result = await Promise.race([
-    responsePromise.then((response) => ({ response })),
-    new Promise((resolve) => { timeout = setTimeout(() => resolve({ timedOut: true }), 100); }),
-  ]);
-  clearTimeout(timeout);
-  if (result.timedOut) {
-    rejectUpdate?.(new Error("simulated D1 failure"));
-    await responsePromise;
-    assert.fail("playlist response waited for the telemetry write");
-  }
-  assert.equal(result.response.status, 200);
+  const response = await fetchHandler(request, env, context);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    version: 2,
+    revision: "revision-1",
+    id: "welcome",
+    rotation_interval: "30s",
+    assets: [{ sha256: "a".repeat(64), size: 4 }],
+  });
   assert.equal(typeof telemetryPromise, "object");
   rejectUpdate(new Error("simulated D1 failure"));
   await telemetryPromise;
@@ -277,6 +274,7 @@ test("unauthorized device cannot read its playlist or cause an R2 read", async (
     headers: { "X-Ribbonfish-Device-ID": "pi-office" },
   }), env);
   assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: "device authentication failed" });
   assert.deepEqual(r2Gets, []);
 });
 

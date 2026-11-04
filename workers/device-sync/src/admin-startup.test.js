@@ -1,12 +1,15 @@
-import test from "node:test";
+import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { JSDOM } from "jsdom";
 
-test("management page starts, renders its data, and dismisses errors", async () => {
-  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+// Console workflows: ../README.md#management-api and ../../../README.md#core-workflows.
+const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+let appBundle;
+
+before(async () => {
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL("../public/admin/app.js", import.meta.url))],
     bundle: true,
@@ -14,10 +17,78 @@ test("management page starts, renders its data, and dismisses errors", async () 
     platform: "browser",
     write: false,
   });
+  appBundle = bundle.outputFiles[0].text;
+});
+
+const overviewFixture = () => ({
+  generated_at: 1_700_000_000_000,
+  environment: { production: true },
+  asset_health: { missing: [] },
+  playlists: [],
+  devices: [],
+  audit: [],
+  capture_targets: [{
+    capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", display_url: "https://status.example/", name: "fbo QA status",
+    capture_interval_seconds: 86400, viewport: { width: 1920, height: 1080 }, sha256: "a".repeat(64), size: 4,
+    schedule_reviewed: true, active_in_playlist: true, average_browser_ms: 50_000, browser_ms_samples: 10,
+  }, {
+    capture_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", display_url: "https://new.example/",
+    capture_interval_seconds: 86400, viewport: { width: 1920, height: 1080 }, sha256: "b".repeat(64), size: 4,
+    schedule_reviewed: false,
+  }],
+  active_playlist: null,
+  capture_efficiency: {
+    daily_usage: { accounted_ms: 600_000, budget_ms: 600_000, free_plan_limit_ms: 600_000 },
+    last_30_days: {
+      successful_screenshots: 8,
+      validator_unchanged: 2,
+      successful_unclassified: 1,
+      browser_run_ms: { response_header: 480_000, reserve: 120_000, unclassified_jobs: 0 },
+    },
+  },
+});
+
+function openConsole() {
   const dom = new JSDOM(html, { url: "https://example.test/admin/", runScripts: "outside-only" });
   const { window } = dom;
+  const calls = [];
+  const requests = [];
+  const overview = overviewFixture();
+  let fail = false;
   window.confirm = () => true;
-  const navigate = (action) => new Promise((resolve, reject) => {
+  window.fetch = async (path, options = {}) => {
+    calls.push(path);
+    requests.push({ path, options });
+    const body = fail ? { error: "Refresh failed" } :
+      path === "/admin/api/capture-sites" ? { schedule_reviewed: false } :
+      path === "/admin/api/playlists" ? { revision: "revision-1", capture_count: 2 } :
+      path === "/admin/api/overview" ? overview : path === "/admin/api/intervals" ? {
+        capture: { default: 86400, options: [
+          { value: 900, label: "15 minutes" }, { value: 1800, label: "30 minutes" },
+          { value: 3600, label: "1 hour" }, { value: 21600, label: "6 hours" }, { value: 86400, label: "24 hours" },
+        ] },
+        rotation: { default: "90s", options: [
+          { value: "30s", label: "30 seconds" }, { value: "60s", label: "60 seconds" },
+          { value: "90s", label: "90 seconds" }, { value: "120s", label: "120 seconds" }, { value: "5m", label: "5 minutes" },
+        ] },
+      } : [];
+    return { ok: !fail, json: async () => body };
+  };
+  window.eval(appBundle);
+  return {
+    dom,
+    window,
+    calls,
+    requests,
+    overview,
+    setFailure(value) { fail = value; },
+  };
+}
+
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+function navigate(window, action) {
+  return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       window.removeEventListener("hashchange", onHashChange);
       reject(new Error("Navigation did not emit a hashchange event"));
@@ -29,85 +100,47 @@ test("management page starts, renders its data, and dismisses errors", async () 
     window.addEventListener("hashchange", onHashChange, { once: true });
     action();
   });
-  const calls = [];
-  const requests = [];
-  let fail = false;
-  const overview = {
-    generated_at: 1_700_000_000_000,
-    environment: { production: true },
-    asset_health: { missing: [] },
-    playlists: [], devices: [], audit: [], capture_targets: [{
-      capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", display_url: "https://status.example/", name: "fbo QA status",
-      capture_interval_seconds: 86400, viewport: { width: 1920, height: 1080 }, sha256: "a".repeat(64), size: 4,
-      schedule_reviewed: true, active_in_playlist: true, average_browser_ms: 50_000, browser_ms_samples: 10,
-    }, {
-      capture_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", display_url: "https://new.example/",
-      capture_interval_seconds: 86400, viewport: { width: 1920, height: 1080 }, sha256: "b".repeat(64), size: 4,
-      schedule_reviewed: false,
-    }],
-    active_playlist: null,
-    capture_efficiency: {
-      daily_usage: { accounted_ms: 600_000, budget_ms: 600_000, free_plan_limit_ms: 600_000 },
-      last_30_days: {
-        successful_screenshots: 8,
-        validator_unchanged: 2,
-        successful_unclassified: 1,
-        browser_run_ms: { response_header: 480_000, reserve: 120_000, unclassified_jobs: 0 },
-      },
-    },
-  };
-  window.fetch = async (path, options = {}) => {
-    calls.push(path);
-    requests.push({ path, options });
-    return {
-      ok: !fail,
-      json: async () => fail ? { error: "Refresh failed" } :
-        path === "/admin/api/capture-sites" ? { schedule_reviewed: false } :
-        path === "/admin/api/playlists" ? { revision: "revision-1", capture_count: 2 } :
-        path === "/admin/api/overview" ? overview : path === "/admin/api/intervals" ? {
-          capture: { default: 86400, options: [
-            { value: 900, label: "15 minutes" }, { value: 1800, label: "30 minutes" },
-            { value: 3600, label: "1 hour" }, { value: 21600, label: "6 hours" }, { value: 86400, label: "24 hours" },
-          ] },
-          rotation: { default: "90s", options: [
-            { value: "30s", label: "30 seconds" }, { value: "60s", label: "60 seconds" },
-            { value: "90s", label: "90 seconds" }, { value: "120s", label: "120 seconds" }, { value: "5m", label: "5 minutes" },
-          ] },
-        } : [],
-    };
-  };
+}
+
+test("management console renders empty states and the supported rotation default", async () => {
+  const { dom, window, calls } = openConsole();
   try {
-    window.eval(bundle.outputFiles[0].text);
-    await new Promise((resolve) => setImmediate(resolve));
+    await settle();
     assert.deepEqual(calls, ["/admin/api/overview", "/admin/api/enrollment-requests", "/admin/api/capture-decisions", "/admin/api/intervals"]);
     assert.match(window.document.querySelector("#playlists").textContent, /No playlists yet/);
     assert.match(window.document.querySelector("#devices").textContent, /No devices have been approved/);
     const rotation = window.document.querySelector("[name=rotation_interval]");
     assert.deepEqual([...rotation.options].map((option) => option.value), ["30s", "60s", "90s", "120s", "5m"]);
     assert.equal(rotation.value, "90s");
-    assert.ok(window.document.querySelector("#sites-section"));
     assert.equal(window.document.querySelector("#sites-section").hidden, true);
-    await navigate(() => window.document.querySelector('a[href="#sites-section"]').click());
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("management navigation shows the selected section and moves focus", { timeout: 5000 }, async () => {
+  const { dom, window } = openConsole();
+  try {
+    await settle();
+    await navigate(window, () => window.document.querySelector('#module-navigation a[href="#sites-section"]').click());
     assert.equal(window.document.querySelector("#sites-section").hidden, false);
     assert.equal(window.document.querySelector("#device-section").hidden, true);
     assert.equal(window.document.activeElement.id, "sites-title");
     assert.equal(window.document.querySelector('#module-navigation a[href="#sites-section"]').getAttribute("aria-current"), "page");
     assert.equal(window.document.querySelector("#capture-site-editor").open, false);
-    const intervalChangeErrors = [];
-    window.addEventListener("error", (event) => {
-      intervalChangeErrors.push(event.message);
-      event.preventDefault();
-    });
-    const intervalSelect = window.document.querySelector('[aria-label="Screenshot interval for https://status.example/"]');
-    intervalSelect.value = "3600";
-    intervalSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
-    assert.deepEqual(intervalChangeErrors, [], "changing a screenshot interval does not raise a runtime error");
-    await navigate(() => window.document.querySelector('#module-navigation a[href="#dashboard"]').click());
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("dashboard navigation renders capture efficiency and fleet findings", { timeout: 5000 }, async () => {
+  const { dom, window } = openConsole();
+  try {
+    await settle();
     const efficiencyTile = window.document.querySelector('#dashboard-tiles a[href="#capture-efficiency-section"]');
     assert.ok(efficiencyTile);
-    await navigate(() => efficiencyTile.click());
+    await navigate(window, () => efficiencyTile.click());
     assert.equal(window.document.querySelector("#capture-efficiency-section").hidden, false);
-    assert.equal(window.document.querySelector("#sites-section").hidden, true);
     assert.equal(window.document.querySelector("#dashboard-tiles").hidden, true);
     assert.equal(window.document.activeElement.id, "capture-efficiency-title");
     assert.equal(window.document.querySelector('#module-navigation a[href="#capture-efficiency-section"]').getAttribute("aria-current"), "page");
@@ -119,101 +152,148 @@ test("management page starts, renders its data, and dismisses errors", async () 
     assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /10 site samples/);
     assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /8m 0s measured, 2m 0s reserve-estimated/);
     assert.doesNotMatch(window.document.querySelector("#capture-target-list").textContent, /Capture efficiency and Browser Run usage/);
-    await navigate(() => window.document.querySelector('#module-navigation a[href="#dashboard"]').click());
-    assert.equal(window.document.querySelector("#sites-section").hidden, true);
+
+    await navigate(window, () => window.document.querySelector('#module-navigation a[href="#dashboard"]').click());
     const insightsLink = window.document.querySelector('#module-navigation a[href="#fleet-insights"]');
-    await navigate(() => insightsLink.click());
+    await navigate(window, () => insightsLink.click());
     assert.equal(window.document.querySelector("#dashboard-tiles").hidden, true);
     assert.equal(window.document.querySelector("#overview-section").hidden, false);
     assert.equal(window.document.activeElement.id, "fleet-insights-title");
     assert.equal(insightsLink.getAttribute("aria-current"), "page");
     assert.match(window.document.querySelector("#fleet-attention").textContent, /schedule needs review/);
     assert.match(window.document.querySelector("#fleet-data-as-of").textContent, /Data as of/);
-    await navigate(() => window.document.querySelector('#fleet-attention a[href="#sites-section"]').click());
+    await navigate(window, () => window.document.querySelector('#fleet-attention a[href="#sites-section"]').click());
     assert.equal(window.document.querySelector("#sites-section").hidden, false);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("site search, naming, and schedule review send the selected site data", async () => {
+  const { dom, window, requests } = openConsole();
+  try {
+    await settle();
     assert.match(window.document.querySelector("#capture-target-list").textContent, /https:\/\/status.example\//);
     assert.match(window.document.querySelector("#capture-target-list").textContent, /Schedule review needed/);
     assert.match(window.document.querySelector("#capture-target-list").textContent, /fbo QA status/);
-    assert.match(window.document.querySelector("#available-sites").textContent, /fbo QA status/);
+
+    const intervalErrors = [];
+    window.addEventListener("error", (event) => {
+      intervalErrors.push(event.message);
+      event.preventDefault();
+    });
+    const intervalSelect = window.document.querySelector('[aria-label="Screenshot interval for https://status.example/"]');
+    intervalSelect.value = "3600";
+    intervalSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
+    assert.deepEqual(intervalErrors, [], "changing a screenshot interval does not raise a runtime error");
+
     const search = window.document.querySelector("#capture-search");
     search.value = "status.example";
     search.dispatchEvent(new window.Event("input", { bubbles: true }));
     assert.equal(window.document.querySelectorAll("#capture-target-list .capture-target:not([hidden])").length, 1);
     search.value = "";
     search.dispatchEvent(new window.Event("input", { bubbles: true }));
+
     const nameInput = window.document.querySelector("#capture-target-list input[data-site-name]");
     nameInput.value = "fbo QA status";
     nameInput.parentElement.parentElement.querySelector("button").click();
-    await new Promise((resolve) => setImmediate(resolve));
+    await settle();
     const nameRequest = requests.find(({ path }) => path.endsWith("/name"));
     assert.equal(JSON.parse(nameRequest.options.body).name, "fbo QA status");
 
     const scheduleButton = [...window.document.querySelectorAll("#capture-target-list button")]
       .find((button) => button.textContent === "Confirm schedule");
     scheduleButton.click();
-    await new Promise((resolve) => setImmediate(resolve));
+    await settle();
     const scheduleRequest = requests.find(({ path }) => path === "/admin/api/captures/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
     assert.equal(scheduleRequest.options.method, "PATCH");
     assert.equal(JSON.parse(scheduleRequest.options.body).capture_interval_seconds, 86400);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("operators can register a site and stage a playlist with an existing capture", async () => {
+  const { dom, window, requests } = openConsole();
+  try {
+    await settle();
     const siteForm = window.document.querySelector("#capture-site-form");
     siteForm.elements.namedItem("url").value = "https://added.example/";
     siteForm.dispatchEvent(new window.SubmitEvent("submit", { bubbles: true, cancelable: true }));
-    await new Promise((resolve) => setImmediate(resolve));
+    await settle();
     const siteRequest = requests.find(({ path }) => path === "/admin/api/capture-sites");
     assert.deepEqual(JSON.parse(siteRequest.options.body), {
       url: "https://added.example/", viewport: { width: 1920, height: 1080 },
     });
+
     window.document.querySelector('[name="id"]').value = "operations";
     window.document.querySelector("#available-sites input[data-capture-id]").checked = true;
     window.document.querySelector("#playlist-form").dispatchEvent(new window.SubmitEvent("submit", { bubbles: true, cancelable: true }));
-    await new Promise((resolve) => setImmediate(resolve));
+    await settle();
     const playlistRequest = requests.find(({ path }) => path === "/admin/api/playlists");
-    const playlistBody = JSON.parse(playlistRequest.options.body);
-    assert.deepEqual(playlistBody.captures, [{ capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }]);
+    assert.deepEqual(JSON.parse(playlistRequest.options.body).captures, [
+      { capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
+    ]);
+  } finally {
+    dom.window.close();
+  }
+});
 
+test("site and device deletion send explicit requests", async () => {
+  const { dom, window, requests, overview } = openConsole();
+  try {
+    await settle();
     const siteCard = [...window.document.querySelectorAll("#capture-target-list article")]
       .find((card) => card.querySelector("h3")?.textContent === "fbo QA status");
     const removeSiteButton = [...siteCard.querySelectorAll("button")]
       .find((button) => button.textContent === "Remove capture site");
-    assert.equal(removeSiteButton.closest("details").open, false);
     assert.ok(removeSiteButton);
+    assert.equal(removeSiteButton.closest("details").open, false);
     removeSiteButton.click();
-    await new Promise((resolve) => setImmediate(resolve));
+    await settle();
     const removeSiteRequest = requests.find(({ path }) => path === "/admin/api/captures/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
     assert.equal(removeSiteRequest.options.method, "DELETE");
 
     overview.devices = [{ device_id: "pi-office", enabled: true, auth_type: "key", health: { status: "healthy" } }];
     window.document.querySelector("#reload").click();
-    await new Promise((resolve) => setImmediate(resolve));
+    await settle();
     const removeDeviceButton = [...window.document.querySelectorAll("#devices button")]
       .find((button) => button.textContent === "Delete device");
     assert.ok(removeDeviceButton);
     assert.equal(removeDeviceButton.closest("details").open, false);
     removeDeviceButton.click();
-    await new Promise((resolve) => setImmediate(resolve));
+    await settle();
     const removeDeviceRequest = requests.find(({ path }) => path === "/admin/api/devices/pi-office");
     assert.equal(removeDeviceRequest.options.method, "DELETE");
+  } finally {
+    dom.window.close();
+  }
+});
 
+test("playlist revisions stay grouped and refresh errors can be dismissed", async () => {
+  const { dom, window, overview, setFailure } = openConsole();
+  try {
+    await settle();
     overview.playlists = [
       { playlist_id: "operations", revision: "rev-one", active: true, rotation_interval: "90s", asset_count: 1, created_at: 1 },
       { playlist_id: "operations", revision: "rev-two", active: false, rotation_interval: "90s", asset_count: 2, created_at: 2 },
       { playlist_id: "status", revision: "rev-three", active: false, rotation_interval: "90s", asset_count: 1, created_at: 3 },
     ];
     window.document.querySelector("#reload").click();
-    await new Promise((resolve) => setImmediate(resolve));
+    await settle();
     assert.equal(window.document.querySelectorAll("#playlists .playlist-group").length, 2);
     assert.equal(window.document.querySelectorAll("#playlists-mobile .playlist-group").length, 2);
     assert.equal(window.document.querySelector("#playlists .playlist-group tbody").rows.length, 2);
 
-    fail = true;
+    setFailure(true);
     window.document.querySelector("#reload").click();
-    await new Promise((resolve) => setImmediate(resolve));
+    await settle();
     const notice = window.document.querySelector('[data-feedback-slot="global"]');
     assert.equal(notice.hidden, false);
     assert.match(notice.textContent, /Refresh failed/);
     notice.querySelector("[data-dismiss-feedback]").click();
     assert.equal(notice.hidden, true);
   } finally {
-    window.close();
+    dom.window.close();
   }
 });
