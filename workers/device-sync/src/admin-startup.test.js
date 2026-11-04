@@ -38,13 +38,22 @@ test("management page starts, renders its data, and dismisses errors", async () 
     playlists: [], devices: [], audit: [], capture_targets: [{
       capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", display_url: "https://status.example/", name: "fbo QA status",
       capture_interval_seconds: 86400, viewport: { width: 1920, height: 1080 }, sha256: "a".repeat(64), size: 4,
-      schedule_reviewed: true,
+      schedule_reviewed: true, active_in_playlist: true, average_browser_ms: 50_000, browser_ms_samples: 10,
     }, {
       capture_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", display_url: "https://new.example/",
       capture_interval_seconds: 86400, viewport: { width: 1920, height: 1080 }, sha256: "b".repeat(64), size: 4,
       schedule_reviewed: false,
     }],
     active_playlist: null,
+    capture_efficiency: {
+      daily_usage: { accounted_ms: 600_000, budget_ms: 600_000, free_plan_limit_ms: 600_000 },
+      last_30_days: {
+        successful_screenshots: 8,
+        validator_unchanged: 2,
+        successful_unclassified: 1,
+        browser_run_ms: { response_header: 480_000, reserve: 120_000, unclassified_jobs: 0 },
+      },
+    },
   };
   window.fetch = async (path, options = {}) => {
     calls.push(path);
@@ -83,6 +92,32 @@ test("management page starts, renders its data, and dismisses errors", async () 
     assert.equal(window.document.activeElement.id, "sites-title");
     assert.equal(window.document.querySelector('#module-navigation a[href="#sites-section"]').getAttribute("aria-current"), "page");
     assert.equal(window.document.querySelector("#capture-site-editor").open, false);
+    const intervalChangeErrors = [];
+    window.addEventListener("error", (event) => {
+      intervalChangeErrors.push(event.message);
+      event.preventDefault();
+    });
+    const intervalSelect = window.document.querySelector('[aria-label="Screenshot interval for https://status.example/"]');
+    intervalSelect.value = "3600";
+    intervalSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
+    assert.deepEqual(intervalChangeErrors, [], "changing a screenshot interval does not raise a runtime error");
+    await navigate(() => window.document.querySelector('#module-navigation a[href="#dashboard"]').click());
+    const efficiencyTile = window.document.querySelector('#dashboard-tiles a[href="#capture-efficiency-section"]');
+    assert.ok(efficiencyTile);
+    await navigate(() => efficiencyTile.click());
+    assert.equal(window.document.querySelector("#capture-efficiency-section").hidden, false);
+    assert.equal(window.document.querySelector("#sites-section").hidden, true);
+    assert.equal(window.document.querySelector("#dashboard-tiles").hidden, true);
+    assert.equal(window.document.activeElement.id, "capture-efficiency-title");
+    assert.equal(window.document.querySelector('#module-navigation a[href="#capture-efficiency-section"]').getAttribute("aria-current"), "page");
+    assert.equal(window.document.querySelectorAll("#capture-efficiency-section .metric-card").length, 2);
+    assert.equal(window.document.querySelectorAll("#capture-efficiency-section .scale-meter").length, 2);
+    assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /Forecast at current schedules/);
+    assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /Cloudflare account-wide allowance/);
+    assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /fbo QA status/);
+    assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /10 site samples/);
+    assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /8m 0s measured, 2m 0s reserve-estimated/);
+    assert.doesNotMatch(window.document.querySelector("#capture-target-list").textContent, /Capture efficiency and Browser Run usage/);
     await navigate(() => window.document.querySelector('#module-navigation a[href="#dashboard"]').click());
     assert.equal(window.document.querySelector("#sites-section").hidden, true);
     const analysisLink = window.document.querySelector('#dashboard-tiles a[href="#analysis-section"]');

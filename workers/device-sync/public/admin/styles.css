@@ -407,14 +407,22 @@ label { display: grid; gap: var(--space-1); color: var(--color-text-label); font
 .capture-issues { margin: var(--space-4) 0; }
 .capture-issues h3 { margin-bottom: var(--space-2); }
 .capture-issues ul { margin: 0; padding-left: 1.25rem; }
-.usage-details { margin: var(--space-4) 0; color: var(--color-muted); }
-.usage-details > summary { color: var(--color-brand); font-weight: 650; cursor: pointer; }
-.usage-details p { margin: var(--space-2) 0; line-height: 1.5; }
+.metric-card { display: grid; gap: var(--space-1); padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface); }
+.metric-card__label, .metric-card__detail { color: var(--color-muted); font-size: var(--font-size-small); }
+.metric-card__value { color: var(--color-heading); font-size: var(--font-size-emphasis); }
+.scale-meter { display: grid; gap: var(--space-2); }
+.scale-meter__caption { display: flex; justify-content: space-between; gap: var(--space-3); }
+.scale-meter__track { position: relative; min-width: 0; }
+.scale-meter__fill { display: block; height: 100%; border-radius: inherit; background: var(--color-brand); }
+.scale-meter__fill--forecast { background: var(--color-brand); }
+.scale-meter__marker { position: absolute; pointer-events: none; }
+.scale-meter__stack { display: flex; }
+.capture-outcomes-details { margin-top: var(--space-2); color: var(--color-muted); }
+.capture-outcomes-details > summary { color: var(--color-brand); font-weight: 650; cursor: pointer; }
+.capture-outcomes-details p { margin: var(--space-2) 0; line-height: 1.5; }
 .browser-usage-forecast { display: grid; gap: var(--space-4); margin-top: var(--space-4); color: var(--color-ink); }
 .browser-usage-forecast__metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: var(--space-3); }
-.browser-usage-forecast__metric { display: grid; gap: var(--space-1); padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface); }
-.browser-usage-forecast__metric span { color: var(--color-muted); font-size: var(--font-size-small); }
-.browser-usage-forecast__metric strong { color: var(--color-heading); font-size: var(--font-size-emphasis); }
+.browser-usage-forecast__metrics .metric-card { min-width: 0; }
 .browser-usage-chart { display: grid; gap: var(--space-3); margin: 0; padding: var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-control); background: var(--color-surface); }
 .browser-usage-chart__caption { color: var(--color-heading); font-weight: 650; }
 .browser-usage-chart__row { display: grid; gap: var(--space-2); }
