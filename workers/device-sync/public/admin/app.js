@@ -2,6 +2,7 @@ import { api } from "./api.ts";
 import { formatCaptureObservation, formatRunTime } from "./capture-presentation.ts";
 import { node, button, statusBadge, actionDisclosure } from "./ui-primitives.ts";
 import { renderCaptureEfficiencyModule } from "./capture-efficiency-module.ts";
+import { renderFindingList } from "./ui-components.ts";
 import { initModuleNavigation } from "./module-navigation.ts";
 import {
   createFleetOpenUI,
@@ -26,13 +27,14 @@ import {
   playlistDeleteActionStates,
   formatScreenshotStatus,
   formatTimestamp,
-  summarizeFleetAttention,
+  buildFleetInsights,
   prioritizeCaptureTargets,
   summarizeCaptureErrors,
 } from "./ui-utils.ts";
 
 const fleetSummary = document.querySelector("#fleet-summary");
 const fleetAttention = document.querySelector("#fleet-attention");
+const fleetDataAsOf = document.querySelector("#fleet-data-as-of");
 const confirmDialog = document.querySelector("#confirm-dialog");
 const confirmTitle = document.querySelector("#confirm-title");
 const confirmDescription = document.querySelector("#confirm-description");
@@ -917,13 +919,22 @@ function deviceDetails(device) {
   return details;
 }
 
-function renderDevices(devices) {
+function renderDevices(devices, activePlaylist) {
   renderResponsiveRecords({
     tableSelector: "#devices",
     cardsSelector: "#devices-mobile",
     caption: "Enrolled devices",
     records: [...devices].sort((a, b) => {
-      const needsReview = (device) => device.enabled && ["degraded", "stale", "offline", "unknown"].includes(device.health?.status ?? "unknown");
+      const needsReview = (device) => {
+        if (!device.enabled) return false;
+        const health = device.health ?? {};
+        const healthProblem = ["degraded", "stale", "offline", "unknown"].includes(health.status ?? "unknown");
+        const syncProblem = health.sync_status !== "ok";
+        const playlistUnknown = Boolean(activePlaylist && (!health.applied_playlist_id || health.applied_revision === null || health.applied_revision === undefined));
+        const playlistBehind = Boolean(activePlaylist && health.applied_playlist_id && health.applied_revision !== null && health.applied_revision !== undefined &&
+          (health.applied_playlist_id !== activePlaylist.playlist_id || String(health.applied_revision) !== String(activePlaylist.revision)));
+        return healthProblem || syncProblem || playlistUnknown || playlistBehind;
+      };
       return Number(needsReview(b)) - Number(needsReview(a));
     }),
     fields: [
@@ -1037,29 +1048,9 @@ function renderPendingEnrollments(requests) {
 }
 
 function renderFleetAttention(overview, enrollmentRequests) {
-  const items = summarizeFleetAttention(overview, enrollmentRequests);
-  fleetAttention.replaceChildren();
-  if (!items.length) {
-    fleetAttention.classList.add("fleet-attention--clear");
-    fleetAttention.append(node("p", "No current issues need attention.", "fleet-attention__clear"));
-    return;
-  }
-
-  fleetAttention.classList.remove("fleet-attention--clear");
-  fleetAttention.append(node("h3", "Needs attention"));
-  const list = node("ul", undefined, "fleet-attention__list");
-  items.forEach((item) => {
-    const row = node("li");
-    const link = node("a", undefined, "fleet-attention__link");
-    link.href = item.href;
-    link.append(
-      node("strong", item.count),
-      document.createTextNode(` ${item.count === 1 ? item.singular : item.plural}`),
-    );
-    row.append(link);
-    list.append(row);
-  });
-  fleetAttention.append(list);
+  const items = buildFleetInsights(overview, enrollmentRequests);
+  fleetAttention.replaceChildren(renderFindingList(items));
+  fleetDataAsOf.textContent = `Data as of ${formatTimestamp(overview.generated_at ?? Date.now())}`;
 }
 
 fleetAttention.addEventListener("click", (event) => {
@@ -1151,7 +1142,7 @@ async function refresh() {
     : "Forecast unavailable";
   renderCaptureTargets(overview.capture_targets ?? [], captureDecisions);
   renderAvailableSites(overview.capture_targets ?? []);
-  renderDevices(overview.devices);
+  renderDevices(overview.devices, overview.active_playlist);
   renderPendingEnrollments(enrollmentRequests);
   renderAudit(overview.audit);
   if (!fleetSummaryInitialized) {
@@ -1220,19 +1211,8 @@ function renderJevDecision(result, title, { captureID } = {}) {
     item.append(node("h4", label));
     if (answer.type === "choice") item.append(node("p", `Recommendation: ${answer.choice.replaceAll("_", " ")}`));
     else if (answer.type === "score") {
-      const maximum = Math.max(0, Object.keys(answer.legend ?? {}).length - 1);
-      item.append(node("p", `Score: ${Number(answer.score).toFixed(2)} / ${maximum}`));
-    } else if (answer.type === "noul") item.append(node("p", `Signal: ${Math.round(answer.noul * 100)}%`));
-    if (Number.isFinite(answer.confidence)) item.append(node("p", `Confidence: ${Math.round(answer.confidence * 100)}%`, "muted"));
-    if (answer.probabilities && typeof answer.probabilities === "object") {
-      const probabilities = node("ul", undefined, "jev-result__probabilities");
-      for (const [choice, probability] of Object.entries(answer.probabilities)) {
-        const choiceLabel = answer.legend?.[choice] ?? choice.replaceAll("_", " ");
-        const row = node("li", undefined, "jev-result__probability");
-        row.append(node("span", choiceLabel), node("span", `${Math.round(probability * 100)}%`));
-        probabilities.append(row);
-      }
-      item.append(probabilities);
+      const level = answer.legend?.[String(Math.round(answer.score))];
+      if (typeof level === "string") item.append(node("p", `${label}: ${level}`));
     }
     answers.append(item);
   }
@@ -1272,24 +1252,6 @@ function renderJevDecision(result, title, { captureID } = {}) {
   return card;
 }
 
-async function runFleetJevAnalysis() {
-  const buttonElement = document.querySelector("#run-fleet-analysis");
-  const result = document.querySelector("#fleet-analysis-result");
-  buttonElement.disabled = true;
-  result.setAttribute("aria-busy", "true");
-  result.replaceChildren(node("p", "Analyzing current fleet signals…", "muted"));
-  try {
-    const decision = await api("/admin/api/jev/fleet-analysis", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
-    });
-    result.removeAttribute("aria-busy");
-    result.replaceChildren(renderJevDecision(decision, "Fleet assessment"));
-  } catch (error) {
-    result.removeAttribute("aria-busy");
-    result.replaceChildren(node("p", error.message, "error-title"));
-  } finally { buttonElement.disabled = false; }
-}
-
 function showConfirmDialog({ title, description, confirmLabel, destructive = false }) {
   if (typeof confirmDialog.showModal !== "function") return Promise.resolve(window.confirm(description));
   confirmTitle.textContent = title;
@@ -1303,8 +1265,6 @@ function showConfirmDialog({ title, description, confirmLabel, destructive = fal
     confirmDialog.showModal();
   });
 }
-
-document.querySelector("#run-fleet-analysis").addEventListener("click", runFleetJevAnalysis);
 
 initModuleNavigation();
 

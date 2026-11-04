@@ -74,21 +74,28 @@ Worker. It bundles the browser app before publishing those files. Open
 `http://localhost:8787/admin/`. Upload PNG files through the panel, stage a
 playlist, then activate the revision. These commands use local D1 and R2 only.
 
-The fleet summary uses an internal, read-only OpenUI program backed by the
-framework-independent `@openuidev/lang-core` package. The management panel does
-not expose the editor or generation prompt. JEV decisions use a separate
-server-side adapter and do not generate or parse OpenUI Lang. The management UI
-offers an advisory fleet analysis based on summarized device health, playlist,
-asset, and screenshot signals, plus a per-target screenshot skip assessment
-based on bounded operational metadata and recent screenshot hash-change counts.
-Both use fixed typed questions, validate JEV's answer types, choices,
-probabilities, confidence, and score ranges, and render the results as ordinary
-UI data. JEV cannot change capture scheduling. An admin may confirm a single
-skip for an exact upcoming due time; that confirmation expires five minutes
-after the due time, is audited, and the following capture remains scheduled.
-The skip is rejected for missing or stale screenshots, recent failures, or
-active jobs. Screenshot pixels, raw error details, device identifiers, playlist
-identifiers, and URL query or fragment values are not sent to JEV.
+The overview uses deterministic fleet findings for missing playlists, device
+health and sync issues, active playlist assets, failed captures, unreviewed
+schedules, and pending enrollments. Each finding includes its evidence, the
+latest available timestamp, and a link to the relevant management list. The
+overview reports when its snapshot was generated. The former fleet-wide model
+advisory has been removed because its broad labels did not explain the signals
+or provide a useful next step.
+
+The fleet summary still uses an internal, read-only OpenUI program backed by
+the framework-independent `@openuidev/lang-core` package. The management panel
+does not expose the editor or generation prompt. JEV decisions use a separate
+server-side adapter and do not generate or parse OpenUI Lang. The optional
+per-target screenshot assessment uses bounded operational metadata and recent
+screenshot hash-change counts. It validates JEV's answer types, choices,
+probabilities, confidence, and score ranges, then renders only the recommendation
+and a plain-language risk level. JEV cannot change capture scheduling. An admin
+may confirm a single skip for an exact upcoming due time; that confirmation
+expires five minutes after the due time, is audited, and the following capture
+remains scheduled. The skip is rejected for missing or stale screenshots,
+recent failures, or active jobs. Screenshot pixels, raw error details, device
+identifiers, playlist identifiers, and URL query or fragment values are not
+sent to JEV.
 
 Configure `OPENROUTER_API_KEY` as a secret on the management Worker before using
 JEV. The key is read only by the Worker. Requests use the pinned

@@ -37,7 +37,7 @@
         <a href="#playlist-section">Playlists</a>
         <a href="#device-section">Devices</a>
         <a href="#activity-section">Recent activity</a>
-        <a href="#analysis-section">Fleet analysis</a>
+        <a href="#fleet-insights">Fleet insights</a>
       </nav>
       <nav id="dashboard-tiles" class="tile-grid" aria-label="Management modules">
         <a class="module-tile" href="#overview-section"><strong>Overview</strong><span>Fleet snapshot and items needing attention</span></a>
@@ -46,7 +46,6 @@
         <a class="module-tile" href="#playlist-section"><strong>Playlists</strong><span id="playlists-tile-status">Versions, images and content</span></a>
         <a class="module-tile" href="#device-section"><strong>Devices</strong><span id="devices-tile-status">Fleet health and approvals</span></a>
         <a class="module-tile" href="#activity-section"><strong>Recent activity</strong><span>Management history</span></a>
-        <a class="module-tile" href="#analysis-section"><strong>Fleet analysis</strong><span>Review advisory signals</span></a>
       </nav>
 
       <section id="overview-section" class="panel" aria-labelledby="overview-title">
@@ -54,7 +53,13 @@
           <div><p class="eyebrow">Overview</p><h2 id="overview-title">Fleet snapshot</h2></div>
         </div>
         <div id="overview-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="overview" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss overview message">Dismiss</button></div>
-        <div id="fleet-attention" class="fleet-attention" role="region" aria-label="Needs attention"></div>
+        <section id="fleet-insights" class="fleet-insights-section" aria-labelledby="fleet-insights-title">
+          <div class="section-heading fleet-insights-section__heading">
+            <div><p class="eyebrow">Prioritized findings</p><h3 id="fleet-insights-title">Needs attention</h3></div>
+            <p id="fleet-data-as-of" class="fleet-insights-section__updated" role="status" aria-live="polite"></p>
+          </div>
+          <div id="fleet-attention" role="region" aria-label="Fleet findings" aria-live="polite"></div>
+        </section>
         <div id="fleet-summary" role="region" aria-label="Fleet snapshot" aria-live="polite"></div>
       </section>
 
@@ -141,20 +146,6 @@
         <div id="audit" class="table-scroll desktop-data" role="region" aria-label="Recent management activity" tabindex="0"></div>
         <div id="audit-mobile" class="mobile-card-list" role="region" aria-label="Recent management activity"></div>
       </section>
-
-      <dialog id="analysis-dialog" class="module-dialog" aria-label="Fleet signal analysis">
-      <button id="close-analysis" class="button button--secondary" type="button">Close</button>
-      <details id="analysis-section" class="panel advisory-panel" aria-labelledby="analysis-title">
-        <summary class="section-heading">
-          <div><p class="eyebrow">Optional advisory</p><h2 id="analysis-title">Fleet signal analysis</h2></div>
-          <span class="disclosure-hint">Open to analyze</span>
-        </summary>
-        <button id="run-fleet-analysis" class="button button--secondary" type="button">Analyze current signals</button>
-        <p class="muted">Ribbonfish reviews a limited summary of current device, playlist, asset, and screenshot signals. Recommendations are advisory and do not change fleet state.</p>
-        <div id="fleet-analysis-result" class="jev-result-slot" role="region" aria-label="Fleet signal analysis" aria-live="polite"></div>
-      </details>
-
-      </dialog>
 
       <section id="secret-panel" class="panel secret-panel" hidden aria-labelledby="secret-title">
         <div class="section-heading"><div><p class="eyebrow">Shown once</p><h2 id="secret-title">Credential</h2></div></div>
