@@ -10,7 +10,7 @@ type ValidatorTarget = Pick<CaptureJob, "url" | "current_sha256" | "current_size
 type ValidatorResult = { unchanged: boolean; outcome: string; etag: string | null; lastModified: string | null };
 type JobDecision = Pick<CaptureJob, "capture_id" | "scheduled_due_at">;
 type CaptureMessage = Message<{ job_id?: unknown }>;
-type CaptureFailureDetails = { message?: string; browserMs: number; browserStarted: boolean; retryable: boolean };
+type CaptureFailureDetails = { message?: string; browserMs: number; browserRunElapsedMs: number; browserStarted: boolean; retryable: boolean };
 
 export const MAX_CAPTURE_ATTEMPTS = 3;
 export const MAX_CAPTURE_HISTORY = 10;
@@ -217,6 +217,9 @@ async function processCaptureMessage(message: CaptureMessage, env: CaptureEnv, n
   }
   await markBrowserStart(env, now);
 
+  const attempt = job.attempts + 1;
+  const reserveMs = nonNegativeInteger(env.CAPTURE_BUDGET_RESERVE_MS, DEFAULT_BUDGET_RESERVE_MS);
+  const captureStartedAt = performance.now();
   let result;
   try {
     result = await captureScreenshot(job, env);
@@ -224,18 +227,35 @@ async function processCaptureMessage(message: CaptureMessage, env: CaptureEnv, n
     const error = captureFailureDetails(caught);
     const usedMs = Number.isSafeInteger(error.browserMs) && error.browserMs > 0
       ? error.browserMs
-      : error.browserStarted ? nonNegativeInteger(env.CAPTURE_BUDGET_RESERVE_MS, DEFAULT_BUDGET_RESERVE_MS) : 0;
+      : error.browserStarted ? reserveMs : 0;
     if (usedMs) await addBrowserUsage(env, usedMs, now, jobID,
       error.browserMs > 0 ? "response_header" : "reserve");
+    if (error.browserStarted) {
+      await recordCaptureDurationSample(env, {
+        jobID,
+        captureID: job.capture_id,
+        attempt,
+        sampledAt: now,
+        browserMs: usedMs,
+        browserMsSource: error.browserMs > 0 ? "response_header" : "reserve",
+        reserveMs,
+        browserRunElapsedMs: error.browserRunElapsedMs,
+        captureElapsedMs: elapsedSince(captureStartedAt),
+        outcome: "failed",
+        readinessMode: job.wait_for_selector ? "selector" : "domcontentloaded",
+        readinessSelector: job.wait_for_selector || null,
+      });
+    }
     await handleCaptureFailure(env, message, job, error, now);
     return;
   }
 
   const usedMs = result.browserMs > 0
     ? result.browserMs
-    : nonNegativeInteger(env.CAPTURE_BUDGET_RESERVE_MS, DEFAULT_BUDGET_RESERVE_MS);
+    : reserveMs;
+  const browserMsSource = result.browserMs > 0 ? "response_header" : "reserve";
   if (usedMs) await addBrowserUsage(env, usedMs, now, jobID,
-    result.browserMs > 0 ? "response_header" : "reserve");
+    browserMsSource);
   const validatorHeadersUsable = !["disabled", "unavailable"].includes(validator.outcome);
   const validatorEtag = validatorHeadersUsable ? validator.etag : job.validator_etag;
   const validatorLastModified = validatorHeadersUsable ? validator.lastModified : job.validator_last_modified;
@@ -244,6 +264,20 @@ async function processCaptureMessage(message: CaptureMessage, env: CaptureEnv, n
     env.DB.prepare(
       "INSERT INTO capture_history (capture_id, job_id, sha256, size, captured_at, browser_ms, browser_ms_source) VALUES (?, ?, ?, ?, ?, ?, ?)",
     ).bind(job.capture_id, jobID, result.sha256, result.size, now, usedMs, result.browserMs > 0 ? "response_header" : "reserve"),
+    captureDurationSampleStatement(env.DB, {
+      jobID,
+      captureID: job.capture_id,
+      attempt,
+      sampledAt: now,
+      browserMs: usedMs,
+      browserMsSource,
+      reserveMs,
+      browserRunElapsedMs: result.browserRunElapsedMs,
+      captureElapsedMs: elapsedSince(captureStartedAt),
+      outcome: "succeeded",
+      readinessMode: job.wait_for_selector ? "selector" : "domcontentloaded",
+      readinessSelector: job.wait_for_selector || null,
+    }),
     env.DB.prepare(
       "UPDATE capture_targets SET current_sha256 = ?, current_size = ?, last_attempt_at = ?, last_success_at = ?, " +
       "last_error = NULL, failure_count = 0, next_due_at = ?, validator_etag = ?, validator_last_modified = ? WHERE capture_id = ?",
@@ -456,6 +490,10 @@ export async function cleanupExpiredCaptures(env: CaptureEnv, now = Date.now()) 
     "OR capture_id IN (SELECT capture_id FROM capture_history WHERE captured_at < ?) LIMIT 100",
   ).bind(cutoff, cutoff).all<{ capture_id: string }>();
   for (const row of expired.results ?? []) await pruneCaptureHistory(env, row.capture_id, now);
+  await env.DB.prepare(
+    "DELETE FROM capture_duration_samples WHERE sample_id IN " +
+    "(SELECT sample_id FROM capture_duration_samples WHERE sampled_at < ? LIMIT 1000)",
+  ).bind(now - 90 * 24 * 60 * 60 * 1000).run();
   return expired.results?.length ?? 0;
 }
 
@@ -463,7 +501,53 @@ function captureFailureDetails(error: unknown): CaptureFailureDetails {
   const details = error !== null && typeof error === "object" ? error as Record<string, unknown> : {};
   return { message: typeof details.message === "string" ? details.message : undefined,
     browserMs: typeof details.browserMs === "number" ? details.browserMs : 0,
+    browserRunElapsedMs: typeof details.browserRunElapsedMs === "number" ? details.browserRunElapsedMs : 0,
     browserStarted: details.browserStarted === true, retryable: details.retryable === true };
+}
+
+type CaptureDurationSample = {
+  jobID: string;
+  captureID: string;
+  attempt: number;
+  sampledAt: number;
+  browserMs: number;
+  browserMsSource: "response_header" | "reserve" | "unknown";
+  reserveMs: number;
+  browserRunElapsedMs: number;
+  captureElapsedMs: number;
+  outcome: "succeeded" | "failed";
+  readinessMode: "domcontentloaded" | "selector";
+  readinessSelector: string | null;
+};
+
+function captureDurationSampleStatement(db: D1Database, sample: CaptureDurationSample) {
+  return db.prepare(
+    "INSERT INTO capture_duration_samples (sample_id, capture_id, job_id, attempt, sampled_at, browser_ms, " +
+    "browser_ms_source, reserve_ms, browser_run_elapsed_ms, capture_elapsed_ms, outcome, readiness_mode, readiness_selector) " +
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).bind(
+    `${sample.jobID}:${sample.attempt}`,
+    sample.captureID,
+    sample.jobID,
+    sample.attempt,
+    sample.sampledAt,
+    sample.browserMs,
+    sample.browserMsSource,
+    sample.reserveMs,
+    sample.browserRunElapsedMs,
+    sample.captureElapsedMs,
+    sample.outcome,
+    sample.readinessMode,
+    sample.readinessSelector,
+  );
+}
+
+async function recordCaptureDurationSample(env: CaptureEnv, sample: CaptureDurationSample) {
+  await captureDurationSampleStatement(env.DB, sample).run();
+}
+
+function elapsedSince(startedAt: number) {
+  return Math.max(0, Math.round(performance.now() - startedAt));
 }
 
 function nonNegativeInteger(value: unknown, fallback: number) {

@@ -18,6 +18,7 @@ import { normalizeCaptureSelector, validateCaptureSettings, validateCaptureTarge
 import { CaptureTargetNotAllowedError, dispatchDueCaptures, enqueueCapture } from "./capture-workflow.ts";
 import { AssetDeletionInProgressError, markAssetLiveStatement } from "./asset-registry.ts";
 import { callJevDecision, JEVRequestError } from "./jev.ts";
+import { classifyReserveReview, summarizeCaptureDurations } from "./capture-duration.ts";
 import {
   calculateDailyCaptureForecast,
   CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS,
@@ -25,12 +26,16 @@ import {
 import {
   buildCaptureAssessmentState,
   captureAssessmentQuestions,
+  durationReviewRecommendation,
 } from "./jev-use-cases.ts";
 
 const MAX_JSON_BYTES = 64 << 10;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CAPTURE_DURATION_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+const CAPTURE_DURATION_REVIEW_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const CAPTURE_DURATION_SUMMARY_LIMIT = 50_000;
 const ADMIN_FILES = new Map([
   ["/admin/index.html", { key: "admin/index.html", contentType: "text/html; charset=utf-8", maxAge: 60 }],
   ["/admin/app.js", { key: "admin/app.js", contentType: "text/javascript; charset=utf-8", maxAge: 300 }],
@@ -90,12 +95,20 @@ export async function handleAdminRequest(request, env, ctx) {
     if (url.pathname === "/admin/api/capture-decisions") {
       if (request.method !== "GET") return methodNotAllowed("GET");
       const rows = await env.DB.prepare(
-        "SELECT d.capture_id, d.due_at, d.assessed_at, d.action, d.reason, d.observed_at, d.observed_result, d.observed_delay_ms FROM capture_decisions d " +
+        "SELECT d.capture_id, d.due_at, d.assessed_at, d.action, d.reason, d.observed_at, d.observed_result, d.observed_delay_ms, d.state_json, d.decision_json FROM capture_decisions d " +
         "JOIN capture_targets t ON t.capture_id = d.capture_id " +
         "WHERE t.enabled = 1 AND d.action != 'pending' AND d.due_at = (SELECT MAX(d2.due_at) FROM capture_decisions d2 WHERE d2.capture_id = d.capture_id AND d2.action != 'pending') " +
         "LIMIT 1000",
       ).all();
-      return jsonResponse(rows.results ?? []);
+      return jsonResponse((rows.results ?? []).map((row) => {
+        const { state_json: stateJSON, decision_json: decisionJSON, ...summary } = row;
+        const state = parseMetadata(stateJSON);
+        const decision = parseMetadata(decisionJSON);
+        return {
+          ...summary,
+          duration_review: durationReviewRecommendation(decision?.answers, state?.capture_duration),
+        };
+      }));
     }
 
     if (url.pathname === "/admin/api/jev/capture-assessment") {
@@ -111,7 +124,11 @@ export async function handleAdminRequest(request, env, ctx) {
         state: buildCaptureAssessmentState(target),
         questions: captureAssessmentQuestions,
       });
-      return jsonResponse({ ...decision, skip_eligibility: captureSkipEligibility(target, Date.now()) });
+      return jsonResponse({
+        ...decision,
+        duration_review: durationReviewRecommendation(decision.answers, target.duration_summary),
+        skip_eligibility: captureSkipEligibility(target, Date.now()),
+      });
     }
 
     const deviceHistory = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/health-history$/);
@@ -154,6 +171,14 @@ export async function handleAdminRequest(request, env, ctx) {
     if (url.pathname === "/admin/api/capture-sites") {
       if (request.method !== "POST") return methodNotAllowed("POST");
       return await createCaptureSite(request, env, actorID);
+    }
+
+    const captureDurationSamplesMatch = url.pathname.match(/^\/admin\/api\/captures\/([^/]+)\/duration-samples$/);
+    if (captureDurationSamplesMatch) {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      const captureID = captureDurationSamplesMatch[1];
+      if (!UUID_PATTERN.test(captureID)) throw new HTTPError(400, "capture_id must be a UUID");
+      return jsonResponse(await readCaptureDurationSamples(captureID.toLowerCase(), url.searchParams, env));
     }
 
     const captureSkipMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/skip-once$/i);
@@ -261,21 +286,27 @@ async function readCaptureAssessmentTarget(captureID, env) {
   const target = await env.DB.prepare(
     "SELECT t.url, t.capture_interval_seconds, t.last_success_at, t.next_due_at, t.failure_count, t.last_error, " +
     "t.current_sha256, t.current_size, t.enabled, " +
+    "CASE WHEN t.wait_for_selector IS NULL THEN 'domcontentloaded' ELSE 'selector' END AS readiness_mode, " +
     "(SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued', 'running') " +
     "ORDER BY j.created_at DESC LIMIT 1) AS job_status " +
     "FROM capture_targets t WHERE t.capture_id = ? AND t.enabled = 1 LIMIT 1",
   ).bind(captureID).first();
   if (!target) return null;
-  const [history, image] = await Promise.all([
+  const [history, durationSamples, image] = await Promise.all([
     env.DB.prepare(
       "SELECT browser_ms, browser_ms_source, sha256, captured_at FROM capture_history WHERE capture_id = ? ORDER BY captured_at DESC LIMIT 10",
     ).bind(captureID).all(),
+    env.DB.prepare(
+      "SELECT browser_ms, browser_ms_source, reserve_ms, attempt, outcome FROM capture_duration_samples " +
+      "WHERE capture_id = ? AND sampled_at >= ? ORDER BY sampled_at DESC LIMIT 500",
+    ).bind(captureID, Date.now() - CAPTURE_DURATION_REVIEW_WINDOW_MS).all(),
     target.current_sha256 ? env.ASSETS.head(`assets/${target.current_sha256}`) : Promise.resolve(null),
   ]);
   return {
     ...target,
     current_asset_present: Boolean(image && image.size === target.current_size),
     history: history.results ?? [],
+    duration_summary: summarizeCaptureDurations(durationSamples.results ?? [], configuredCaptureReserveMs(env)),
   };
 }
 
@@ -345,6 +376,105 @@ async function enforceJevRateLimit(env, actorID) {
   if (!result?.success) throw new HTTPError(429, "Analysis limit reached. Try again shortly.");
 }
 
+async function readCaptureDurationSamples(captureID, searchParams, env, now = Date.now()) {
+  for (const key of searchParams.keys()) {
+    if (!["since", "limit", "before", "before_sample_id"].includes(key)) {
+      throw new HTTPError(400, `unsupported query parameter: ${key}`);
+    }
+  }
+  const requestedLimit = parseOptionalQueryInteger(searchParams.get("limit"), "limit");
+  const limit = requestedLimit ?? 50;
+  if (limit < 1 || limit > 100) throw new HTTPError(400, "limit must be an integer from 1 to 100");
+  const requestedSince = parseOptionalQueryInteger(searchParams.get("since"), "since");
+  if (requestedSince !== null && requestedSince > now) throw new HTTPError(400, "since must not be in the future");
+  const requestedBefore = parseOptionalQueryInteger(searchParams.get("before"), "before");
+  const beforeSampleID = searchParams.get("before_sample_id");
+  if ((requestedBefore === null) !== (beforeSampleID === null) || (beforeSampleID !== null && (!beforeSampleID || beforeSampleID.length > 128))) {
+    throw new HTTPError(400, "before and before_sample_id must be supplied together");
+  }
+  if (requestedBefore !== null && requestedBefore > now) throw new HTTPError(400, "before must not be in the future");
+
+  const target = await env.DB.prepare("SELECT capture_id FROM capture_targets WHERE capture_id = ?")
+    .bind(captureID).first();
+  if (!target) throw new HTTPError(404, "That webpage capture could not be found.");
+
+  const retainedSince = now - CAPTURE_DURATION_RETENTION_MS;
+  const since = Math.max(requestedSince ?? retainedSince, retainedSince);
+  const summaryRows = await env.DB.prepare(
+    "SELECT browser_ms, browser_ms_source, reserve_ms, attempt, outcome FROM capture_duration_samples " +
+    "WHERE capture_id = ? AND sampled_at >= ? ORDER BY sampled_at DESC, sample_id DESC LIMIT ?",
+  ).bind(captureID, since, CAPTURE_DURATION_SUMMARY_LIMIT).all();
+
+  let sql = "SELECT sample_id, capture_id, job_id, attempt, sampled_at, browser_ms, browser_ms_source, reserve_ms, " +
+    "browser_run_elapsed_ms, capture_elapsed_ms, outcome, readiness_mode, readiness_selector FROM capture_duration_samples " +
+    "WHERE capture_id = ? AND sampled_at >= ?";
+  const values = [captureID, since];
+  if (requestedBefore !== null && beforeSampleID !== null) {
+    sql += " AND (sampled_at < ? OR (sampled_at = ? AND sample_id < ?))";
+    values.push(requestedBefore, requestedBefore, beforeSampleID);
+  }
+  sql += " ORDER BY sampled_at DESC, sample_id DESC LIMIT ?";
+  values.push(limit + 1);
+  const page = await env.DB.prepare(sql).bind(...values).all();
+  const hasMore = (page.results ?? []).length > limit;
+  const samples = (page.results ?? []).slice(0, limit);
+  const last = samples.at(-1);
+  const currentReserveMs = configuredCaptureReserveMs(env);
+  return {
+    capture_id: captureID,
+    retained_since: since,
+    configured_reserve_ms: currentReserveMs,
+    summary_sample_limit: CAPTURE_DURATION_SUMMARY_LIMIT,
+    summary_truncated: (summaryRows.results ?? []).length === CAPTURE_DURATION_SUMMARY_LIMIT,
+    summary: summarizeCaptureDurations(summaryRows.results ?? [], currentReserveMs),
+    samples,
+    next_before: hasMore && last ? last.sampled_at : null,
+    next_before_sample_id: hasMore && last ? last.sample_id : null,
+  };
+}
+
+function parseOptionalQueryInteger(value, name) {
+  if (value === null) return null;
+  if (!/^\d+$/.test(value)) throw new HTTPError(400, `${name} must be a nonnegative integer`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new HTTPError(400, `${name} must be a nonnegative integer`);
+  return parsed;
+}
+
+function configuredCaptureReserveMs(env) {
+  const parsed = Number(env.CAPTURE_BUDGET_RESERVE_MS);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 60_000;
+}
+
+function summarizeDurationAggregate(row, reserveMs) {
+  const totalSamples = Number(row?.total_samples ?? 0);
+  const measuredCount = Number(row?.measured_sample_count ?? 0);
+  const measuredCoverage = totalSamples ? measuredCount / totalSamples : 0;
+  const measuredP50 = finiteNonNegativeOrNull(row?.measured_p50_ms);
+  const measuredP90 = finiteNonNegativeOrNull(row?.measured_p90_ms);
+  return {
+    total_samples: totalSamples,
+    measured_sample_count: measuredCount,
+    reserve_estimated_sample_count: Number(row?.reserve_estimated_sample_count ?? 0),
+    unknown_sample_count: Number(row?.unknown_sample_count ?? 0),
+    failed_attempt_count: Number(row?.failed_attempt_count ?? 0),
+    retry_attempt_count: Number(row?.retry_attempt_count ?? 0),
+    capture_attempt_failure_rate: totalSamples ? Number(row?.failed_attempt_count ?? 0) / totalSamples : 0,
+    retry_attempt_rate: totalSamples ? Number(row?.retry_attempt_count ?? 0) / totalSamples : 0,
+    measured_header_coverage: measuredCoverage,
+    measured_p50_ms: measuredP50,
+    measured_p90_ms: measuredP90,
+    measured_average_ms: finiteNonNegativeOrNull(row?.measured_average_ms),
+    reserve_estimated_total_ms: Number(row?.reserve_estimated_total_ms ?? 0),
+    configured_reserve_ms: reserveMs,
+    reserve_review: classifyReserveReview(measuredCount, measuredCoverage, measuredP90, reserveMs),
+  };
+}
+
+function finiteNonNegativeOrNull(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 function isAllowedAdminEmail(email, configuredEmails) {
   const normalizedEmail = email.trim().toLowerCase();
   if (!normalizedEmail || typeof configuredEmails !== "string") return false;
@@ -385,7 +515,7 @@ function adminAssetHeaders(file, cacheControl, etag = null) {
 async function readOverview(env) {
   const now = Date.now();
   const windowStart = now - 30 * 24 * 60 * 60 * 1000;
-  const [devices, playlists, active, audit, captureTargets, captureRuntimeAverages, integrityIssues, captureJobs, captureHistory, captureUsage, captureDecisions] = await Promise.all([
+  const [devices, playlists, active, audit, captureTargets, captureRuntimeAverages, integrityIssues, captureJobs, captureHistory, captureDurationSummaries, captureUsage, captureDecisions] = await Promise.all([
     env.DB.prepare(
       "SELECT d.device_id, d.enabled, d.created_at, d.last_seen_at, " +
       "CASE WHEN d.public_key IS NULL THEN 'token' ELSE 'key' END AS auth_type, " +
@@ -453,6 +583,26 @@ async function readOverview(env) {
       "SUM(CASE WHEN browser_ms_source = 'unknown' THEN 1 ELSE 0 END) AS unknown " +
       "FROM capture_history WHERE captured_at >= ?",
     ).bind(windowStart).first(),
+    env.DB.prepare(
+      "WITH measured_ranked AS (" +
+      "SELECT capture_id, browser_ms, ROW_NUMBER() OVER (PARTITION BY capture_id ORDER BY browser_ms) AS sample_rank, " +
+      "COUNT(*) OVER (PARTITION BY capture_id) AS measured_count FROM capture_duration_samples " +
+      "WHERE sampled_at >= ? AND browser_ms_source = 'response_header'), " +
+      "measured_stats AS (SELECT capture_id, COUNT(*) AS measured_sample_count, AVG(browser_ms) AS measured_average_ms, " +
+      "AVG(CASE WHEN sample_rank IN (CAST((measured_count + 1) / 2 AS INTEGER), CAST((measured_count + 2) / 2 AS INTEGER)) THEN browser_ms END) AS measured_p50_ms, " +
+      "MAX(CASE WHEN sample_rank = CAST(measured_count * 0.9 + 0.999999 AS INTEGER) THEN browser_ms END) AS measured_p90_ms " +
+      "FROM measured_ranked GROUP BY capture_id), " +
+      "source_stats AS (SELECT capture_id, COUNT(*) AS total_samples, " +
+      "SUM(CASE WHEN browser_ms_source = 'response_header' THEN 1 ELSE 0 END) AS measured_sample_count, " +
+      "SUM(CASE WHEN browser_ms_source = 'reserve' THEN 1 ELSE 0 END) AS reserve_estimated_sample_count, " +
+      "SUM(CASE WHEN browser_ms_source = 'unknown' THEN 1 ELSE 0 END) AS unknown_sample_count, " +
+      "SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failed_attempt_count, " +
+      "SUM(CASE WHEN attempt > 1 THEN 1 ELSE 0 END) AS retry_attempt_count, " +
+      "SUM(CASE WHEN browser_ms_source = 'reserve' THEN browser_ms ELSE 0 END) AS reserve_estimated_total_ms " +
+      "FROM capture_duration_samples WHERE sampled_at >= ? GROUP BY capture_id) " +
+      "SELECT source_stats.*, measured_stats.measured_average_ms, measured_stats.measured_p50_ms, measured_stats.measured_p90_ms " +
+      "FROM source_stats LEFT JOIN measured_stats USING (capture_id)",
+    ).bind(windowStart, windowStart).all(),
     env.DB.prepare("SELECT usage_day, browser_ms FROM capture_usage WHERE singleton = 1").first(),
     env.DB.prepare(
       "SELECT COUNT(*) AS assessments, " +
@@ -492,9 +642,12 @@ async function readOverview(env) {
   const budgetValue = Number(env.DAILY_BROWSER_BUDGET_MS);
   const budgetMs = Number.isSafeInteger(budgetValue) && budgetValue >= 0 ? budgetValue : 600_000;
   const runtimeAverageByCapture = new Map((captureRuntimeAverages.results ?? []).map((row) => [row.capture_id, row]));
+  const durationSummaryByCapture = new Map((captureDurationSummaries.results ?? []).map((row) => [row.capture_id, row]));
+  const reserveMs = configuredCaptureReserveMs(env);
   const captureTargetSummaries = (captureTargets.results ?? []).map((target) => {
     const source = new URL(target.url);
     const runtime = runtimeAverageByCapture.get(target.capture_id);
+    const duration = durationSummaryByCapture.get(target.capture_id);
     return {
       capture_id: target.capture_id,
       display_url: source.origin + source.pathname,
@@ -514,6 +667,7 @@ async function readOverview(env) {
       average_browser_ms: typeof runtime?.average_browser_ms === "number" && Number.isFinite(runtime.average_browser_ms)
         ? runtime.average_browser_ms : null,
       browser_ms_samples: Number(runtime?.sample_count ?? 0),
+      duration_summary: summarizeDurationAggregate(duration, reserveMs),
     };
   });
   const captureUsageSummary = buildCaptureUsageSummary(captureTargetSummaries, captureUsage, budgetMs, now);
