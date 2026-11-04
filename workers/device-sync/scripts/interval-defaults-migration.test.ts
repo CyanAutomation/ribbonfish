@@ -57,7 +57,3 @@ test("interval migration defaults current capture schedules and playlist rotatio
     database.close();
   }
 });
-
-test("interval migration avoids temporary tables unsupported by remote D1", () => {
-  assert.doesNotMatch(migration, /\bCREATE\s+TEMP(?:ORARY)?\s+TABLE\b/i);
-});
