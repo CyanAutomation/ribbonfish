@@ -19,6 +19,10 @@ import { CaptureTargetNotAllowedError, dispatchDueCaptures, enqueueCapture } fro
 import { AssetDeletionInProgressError, markAssetLiveStatement } from "./asset-registry.ts";
 import { callJevDecision, JEVRequestError } from "./jev.ts";
 import {
+  calculateDailyCaptureForecast,
+  CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS,
+} from "./capture-forecast.ts";
+import {
   buildCaptureAssessmentState,
   buildFleetAnalysisState,
   captureAssessmentQuestions,
@@ -73,6 +77,11 @@ export async function handleAdminRequest(request, env, ctx) {
     if (url.pathname === "/admin/api/overview") {
       if (request.method !== "GET") return methodNotAllowed("GET");
       return jsonResponse(await readOverview(env));
+    }
+
+    if (url.pathname === "/admin/api/capture-forecast") {
+      if (request.method !== "GET") return methodNotAllowed("GET");
+      return jsonResponse(await readCaptureForecast(env));
     }
 
     if (url.pathname === "/admin/api/intervals") {
@@ -389,7 +398,7 @@ function adminAssetHeaders(file, cacheControl, etag = null) {
 async function readOverview(env) {
   const now = Date.now();
   const windowStart = now - 30 * 24 * 60 * 60 * 1000;
-  const [devices, playlists, active, audit, captureTargets, integrityIssues, captureJobs, captureHistory, captureUsage, captureDecisions] = await Promise.all([
+  const [devices, playlists, active, audit, captureTargets, captureRuntimeAverages, integrityIssues, captureJobs, captureHistory, captureUsage, captureDecisions] = await Promise.all([
     env.DB.prepare(
       "SELECT d.device_id, d.enabled, d.created_at, d.last_seen_at, " +
       "CASE WHEN d.public_key IS NULL THEN 'token' ELSE 'key' END AS auth_type, " +
@@ -420,10 +429,16 @@ async function readOverview(env) {
       "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size, " +
       "t.last_success_at, " +
       "t.last_error, t.next_due_at, t.schedule_reviewed_at, " +
+      "EXISTS (SELECT 1 FROM playlist_capture_items p JOIN active_playlist a " +
+      "ON a.playlist_id = p.playlist_id AND a.revision = p.revision WHERE p.capture_id = t.capture_id) AS active_in_playlist, " +
       "(SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued', 'running') " +
       "ORDER BY j.created_at DESC LIMIT 1) AS job_status FROM capture_targets t " +
       "WHERE t.enabled = 1 ORDER BY t.next_due_at, t.created_at LIMIT 1000",
     ).bind(now - 30 * 24 * 60 * 60 * 1000, now - 30 * 24 * 60 * 60 * 1000).all(),
+    env.DB.prepare(
+      "SELECT capture_id, AVG(browser_ms) AS average_browser_ms, COUNT(*) AS sample_count " +
+      "FROM capture_history WHERE captured_at >= ? GROUP BY capture_id",
+    ).bind(windowStart).all(),
     env.DB.prepare(
       "SELECT sha256, issue_type, first_seen_at, last_seen_at FROM asset_integrity_issues " +
       "WHERE resolved_at IS NULL ORDER BY last_seen_at DESC LIMIT 100",
@@ -490,39 +505,41 @@ async function readOverview(env) {
   }
   const budgetValue = Number(env.DAILY_BROWSER_BUDGET_MS);
   const budgetMs = Number.isSafeInteger(budgetValue) && budgetValue >= 0 ? budgetValue : 600_000;
-  const accountedMs = captureUsage?.usage_day === new Date(now).toISOString().slice(0, 10)
-    ? captureUsage.browser_ms : 0;
+  const runtimeAverageByCapture = new Map((captureRuntimeAverages.results ?? []).map((row) => [row.capture_id, row]));
+  const captureTargetSummaries = (captureTargets.results ?? []).map((target) => {
+    const source = new URL(target.url);
+    const runtime = runtimeAverageByCapture.get(target.capture_id);
+    return {
+      capture_id: target.capture_id,
+      display_url: source.origin + source.pathname,
+      name: target.name ?? null,
+      capture_interval_seconds: target.capture_interval_seconds,
+      wait_for_selector: target.wait_for_selector,
+      viewport: { width: target.viewport_width, height: target.viewport_height },
+      sha256: target.sha256,
+      size: target.size,
+      last_success_at: target.last_success_at,
+      last_error: target.last_error,
+      job_status: target.job_status,
+      next_due_at: target.next_due_at,
+      schedule_reviewed: target.schedule_reviewed_at != null,
+      active_in_playlist: target.active_in_playlist === 1,
+      average_browser_ms: typeof runtime?.average_browser_ms === "number" && Number.isFinite(runtime.average_browser_ms)
+        ? runtime.average_browser_ms : null,
+      browser_ms_samples: Number(runtime?.sample_count ?? 0),
+    };
+  });
+  const captureUsageSummary = buildCaptureUsageSummary(captureTargetSummaries, captureUsage, budgetMs, now);
 
   return {
     environment: env.ADMIN_ACCESS_REQUIRED === "true" ? "production" : "development",
     devices: (devices.results ?? []).map((device) => summarizeDeviceHealth(device, now)),
     playlists: playlists.results ?? [],
     active_playlist: active,
-    capture_targets: (captureTargets.results ?? []).map((target) => {
-      const source = new URL(target.url);
-      return {
-        capture_id: target.capture_id,
-        display_url: source.origin + source.pathname,
-        name: target.name ?? null,
-        capture_interval_seconds: target.capture_interval_seconds,
-        wait_for_selector: target.wait_for_selector,
-        viewport: { width: target.viewport_width, height: target.viewport_height },
-        sha256: target.sha256,
-        size: target.size,
-        last_success_at: target.last_success_at,
-        last_error: target.last_error,
-        job_status: target.job_status,
-        next_due_at: target.next_due_at,
-        schedule_reviewed: target.schedule_reviewed_at != null,
-      };
-    }),
+    capture_targets: captureTargetSummaries,
     capture_efficiency: {
-      daily_usage: {
-        day: captureUsage?.usage_day ?? null,
-        accounted_ms: accountedMs,
-        budget_ms: budgetMs,
-        remaining_ms: Math.max(0, budgetMs - accountedMs),
-      },
+      daily_usage: captureUsageSummary.daily_usage,
+      forecast: captureUsageSummary.forecast,
       last_30_days: {
         successful_screenshots: captureJobs?.successful_screenshots ?? 0,
         validator_unchanged: captureJobs?.validator_unchanged ?? 0,
@@ -570,6 +587,76 @@ async function readOverview(env) {
       occurred_at: event.occurred_at,
       metadata: parseMetadata(event.metadata_json),
     })),
+  };
+}
+
+async function readCaptureForecast(env, now = Date.now()) {
+  const windowStart = now - 30 * 24 * 60 * 60 * 1000;
+  const [targets, runtimeAverages, captureUsage] = await Promise.all([
+    env.DB.prepare(
+      "SELECT t.capture_id, t.name, t.url, t.capture_interval_seconds, t.schedule_reviewed_at, " +
+      "EXISTS (SELECT 1 FROM playlist_capture_items p JOIN active_playlist a " +
+      "ON a.playlist_id = p.playlist_id AND a.revision = p.revision WHERE p.capture_id = t.capture_id) AS active_in_playlist " +
+      "FROM capture_targets t WHERE t.enabled = 1 ORDER BY t.next_due_at, t.created_at LIMIT 1000",
+    ).all(),
+    env.DB.prepare(
+      "SELECT capture_id, AVG(browser_ms) AS average_browser_ms, COUNT(*) AS sample_count " +
+      "FROM capture_history WHERE captured_at >= ? GROUP BY capture_id",
+    ).bind(windowStart).all(),
+    env.DB.prepare("SELECT usage_day, browser_ms FROM capture_usage WHERE singleton = 1").first(),
+  ]);
+  const runtimeAverageByCapture = new Map((runtimeAverages.results ?? []).map((row) => [row.capture_id, row]));
+  const forecastTargets = (targets.results ?? []).map((target) => {
+    const runtime = runtimeAverageByCapture.get(target.capture_id);
+    const source = new URL(target.url);
+    return {
+      capture_id: target.capture_id,
+      display_url: source.origin + source.pathname,
+      name: target.name ?? null,
+      capture_interval_seconds: target.capture_interval_seconds,
+      schedule_reviewed: target.schedule_reviewed_at != null,
+      active_in_playlist: target.active_in_playlist === 1,
+      average_browser_ms: typeof runtime?.average_browser_ms === "number" && Number.isFinite(runtime.average_browser_ms)
+        ? runtime.average_browser_ms : null,
+      browser_ms_samples: Number(runtime?.sample_count ?? 0),
+    };
+  });
+  const budgetValue = Number(env.DAILY_BROWSER_BUDGET_MS);
+  const budgetMs = Number.isSafeInteger(budgetValue) && budgetValue >= 0 ? budgetValue : CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS;
+  const summary = buildCaptureUsageSummary(forecastTargets, captureUsage, budgetMs, now);
+  return {
+    generated_at: now,
+    plan: "workers-free",
+    quota_scope: "account-wide",
+    other_account_usage_included: false,
+    ...summary,
+  };
+}
+
+function buildCaptureUsageSummary(targets, captureUsage, budgetMs, now) {
+  const accountedMs = captureUsage?.usage_day === new Date(now).toISOString().slice(0, 10)
+    ? captureUsage.browser_ms : 0;
+  const forecast = calculateDailyCaptureForecast(targets.map((target) => ({
+    capture_id: target.capture_id,
+    display_label: target.name || target.display_url,
+    capture_interval_seconds: target.capture_interval_seconds,
+    active_in_playlist: target.active_in_playlist === true,
+    schedule_reviewed: target.schedule_reviewed === true,
+    average_browser_ms: target.average_browser_ms,
+    browser_ms_samples: target.browser_ms_samples,
+  })), new Map(), {
+    freePlanLimitMs: CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS,
+    workerBudgetMs: budgetMs,
+  });
+  return {
+    daily_usage: {
+      day: captureUsage?.usage_day ?? null,
+      accounted_ms: accountedMs,
+      budget_ms: budgetMs,
+      free_plan_limit_ms: CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS,
+      remaining_ms: Math.max(0, budgetMs - accountedMs),
+    },
+    forecast,
   };
 }
 
