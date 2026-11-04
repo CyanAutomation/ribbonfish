@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -9,6 +9,15 @@ import { handleAdminRequest } from "./admin.js";
 
 const placeholder = new Uint8Array(await readFile(new URL("../public/admin/capture-pending.png", import.meta.url)));
 const screenshot = new Uint8Array(await readFile(new URL("../../../agent/defaults/assets/service-health.png", import.meta.url)));
+const originalFetch = globalThis.fetch;
+
+before(() => {
+  globalThis.fetch = async () => new Response(null, { status: 200 });
+});
+
+after(() => {
+  globalThis.fetch = originalFetch;
+});
 
 function sqliteD1(sqlite) {
   function statement(sql, values = []) {
@@ -378,7 +387,7 @@ test("saving a staged webpage queues its first capture and activation serves the
     assert.equal(message.acked, true);
     assert.equal(sqlite.prepare("SELECT status FROM capture_jobs").get().status, "succeeded");
     assert.equal(sqlite.prepare("SELECT result_kind, validator_outcome FROM capture_jobs").get().result_kind, "screenshot");
-    assert.equal(sqlite.prepare("SELECT validator_outcome FROM capture_jobs").get().validator_outcome, "disabled");
+    assert.equal(sqlite.prepare("SELECT validator_outcome FROM capture_jobs").get().validator_outcome, "no_stored_validator");
     assert.deepEqual({ ...sqlite.prepare("SELECT browser_ms_total, browser_ms_response_header, browser_ms_reserve FROM capture_jobs").get() }, {
       browser_ms_total: 1234, browser_ms_response_header: 1234, browser_ms_reserve: 0,
     });
@@ -615,7 +624,7 @@ test("reserve-based Browser Run accounting is explicitly distinguishable from me
   }
 });
 
-test("trusted unchanged HTTP validators skip Browser Run and preserve the cached screenshot", async () => {
+test("unchanged HTTP validators skip Browser Run for any recorded capture host", async () => {
   const sqlite = await freshDatabase();
   const originalFetch = globalThis.fetch;
   try {
@@ -624,15 +633,15 @@ test("trusted unchanged HTTP validators skip Browser Run and preserve the cached
     const { env, objects } = environment(sqlite, {
       async quickAction() { browserCalls++; throw new Error("Browser Run should be skipped"); },
     });
-    env.CAPTURE_VALIDATOR_HOSTS = "example.com";
+    env.CAPTURE_ALLOWED_HOSTS = "example.com,other.example";
     env.DAILY_BROWSER_BUDGET_MS = "1";
-    const created = await createCapturePlaylist(env);
+    const created = await createCapturePlaylist(env, "https://other.example/status");
     const captureID = created.body.captures[0].capture_id;
     const sha256 = createHash("sha256").update(screenshot).digest("hex");
     objects.set(`assets/${sha256}`, screenshot);
     sqlite.prepare(
-      "UPDATE capture_targets SET current_sha256 = ?, current_size = ?, last_success_at = ?, validator_etag = ? WHERE capture_id = ?",
-    ).run(sha256, screenshot.byteLength, Date.now() - 60_000, '"source-v1"', captureID);
+      "UPDATE capture_targets SET current_sha256 = ?, current_size = ?, last_success_at = ?, validator_etag = ?, validator_last_modified = ? WHERE capture_id = ?",
+    ).run(sha256, screenshot.byteLength, Date.now() - 60_000, '"source-v1"', "Wed, 21 Oct 2015 07:28:00 GMT", captureID);
     const requested = await handleAdminRequest(await request(`/admin/api/captures/${captureID}/run`, {
       method: "POST", body: {},
     }), env);
@@ -646,9 +655,10 @@ test("trusted unchanged HTTP validators skip Browser Run and preserve the cached
     await queueHandler({ messages: [message] }, env);
 
     assert.equal(message.acked, true);
-    assert.equal(probeRequest.url, "https://example.com/status");
+    assert.equal(probeRequest.url, "https://other.example/status");
     assert.equal(probeRequest.options.method, "HEAD");
     assert.equal(probeRequest.options.headers.get("If-None-Match"), '"source-v1"');
+    assert.equal(probeRequest.options.headers.get("If-Modified-Since"), "Wed, 21 Oct 2015 07:28:00 GMT");
     assert.equal(browserCalls, 0);
     assert.deepEqual({ ...sqlite.prepare("SELECT status, result_kind, validator_outcome FROM capture_jobs WHERE job_id = ?").get(jobID) }, {
       status: "succeeded", result_kind: "validator_unchanged", validator_outcome: "unchanged",
@@ -680,7 +690,6 @@ test("a changed validator is audited and falls through to a fresh Browser Run sc
         return new Response(screenshot, { headers: { "Content-Type": "image/png", "X-Browser-Ms-Used": "2500" } });
       },
     });
-    env.CAPTURE_VALIDATOR_HOSTS = "example.com";
     const created = await createCapturePlaylist(env);
     const id = created.body.captures[0].capture_id;
     const digest = createHash("sha256").update(screenshot).digest("hex");
@@ -713,7 +722,6 @@ test("unavailable validator probes are audited and cannot replace trusted valida
         return new Response(screenshot, { headers: { "Content-Type": "image/png", "X-Browser-Ms-Used": "2500" } });
       },
     });
-    env.CAPTURE_VALIDATOR_HOSTS = "example.com";
     const created = await createCapturePlaylist(env);
     const id = created.body.captures[0].capture_id;
     sqlite.prepare("UPDATE capture_targets SET validator_etag = ? WHERE capture_id = ?").run('"source-v1"', id);
