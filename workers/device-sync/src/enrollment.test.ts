@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash, webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { fetchHandler } from "./index.js";
+import { fetchHandler } from "./index.ts";
 
 const encoder = new TextEncoder();
 

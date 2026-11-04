@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": [
+      "node",
+      "jsdom"
+    ]
+  },
+  "include": [
+    "src/validation.test.ts",
+    "src/ui-primitives.test.ts"
+  ]
+}

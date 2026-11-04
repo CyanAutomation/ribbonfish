@@ -1,5 +1,19 @@
 type Playlist = { playlist_id?: string; revision_count?: number; active?: boolean | number; created_at?: number };
-type CaptureSummary = { name?: string | null; display_url?: string; last_error?: string | null; last_attempt_at?: number | null; job_status?: string | null; schedule_reviewed?: boolean | number };
+type CaptureSummary = {
+  capture_id?: string;
+  name?: string | null;
+  display_url?: string;
+  sha256?: string;
+  last_error?: string | null;
+  last_attempt_at?: number | null;
+  last_success_at?: number | null;
+  next_due_at?: number | null;
+  job_status?: string | null;
+  schedule_reviewed?: boolean | number;
+  capture_interval_seconds?: number;
+  viewport?: { width: number; height: number };
+  wait_for_selector?: string | null;
+};
 type FleetDevice = {
   device_id?: string;
   enabled?: boolean | number;
@@ -426,7 +440,7 @@ export function createRetryableLoadOnce() {
   let pending: Promise<unknown> | null = null;
   return {
     get loaded() { return loaded; },
-    load(loader: () => unknown) {
+    load<T>(loader: () => T | Promise<T>): Promise<T | undefined> {
       if (loaded) return Promise.resolve(undefined);
       if (!pending) {
         pending = Promise.resolve()
@@ -437,7 +451,7 @@ export function createRetryableLoadOnce() {
           })
           .finally(() => { pending = null; });
       }
-      return pending;
+      return pending as Promise<T>;
     },
   };
 }

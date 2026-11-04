@@ -4,7 +4,7 @@ import { readRequestBody as readBytes, parseJSONBody } from "./request-body.ts";
 import { randomToken, sha256Hex } from "./crypto-primitives.ts";
 export { sha256Hex } from "./crypto-primitives.ts";
 import { HTTPError } from "./http-error.ts";
-import { hasExactKeys, hasOnlyKeys } from "./validation.ts";
+import { hasExactKeys, hasOnlyKeys, isRecord, isString } from "./validation.ts";
 import {
   DEFAULT_CAPTURE_INTERVAL_SECONDS,
   DEFAULT_ROTATION_INTERVAL,
@@ -12,13 +12,14 @@ import {
   isSupportedCaptureInterval,
   isSupportedRotationInterval,
 } from "./intervals.ts";
-import { deriveDeviceHealth } from "./device-health.ts";
+import { deriveDeviceHealth, type DeviceHealthReport } from "./device-health.ts";
 import { isPNG, MAX_ASSET_BYTES, storePngAsset } from "./asset-store.ts";
 import { normalizeCaptureSelector, validateCaptureSettings, validateCaptureTargetURL } from "./capture.ts";
 import { CaptureTargetNotAllowedError, dispatchDueCaptures, enqueueCapture } from "./capture-workflow.ts";
 import { AssetDeletionInProgressError, markAssetLiveStatement } from "./asset-registry.ts";
 import { callJevDecision, JEVRequestError } from "./jev.ts";
 import { classifyReserveReview, summarizeCaptureDurations } from "./capture-duration.ts";
+import type { CaptureDurationSampleSummaryInput } from "./capture-duration.ts";
 import {
   calculateDailyCaptureForecast,
   CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS,
@@ -28,6 +29,37 @@ import {
   captureAssessmentQuestions,
   durationReviewRecommendation,
 } from "./jev-use-cases.ts";
+import type { SqlRow, WorkerEnvironment, WorkerExecutionContext } from "./worker-contracts.ts";
+
+type AdminRequestContext = Partial<Pick<WorkerExecutionContext, "access" | "waitUntil">>;
+type CaptureSkipTarget = SqlRow & {
+  capture_interval_seconds: number;
+  current_sha256: string | null;
+  last_success_at: number | null;
+  current_asset_present: boolean;
+  next_due_at: number;
+  job_status: string | null;
+  failure_count: number;
+  last_error: string | null;
+  history: Array<{ sha256: string | null; browser_ms: number; browser_ms_source: string | null }>;
+};
+type CaptureAssessmentTargetRow = SqlRow & {
+  capture_interval_seconds: number;
+  current_sha256: string | null;
+  last_success_at: number | null;
+  next_due_at: number;
+  failure_count: number;
+  last_error: string | null;
+  enabled: number;
+  job_status: string | null;
+};
+type StoredHealthSnapshot = Pick<DeviceHealthReport, "state" | "startup_error_code"> & {
+  sync?: Pick<DeviceHealthReport["sync"], "status" | "error_code">;
+  outputs?: Array<Pick<DeviceHealthReport["outputs"][number], "display_id" | "connector" | "status" | "error_code">>;
+  host?: DeviceHealthReport["host"];
+};
+type PlaylistAssetInput = { sha256: string; size: number };
+type PlaylistCaptureInput = { capture_id: string };
 
 const MAX_JSON_BYTES = 64 << 10;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -46,7 +78,7 @@ const ADMIN_FILES = new Map([
 
 // Production management deployments require a Cloudflare Access identity and an
 // explicit email allowlist, so the admin API fails closed if either is missing.
-export async function handleAdminRequest(request, env, ctx) {
+export async function handleAdminRequest(request: Request, env: WorkerEnvironment, ctx?: AdminRequestContext) {
   if (env.ADMIN_ENABLED !== "true") return new Response("not found", { status: 404 });
 
   let actorID = "anonymous";
@@ -185,7 +217,7 @@ export async function handleAdminRequest(request, env, ctx) {
     if (captureSkipMatch) {
       if (request.method !== "POST") return methodNotAllowed("POST");
       const data = await readJSON(request);
-      if (!hasExactKeys(data, ["due_at"]) || !Number.isSafeInteger(data.due_at) || data.due_at < 0) {
+      if (!hasExactKeys(data, ["due_at"]) || typeof data.due_at !== "number" || !Number.isSafeInteger(data.due_at) || data.due_at < 0) {
         throw new HTTPError(400, "request body must contain a valid due_at timestamp");
       }
       await confirmCaptureSkip(captureSkipMatch[1].toLowerCase(), data.due_at, env, actorID);
@@ -282,7 +314,7 @@ export async function handleAdminRequest(request, env, ctx) {
   }
 }
 
-async function readCaptureAssessmentTarget(captureID, env) {
+async function readCaptureAssessmentTarget(captureID: string, env: WorkerEnvironment): Promise<CaptureSkipTarget | null> {
   const target = await env.DB.prepare(
     "SELECT t.url, t.capture_interval_seconds, t.last_success_at, t.next_due_at, t.failure_count, t.last_error, " +
     "t.current_sha256, t.current_size, t.enabled, " +
@@ -290,16 +322,16 @@ async function readCaptureAssessmentTarget(captureID, env) {
     "(SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued', 'running') " +
     "ORDER BY j.created_at DESC LIMIT 1) AS job_status " +
     "FROM capture_targets t WHERE t.capture_id = ? AND t.enabled = 1 LIMIT 1",
-  ).bind(captureID).first();
+  ).bind(captureID).first<CaptureAssessmentTargetRow>();
   if (!target) return null;
   const [history, durationSamples, image] = await Promise.all([
     env.DB.prepare(
       "SELECT browser_ms, browser_ms_source, sha256, captured_at FROM capture_history WHERE capture_id = ? ORDER BY captured_at DESC LIMIT 10",
-    ).bind(captureID).all(),
+    ).bind(captureID).all<{ sha256: string | null; browser_ms: number; browser_ms_source: string | null }>(),
     env.DB.prepare(
       "SELECT browser_ms, browser_ms_source, reserve_ms, attempt, outcome FROM capture_duration_samples " +
       "WHERE capture_id = ? AND sampled_at >= ? ORDER BY sampled_at DESC LIMIT 500",
-    ).bind(captureID, Date.now() - CAPTURE_DURATION_REVIEW_WINDOW_MS).all(),
+    ).bind(captureID, Date.now() - CAPTURE_DURATION_REVIEW_WINDOW_MS).all<CaptureDurationSampleSummaryInput>(),
     target.current_sha256 ? env.ASSETS.head(`assets/${target.current_sha256}`) : Promise.resolve(null),
   ]);
   return {
@@ -312,30 +344,32 @@ async function readCaptureAssessmentTarget(captureID, env) {
 
 const CAPTURE_SKIP_APPROVAL_GRACE_MS = 5 * 60 * 1000;
 
-function captureSkipEligibility(target, now) {
-  let reason = null;
+function captureSkipEligibility(target: CaptureSkipTarget, now: number) {
+  let reason: string | null = null;
+  const nextDueAt = Number.isSafeInteger(target.next_due_at) ? target.next_due_at : null;
+  const lastSuccessAt = Number.isSafeInteger(target.last_success_at) ? target.last_success_at : null;
   const intervalMs = Number.isSafeInteger(target.capture_interval_seconds)
     ? target.capture_interval_seconds * 1000 : 0;
   if (target.enabled !== undefined && target.enabled !== 1) reason = "This screenshot target is disabled.";
-  else if (!target.current_sha256 || !Number.isSafeInteger(target.last_success_at)) reason = "A successful screenshot is required before skipping.";
+  else if (!target.current_sha256 || lastSuccessAt === null) reason = "A successful screenshot is required before skipping.";
   else if (!target.current_asset_present) reason = "The current screenshot asset is missing or inconsistent.";
-  else if (!Number.isSafeInteger(target.next_due_at) || target.next_due_at <= now) reason = "The next screenshot is due or already being processed.";
+  else if (nextDueAt === null || nextDueAt <= now) reason = "The next screenshot is due or already being processed.";
   else if (target.job_status) reason = "A screenshot job is already queued or running.";
   else if (target.failure_count > 0 || target.last_error) reason = "Recent screenshot failures require another capture.";
   else if (!hasStableRecentScreenshots(target)) reason = "At least three recent identical screenshots are required before considering a skip.";
-  else if (!intervalMs || target.last_success_at > now || target.next_due_at - target.last_success_at > intervalMs * 2) {
+  else if (!intervalMs || lastSuccessAt === null || nextDueAt === null || lastSuccessAt > now || nextDueAt - lastSuccessAt > intervalMs * 2) {
     reason = "The current screenshot may be too old to skip safely.";
   }
-  return { eligible: reason === null, reason, due_at: Number.isSafeInteger(target.next_due_at) ? target.next_due_at : null };
+  return { eligible: reason === null, reason, due_at: nextDueAt };
 }
 
-function hasStableRecentScreenshots(target) {
+function hasStableRecentScreenshots(target: CaptureSkipTarget) {
   const recent = (target.history ?? []).slice(0, 3);
   return recent.length === 3 && Boolean(target.current_sha256) &&
     recent.every((item) => item.sha256 === target.current_sha256);
 }
 
-async function confirmCaptureSkip(captureID, dueAt, env, actorID) {
+async function confirmCaptureSkip(captureID: string, dueAt: number, env: WorkerEnvironment, actorID: string) {
   const now = Date.now();
   const target = await readCaptureAssessmentTarget(captureID, env);
   if (!target) throw new HTTPError(404, "That webpage capture is no longer available.");
@@ -364,7 +398,7 @@ async function confirmCaptureSkip(captureID, dueAt, env, actorID) {
   }
 }
 
-async function enforceJevRateLimit(env, actorID) {
+async function enforceJevRateLimit(env: WorkerEnvironment, actorID: string) {
   if (typeof env.ENROLLMENT_RATE_LIMITER?.limit !== "function") {
     throw new HTTPError(503, "Analysis is temporarily unavailable.");
   }
@@ -376,7 +410,7 @@ async function enforceJevRateLimit(env, actorID) {
   if (!result?.success) throw new HTTPError(429, "Analysis limit reached. Try again shortly.");
 }
 
-async function readCaptureDurationSamples(captureID, searchParams, env, now = Date.now()) {
+async function readCaptureDurationSamples(captureID: string, searchParams: URLSearchParams, env: WorkerEnvironment, now = Date.now()) {
   for (const key of searchParams.keys()) {
     if (!["since", "limit", "before", "before_sample_id"].includes(key)) {
       throw new HTTPError(400, `unsupported query parameter: ${key}`);
@@ -403,7 +437,7 @@ async function readCaptureDurationSamples(captureID, searchParams, env, now = Da
   const summaryRows = await env.DB.prepare(
     "SELECT browser_ms, browser_ms_source, reserve_ms, attempt, outcome FROM capture_duration_samples " +
     "WHERE capture_id = ? AND sampled_at >= ? ORDER BY sampled_at DESC, sample_id DESC LIMIT ?",
-  ).bind(captureID, since, CAPTURE_DURATION_SUMMARY_LIMIT).all();
+  ).bind(captureID, since, CAPTURE_DURATION_SUMMARY_LIMIT).all<CaptureDurationSampleSummaryInput>();
 
   let sql = "SELECT sample_id, capture_id, job_id, attempt, sampled_at, browser_ms, browser_ms_source, reserve_ms, " +
     "browser_run_elapsed_ms, capture_elapsed_ms, outcome, readiness_mode, readiness_selector FROM capture_duration_samples " +
@@ -415,7 +449,7 @@ async function readCaptureDurationSamples(captureID, searchParams, env, now = Da
   }
   sql += " ORDER BY sampled_at DESC, sample_id DESC LIMIT ?";
   values.push(limit + 1);
-  const page = await env.DB.prepare(sql).bind(...values).all();
+  const page = await env.DB.prepare(sql).bind(...values).all<SqlRow>();
   const hasMore = (page.results ?? []).length > limit;
   const samples = (page.results ?? []).slice(0, limit);
   const last = samples.at(-1);
@@ -433,7 +467,7 @@ async function readCaptureDurationSamples(captureID, searchParams, env, now = Da
   };
 }
 
-function parseOptionalQueryInteger(value, name) {
+function parseOptionalQueryInteger(value: string | null, name: string): number | null {
   if (value === null) return null;
   if (!/^\d+$/.test(value)) throw new HTTPError(400, `${name} must be a nonnegative integer`);
   const parsed = Number(value);
@@ -441,12 +475,12 @@ function parseOptionalQueryInteger(value, name) {
   return parsed;
 }
 
-function configuredCaptureReserveMs(env) {
+function configuredCaptureReserveMs(env: WorkerEnvironment): number {
   const parsed = Number(env.CAPTURE_BUDGET_RESERVE_MS);
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 60_000;
 }
 
-function summarizeDurationAggregate(row, reserveMs) {
+function summarizeDurationAggregate(row: SqlRow | null | undefined, reserveMs: number) {
   const totalSamples = Number(row?.total_samples ?? 0);
   const measuredCount = Number(row?.measured_sample_count ?? 0);
   const measuredCoverage = totalSamples ? measuredCount / totalSamples : 0;
@@ -471,17 +505,17 @@ function summarizeDurationAggregate(row, reserveMs) {
   };
 }
 
-function finiteNonNegativeOrNull(value) {
+function finiteNonNegativeOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-function isAllowedAdminEmail(email, configuredEmails) {
+function isAllowedAdminEmail(email: string, configuredEmails: string | undefined) {
   const normalizedEmail = email.trim().toLowerCase();
   if (!normalizedEmail || typeof configuredEmails !== "string") return false;
   return configuredEmails.split(",").some((candidate) => candidate.trim().toLowerCase() === normalizedEmail);
 }
 
-async function fetchAdminAsset(request, env, pathname) {
+async function fetchAdminAsset(request: Request, env: WorkerEnvironment, pathname: string) {
   const file = ADMIN_FILES.get(pathname);
   if (!file) return new Response("not found", { status: 404 });
   const cacheControl = `private, max-age=${file.maxAge}, must-revalidate`;
@@ -499,7 +533,7 @@ async function fetchAdminAsset(request, env, pathname) {
   return new Response(object.body, { status: 200, headers });
 }
 
-function adminAssetHeaders(file, cacheControl, etag = null) {
+function adminAssetHeaders(file: { contentType: string }, cacheControl: string, etag: string | null = null) {
   const headers = new Headers({
     "Content-Type": file.contentType,
     "Cache-Control": cacheControl,
@@ -512,7 +546,7 @@ function adminAssetHeaders(file, cacheControl, etag = null) {
   return headers;
 }
 
-async function readOverview(env) {
+async function readOverview(env: WorkerEnvironment) {
   const now = Date.now();
   const windowStart = now - 30 * 24 * 60 * 60 * 1000;
   const [devices, playlists, active, audit, captureTargets, captureRuntimeAverages, integrityIssues, captureJobs, captureHistory, captureDurationSummaries, captureUsage, captureDecisions] = await Promise.all([
@@ -619,7 +653,8 @@ async function readOverview(env) {
     ).bind(windowStart).first(),
   ]);
 
-  let missing = [];
+  type MissingAsset = { sha256: string; expected_size: number; actual_size: number | null };
+  let missing: Array<MissingAsset | null> = [];
   if (active) {
     const [assets, captures] = await Promise.all([
       env.DB.prepare(
@@ -632,12 +667,12 @@ async function readOverview(env) {
         "WHERE p.playlist_id = ? AND p.revision = ? ORDER BY p.position",
       ).bind(windowStart, windowStart, active.playlist_id, active.revision).all(),
     ]);
-    missing = await Promise.all([...(assets.results ?? []), ...(captures.results ?? [])].map(async (asset) => {
+    missing = await Promise.all([...(assets.results ?? []), ...(captures.results ?? [])].map(async (asset): Promise<MissingAsset | null> => {
       const object = await env.ASSETS.head("assets/" + asset.sha256);
       if (object && object.size === asset.size) return null;
       return { sha256: asset.sha256, expected_size: asset.size, actual_size: object?.size ?? null };
     }));
-    missing = missing.filter(Boolean);
+    missing = missing.filter((item): item is MissingAsset => item !== null);
   }
   const budgetValue = Number(env.DAILY_BROWSER_BUDGET_MS);
   const budgetMs = Number.isSafeInteger(budgetValue) && budgetValue >= 0 ? budgetValue : 600_000;
@@ -732,7 +767,7 @@ async function readOverview(env) {
   };
 }
 
-async function readCaptureForecast(env, now = Date.now()) {
+async function readCaptureForecast(env: WorkerEnvironment, now = Date.now()) {
   const windowStart = now - 30 * 24 * 60 * 60 * 1000;
   const [targets, runtimeAverages, captureUsage] = await Promise.all([
     env.DB.prepare(
@@ -775,7 +810,7 @@ async function readCaptureForecast(env, now = Date.now()) {
   };
 }
 
-function buildCaptureUsageSummary(targets, captureUsage, budgetMs, now) {
+function buildCaptureUsageSummary(targets: SqlRow[], captureUsage: SqlRow | null, budgetMs: number, now: number) {
   const accountedMs = captureUsage?.usage_day === new Date(now).toISOString().slice(0, 10)
     ? captureUsage.browser_ms : 0;
   const forecast = calculateDailyCaptureForecast(targets.map((target) => ({
@@ -802,7 +837,7 @@ function buildCaptureUsageSummary(targets, captureUsage, budgetMs, now) {
   };
 }
 
-function summarizeDeviceHealth(device, now) {
+function summarizeDeviceHealth(device: SqlRow, now: number) {
   const report = parseHealthJSON(device.report_json);
   return {
     device_id: device.device_id,
@@ -825,7 +860,7 @@ function summarizeDeviceHealth(device, now) {
   };
 }
 
-async function readDeviceHealth(deviceID, env) {
+async function readDeviceHealth(deviceID: string, env: WorkerEnvironment) {
   const device = await env.DB.prepare("SELECT device_id, enabled FROM devices WHERE device_id = ?").bind(deviceID).first();
   if (!device) throw new HTTPError(404, "device not found");
   const [latest, events] = await Promise.all([
@@ -845,7 +880,7 @@ async function readDeviceHealth(deviceID, env) {
   };
 }
 
-async function readDeviceHealthHistory(deviceID, params, env) {
+async function readDeviceHealthHistory(deviceID: string, params: URLSearchParams, env: WorkerEnvironment) {
   const device = await env.DB.prepare("SELECT device_id, enabled FROM devices WHERE device_id = ?").bind(deviceID).first();
   if (!device) throw new HTTPError(404, "device not found");
   const rawLimit = params.get("limit") ?? "100";
@@ -881,7 +916,7 @@ async function readDeviceHealthHistory(deviceID, params, env) {
   };
 }
 
-function formatHealthEvent(event) {
+function formatHealthEvent(event: SqlRow) {
   return {
     event_id: event.event_id,
     received_at: event.received_at,
@@ -892,12 +927,16 @@ function formatHealthEvent(event) {
   };
 }
 
-function parseHealthJSON(value) {
-  if (typeof value !== "string") return null;
-  try { return JSON.parse(value); } catch { return null; }
+function parseHealthJSON(value: unknown): StoredHealthSnapshot | null {
+  if (!isString(value)) return null;
+  try {
+    const report: unknown = JSON.parse(value);
+    if (!isRecord(report) || !["starting", "ready", "degraded", "startup_failed", "stopping"].includes(String(report.state))) return null;
+    return report as unknown as StoredHealthSnapshot;
+  } catch { return null; }
 }
 
-async function readEnrollmentRequests(env) {
+async function readEnrollmentRequests(env: WorkerEnvironment) {
   const now = Date.now();
   const result = await env.DB.prepare(
     "SELECT r.request_id, r.device_id, r.fingerprint, r.created_at, r.last_seen_at, r.expires_at, " +
@@ -911,7 +950,7 @@ async function readEnrollmentRequests(env) {
   }));
 }
 
-async function approveEnrollmentRequest(requestID, env, actorID) {
+async function approveEnrollmentRequest(requestID: string, env: WorkerEnvironment, actorID: string) {
   const now = Date.now();
   const enrollment = await env.DB.prepare(
     "SELECT request_id, device_id, public_key, fingerprint, expires_at FROM enrollment_requests " +
@@ -944,7 +983,7 @@ async function approveEnrollmentRequest(requestID, env, actorID) {
   return jsonResponse({ device_id: enrollment.device_id, status: "approved" });
 }
 
-async function rejectEnrollmentRequest(requestID, env, actorID) {
+async function rejectEnrollmentRequest(requestID: string, env: WorkerEnvironment, actorID: string) {
   const now = Date.now();
   const enrollment = await env.DB.prepare(
     "SELECT device_id, fingerprint FROM enrollment_requests WHERE request_id = ? AND status = 'pending' AND expires_at > ?",
@@ -963,9 +1002,9 @@ async function rejectEnrollmentRequest(requestID, env, actorID) {
   return jsonResponse({ device_id: enrollment.device_id, status: "rejected" });
 }
 
-async function createEnrollmentCode(request, env, actorID) {
+async function createEnrollmentCode(request: Request, env: WorkerEnvironment, actorID: string) {
   const data = await readJSON(request);
-  if (!hasExactKeys(data, ["expires_in_minutes"]) || !Number.isSafeInteger(data.expires_in_minutes) ||
+  if (!hasExactKeys(data, ["expires_in_minutes"]) || typeof data.expires_in_minutes !== "number" || !Number.isSafeInteger(data.expires_in_minutes) ||
       data.expires_in_minutes < 1 || data.expires_in_minutes > 1440) {
     throw new HTTPError(400, "expires_in_minutes must be an integer from 1 to 1440");
   }
@@ -979,7 +1018,7 @@ async function createEnrollmentCode(request, env, actorID) {
   return jsonResponse({ code, expires_at: expiresAt }, 201);
 }
 
-async function uploadAsset(request, env, actorID) {
+async function uploadAsset(request: Request, env: WorkerEnvironment, actorID: string) {
   if (request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !== "image/png") {
     throw new HTTPError(415, "Please choose a PNG image.");
   }
@@ -1004,7 +1043,7 @@ async function uploadAsset(request, env, actorID) {
   return jsonResponse({ sha256: asset.sha256, size: asset.size }, 200);
 }
 
-async function readPlaylistAsset(sha256, env) {
+async function readPlaylistAsset(sha256: string, env: WorkerEnvironment) {
   const reference = await env.DB.prepare(
     "SELECT 1 AS present FROM playlist_assets WHERE sha256 = ? LIMIT 1",
   ).bind(sha256).first();
@@ -1025,35 +1064,48 @@ async function readPlaylistAsset(sha256, env) {
   return new Response(object.body, { status: 200, headers });
 }
 
-async function createPlaylist(request, env, actorID, ctx) {
+async function createPlaylist(request: Request, env: WorkerEnvironment, actorID: string, ctx?: AdminRequestContext) {
   const data = await readJSON(request);
-  const assets = data?.assets ?? [];
-  const captures = data?.captures ?? [];
-  const rotationInterval = Object.hasOwn(data ?? {}, "rotation_interval") ? data.rotation_interval : DEFAULT_ROTATION_INTERVAL;
   if (!hasOnlyKeys(data, ["id", "rotation_interval", "assets", "captures"]) ||
       !Object.hasOwn(data, "id") ||
-      !ID_PATTERN.test(data.id ?? "") || !isSupportedRotationInterval(rotationInterval) ||
-      !Array.isArray(assets) || !Array.isArray(captures) || assets.length + captures.length < 1 ||
-      assets.length + captures.length > 256) {
+      !isString(data.id) || !ID_PATTERN.test(data.id)) {
     throw new HTTPError(400, "Add a playlist ID, a valid rotation interval and at least one image or webpage (up to 256 items).");
   }
 
-  for (const asset of assets) {
-    if (!hasExactKeys(asset, ["sha256", "size"]) || !DIGEST_PATTERN.test(asset.sha256 ?? "") ||
-        !Number.isSafeInteger(asset.size) || asset.size < 1 || asset.size > MAX_ASSET_BYTES) {
+  const rotationInterval = Object.hasOwn(data, "rotation_interval") ? data.rotation_interval : DEFAULT_ROTATION_INTERVAL;
+  const rawAssets = data.assets ?? [];
+  const rawCaptures = data.captures ?? [];
+  if (!isSupportedRotationInterval(rotationInterval) || !Array.isArray(rawAssets) || !Array.isArray(rawCaptures) ||
+      rawAssets.length + rawCaptures.length < 1 || rawAssets.length + rawCaptures.length > 256) {
+    throw new HTTPError(400, "Add a playlist ID, a valid rotation interval and at least one image or webpage (up to 256 items).");
+  }
+
+  const assets: PlaylistAssetInput[] = [];
+  for (const asset of rawAssets) {
+    if (!hasExactKeys(asset, ["sha256", "size"]) || !isString(asset.sha256) || !DIGEST_PATTERN.test(asset.sha256) ||
+        typeof asset.size !== "number" || !Number.isSafeInteger(asset.size) || asset.size < 1 || asset.size > MAX_ASSET_BYTES) {
       throw new HTTPError(400, "One of the images in this playlist is not valid. Please review the selection.");
     }
+    assets.push({ sha256: asset.sha256, size: asset.size });
+  }
+
+  const captures: PlaylistCaptureInput[] = [];
+  for (const capture of rawCaptures) {
+    if (!hasExactKeys(capture, ["capture_id"]) || !isString(capture.capture_id)) {
+      throw new HTTPError(400, "Add existing sites from the Sites section after reviewing their screenshot schedules.");
+    }
+    captures.push({ capture_id: capture.capture_id });
+  }
+
+  for (const asset of assets) {
     const object = await env.ASSETS.head("assets/" + asset.sha256);
     if (!object || object.size !== asset.size) {
       throw new HTTPError(409, "One of these images is no longer available. Upload it again before saving the playlist.");
     }
   }
 
-  const captureTargets = [];
+  const captureTargets: SqlRow[] = [];
   for (const capture of captures) {
-    if (!hasExactKeys(capture, ["capture_id"])) {
-      throw new HTTPError(400, "Add existing sites from the Sites section after reviewing their screenshot schedules.");
-    }
     captureTargets.push(await resolveCaptureTarget(capture, env, actorID));
   }
 
@@ -1080,7 +1132,7 @@ async function createPlaylist(request, env, actorID, ctx) {
   try {
     await env.DB.batch(statements);
   } catch (error) {
-    if (String(error?.message).includes("asset deletion in progress")) {
+    if ((error instanceof Error ? error.message : String(error)).includes("asset deletion in progress")) {
       throw new HTTPError(409, "One of these images is being cleaned up. Please upload it again shortly.");
     }
     throw error;
@@ -1105,7 +1157,7 @@ async function createPlaylist(request, env, actorID, ctx) {
   }, 201);
 }
 
-async function updateCaptureInterval(request, captureID, env, actorID) {
+async function updateCaptureInterval(request: Request, captureID: string, env: WorkerEnvironment, actorID: string) {
   const data = await readJSON(request);
   if (!hasExactKeys(data, ["capture_interval_seconds"]) || !isSupportedCaptureInterval(data.capture_interval_seconds)) {
     throw new HTTPError(400, "capture_interval_seconds must be one of the supported values: 900, 1800, 3600, 21600, or 86400.");
@@ -1128,7 +1180,7 @@ async function updateCaptureInterval(request, captureID, env, actorID) {
   return jsonResponse({ capture_id: captureID, capture_interval_seconds: data.capture_interval_seconds });
 }
 
-async function updateCaptureName(request, captureID, env, actorID) {
+async function updateCaptureName(request: Request, captureID: string, env: WorkerEnvironment, actorID: string) {
   const data = await readJSON(request);
   if (!hasExactKeys(data, ["name"]) || typeof data.name !== "string" || data.name.trim().length > 120 || /[\u0000-\u001f\u007f]/.test(data.name)) {
     throw new HTTPError(400, "Name must be text of at most 120 characters on one line.");
@@ -1142,14 +1194,14 @@ async function updateCaptureName(request, captureID, env, actorID) {
   return jsonResponse({ capture_id: captureID, name });
 }
 
-async function updateCaptureReadiness(request, captureID, env, actorID) {
+async function updateCaptureReadiness(request: Request, captureID: string, env: WorkerEnvironment, actorID: string) {
   const data = await readJSON(request);
   if (!hasExactKeys(data, ["wait_for_selector"])) {
     throw new HTTPError(400, "request body must contain only wait_for_selector");
   }
   let selector;
   try { selector = normalizeCaptureSelector(data.wait_for_selector); }
-  catch (error) { throw new HTTPError(400, error.message); }
+  catch (error) { throw new HTTPError(400, error instanceof Error ? error.message : String(error)); }
   const existing = await env.DB.prepare(
     "SELECT capture_id FROM capture_targets WHERE capture_id = ? AND enabled = 1",
   ).bind(captureID).first();
@@ -1164,7 +1216,7 @@ async function updateCaptureReadiness(request, captureID, env, actorID) {
   return jsonResponse({ capture_id: captureID, wait_for_selector: selector });
 }
 
-async function removeCaptureSite(captureID, env, actorID) {
+async function removeCaptureSite(captureID: string, env: WorkerEnvironment, actorID: string) {
   const target = await env.DB.prepare(
     "SELECT capture_id FROM capture_targets WHERE capture_id = ?",
   ).bind(captureID).first();
@@ -1180,7 +1232,7 @@ async function removeCaptureSite(captureID, env, actorID) {
   return jsonResponse({ capture_id: captureID, removed: results?.[0]?.meta?.changes === 1 });
 }
 
-async function readPlaylistRevision(playlistID, revision, env) {
+async function readPlaylistRevision(playlistID: string, revision: string, env: WorkerEnvironment) {
   const playlist = await env.DB.prepare(
     "SELECT playlist_id, revision, rotation_interval FROM playlists WHERE playlist_id = ? AND revision = ?",
   ).bind(playlistID, revision).first();
@@ -1196,7 +1248,7 @@ async function readPlaylistRevision(playlistID, revision, env) {
     "JOIN capture_targets t ON t.capture_id = p.capture_id " +
     "WHERE p.playlist_id = ? AND p.revision = ? ORDER BY p.position",
   ).bind(Date.now() - 30 * 24 * 60 * 60 * 1000, Date.now() - 30 * 24 * 60 * 60 * 1000, playlistID, revision).all();
-  const result = { ...playlist, assets: assets.results ?? [] };
+  const result: SqlRow = { ...playlist, assets: assets.results ?? [] };
   if (captures.results?.length) {
     result.captures = captures.results.map((capture) => ({
       capture_id: capture.capture_id,
@@ -1212,7 +1264,12 @@ async function readPlaylistRevision(playlistID, revision, env) {
   return jsonResponse(result);
 }
 
-async function resolveCaptureTarget(input, env, actorID, { preserveExistingSchedule = false } = {}) {
+async function resolveCaptureTarget(
+  input: SqlRow,
+  env: WorkerEnvironment,
+  actorID: string,
+  { preserveExistingSchedule = false }: { preserveExistingSchedule?: boolean } = {},
+) {
   if (hasExactKeys(input, ["capture_id"])) {
     const existing = await env.DB.prepare(
       "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, schedule_reviewed_at " +
@@ -1250,7 +1307,7 @@ async function resolveCaptureTarget(input, env, actorID, { preserveExistingSched
     }
     settings = validateCaptureSettings(captureSettings);
   } catch (error) {
-    throw new HTTPError(400, error.message);
+    throw new HTTPError(400, error instanceof Error ? error.message : String(error));
   }
   const variantKey = await sha256Hex(JSON.stringify({
     url,
@@ -1336,7 +1393,7 @@ async function resolveCaptureTarget(input, env, actorID, { preserveExistingSched
   };
 }
 
-async function createCaptureSite(request, env, actorID) {
+async function createCaptureSite(request: Request, env: WorkerEnvironment, actorID: string) {
   const data = await readJSON(request);
   if (!hasExactKeys(data, ["url", "viewport"]) || !Object.hasOwn(data, "url") || !Object.hasOwn(data, "viewport")) {
     throw new HTTPError(400, "A site needs a URL and screenshot size.");
@@ -1353,10 +1410,10 @@ async function createCaptureSite(request, env, actorID) {
   );
 }
 
-async function activatePlaylist(request, env, actorID) {
+async function activatePlaylist(request: Request, env: WorkerEnvironment, actorID: string) {
   const data = await readJSON(request);
-  if (!hasExactKeys(data, ["playlist_id", "revision"]) || !ID_PATTERN.test(data.playlist_id ?? "") ||
-      !ID_PATTERN.test(data.revision ?? "")) {
+  if (!hasExactKeys(data, ["playlist_id", "revision"]) || !isString(data.playlist_id) ||
+      !isString(data.revision) || !ID_PATTERN.test(data.playlist_id) || !ID_PATTERN.test(data.revision)) {
     throw new HTTPError(400, "playlist_id and revision are required");
   }
   const playlist = await env.DB.prepare(
@@ -1380,7 +1437,7 @@ async function activatePlaylist(request, env, actorID) {
   return jsonResponse({ active_playlist: { playlist_id: data.playlist_id, revision: data.revision } });
 }
 
-async function deletePlaylist(playlistID, env, actorID) {
+async function deletePlaylist(playlistID: string, env: WorkerEnvironment, actorID: string) {
   const revisions = await env.DB.prepare(
     "SELECT revision FROM playlists WHERE playlist_id = ?",
   ).bind(playlistID).all();
@@ -1426,7 +1483,7 @@ async function deletePlaylist(playlistID, env, actorID) {
   return jsonResponse({ playlist_id: playlistID, deleted_revisions: deletedRevisions });
 }
 
-async function setDeviceEnabled(request, deviceID, env, actorID) {
+async function setDeviceEnabled(request: Request, deviceID: string, env: WorkerEnvironment, actorID: string) {
   const data = await readJSON(request);
   if (!hasExactKeys(data, ["enabled"]) || typeof data.enabled !== "boolean") {
     throw new HTTPError(400, "enabled must be a boolean");
@@ -1440,7 +1497,7 @@ async function setDeviceEnabled(request, deviceID, env, actorID) {
   return jsonResponse({ device_id: deviceID, enabled: data.enabled });
 }
 
-async function deleteDevice(deviceID, env, actorID) {
+async function deleteDevice(deviceID: string, env: WorkerEnvironment, actorID: string) {
   const device = await env.DB.prepare("SELECT device_id FROM devices WHERE device_id = ?").bind(deviceID).first();
   if (!device) throw new HTTPError(404, "device not found");
   const now = Date.now();
@@ -1456,7 +1513,7 @@ async function deleteDevice(deviceID, env, actorID) {
   return jsonResponse({ device_id: deviceID, deleted: true });
 }
 
-async function rotateDeviceCredential(request, deviceID, env, actorID) {
+async function rotateDeviceCredential(request: Request, deviceID: string, env: WorkerEnvironment, actorID: string) {
   const data = await readJSON(request);
   if (!hasExactKeys(data, [])) throw new HTTPError(400, "request body must be an empty JSON object");
   const device = await env.DB.prepare("SELECT device_id, public_key FROM devices WHERE device_id = ?").bind(deviceID).first();
@@ -1471,7 +1528,15 @@ async function rotateDeviceCredential(request, deviceID, env, actorID) {
   return jsonResponse({ device_token: deviceToken });
 }
 
-function auditStatement(env, actorID, eventType, subjectType, subjectID, metadata, { onlyWhenPreviousChanged = false } = {}) {
+function auditStatement(
+  env: WorkerEnvironment,
+  actorID: string,
+  eventType: string,
+  subjectType: string,
+  subjectID: string,
+  metadata: unknown,
+  { onlyWhenPreviousChanged = false }: { onlyWhenPreviousChanged?: boolean } = {},
+) {
   const insert = onlyWhenPreviousChanged
     ? "SELECT ?, ?, ?, ?, ?, ?, ? WHERE changes() > 0"
     : "VALUES (?, ?, ?, ?, ?, ?, ?)";
@@ -1481,7 +1546,7 @@ function auditStatement(env, actorID, eventType, subjectType, subjectID, metadat
   ).bind(crypto.randomUUID(), actorID, eventType, subjectType, subjectID, Date.now(), JSON.stringify(metadata));
 }
 
-async function readJSON(request) {
+async function readJSON(request: Request): Promise<unknown> {
   if (request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !== "application/json") {
     throw new HTTPError(415, "Content-Type must be application/json");
   }
@@ -1489,10 +1554,14 @@ async function readJSON(request) {
   return parseJSONBody(bytes);
 }
 
-function parseMetadata(value) {
-  try { return JSON.parse(value); } catch { return {}; }
+function parseMetadata(value: unknown): SqlRow | null {
+  if (!isString(value)) return {};
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) ? parsed as SqlRow : {};
+  } catch { return {}; }
 }
 
-function methodNotAllowed(allowed) {
+function methodNotAllowed(allowed: string) {
   return new Response("method not allowed", { status: 405, headers: { Allow: allowed } });
 }

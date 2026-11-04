@@ -1,12 +1,21 @@
+// @typecheck-node-test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { hasExactKeys, hasOnlyKeys, isRecord } from "./validation.ts";
+import { hasExactKeys, hasOnlyKeys, isRecord, isString } from "./validation.ts";
 
 test("isRecord accepts objects but rejects null, arrays and primitives", () => {
   assert.equal(isRecord({}), true);
   assert.equal(isRecord(Object.create(null)), true);
   for (const value of [null, undefined, [], "object", 1, true]) {
     assert.equal(isRecord(value), false);
+  }
+});
+
+test("isString narrows untrusted values without coercion", () => {
+  assert.equal(isString("device-1"), true);
+  assert.equal(isString(""), true);
+  for (const value of [null, undefined, [], {}, 1, true]) {
+    assert.equal(isString(value), false);
   }
 });
 
