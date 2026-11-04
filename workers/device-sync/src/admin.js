@@ -480,8 +480,7 @@ async function readOverview(env) {
         "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size " +
         "FROM playlist_capture_items p JOIN capture_targets t ON t.capture_id = p.capture_id " +
         "WHERE p.playlist_id = ? AND p.revision = ? ORDER BY p.position",
-      ).bind(Date.now() - 30 * 24 * 60 * 60 * 1000, Date.now() - 30 * 24 * 60 * 60 * 1000,
-        active.playlist_id, active.revision).all(),
+      ).bind(windowStart, windowStart, active.playlist_id, active.revision).all(),
     ]);
     missing = await Promise.all([...(assets.results ?? []), ...(captures.results ?? [])].map(async (asset) => {
       const object = await env.ASSETS.head("assets/" + asset.sha256);
