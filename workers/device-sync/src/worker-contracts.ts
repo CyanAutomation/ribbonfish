@@ -27,7 +27,7 @@ export type WorkerScheduledController = ScheduledController;
 
 export interface DeviceCredentialRow {
   device_id: string;
-  token_hash: string;
+  token_hash: string | null;
   public_key: string | null;
   enabled: number;
 }
