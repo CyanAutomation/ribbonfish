@@ -573,6 +573,19 @@ test("scheduled capture updates the playlist slot to a content-addressed screens
     assert.equal(target.current_size, screenshot.byteLength);
     assert.ok(objects.has(`assets/${expected}`));
     assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_history").get().count, 1);
+    const durationSample = sqlite.prepare(
+      "SELECT attempt, browser_ms, browser_ms_source, reserve_ms, browser_run_elapsed_ms, capture_elapsed_ms, outcome, readiness_mode, readiness_selector " +
+      "FROM capture_duration_samples WHERE capture_id = ?",
+    ).get(created.body.captures[0].capture_id);
+    assert.equal(durationSample.attempt, 1);
+    assert.equal(durationSample.browser_ms, 1234);
+    assert.equal(durationSample.browser_ms_source, "response_header");
+    assert.equal(durationSample.reserve_ms, 60_000);
+    assert.ok(durationSample.browser_run_elapsed_ms >= 0);
+    assert.ok(durationSample.capture_elapsed_ms >= durationSample.browser_run_elapsed_ms);
+    assert.equal(durationSample.outcome, "succeeded");
+    assert.equal(durationSample.readiness_mode, "domcontentloaded");
+    assert.equal(durationSample.readiness_selector, null);
 
     const after = await fetchHandler(new Request("https://worker.test/v2/playlist", {
       headers: {
@@ -981,6 +994,15 @@ test("Browser Run failures use bounded delayed retries and leave the holding ima
     assert.deepEqual({ ...sqlite.prepare("SELECT browser_ms_total, browser_ms_response_header, browser_ms_reserve FROM capture_jobs WHERE job_id = ?").get(jobID) }, {
       browser_ms_total: 3 * 60_000, browser_ms_response_header: 0, browser_ms_reserve: 3 * 60_000,
     }, "the per-job audit includes every retry, not only the last attempt");
+    const failedSamples = sqlite.prepare(
+      "SELECT attempt, browser_ms, browser_ms_source, outcome, readiness_mode, readiness_selector FROM capture_duration_samples WHERE job_id = ? ORDER BY attempt",
+    ).all(jobID);
+    assert.deepEqual(failedSamples.map(({ attempt, browser_ms, browser_ms_source, outcome, readiness_mode, readiness_selector }) =>
+      ({ attempt, browser_ms, browser_ms_source, outcome, readiness_mode, readiness_selector })), [
+      { attempt: 1, browser_ms: 60_000, browser_ms_source: "reserve", outcome: "failed", readiness_mode: "domcontentloaded", readiness_selector: null },
+      { attempt: 2, browser_ms: 60_000, browser_ms_source: "reserve", outcome: "failed", readiness_mode: "domcontentloaded", readiness_selector: null },
+      { attempt: 3, browser_ms: 60_000, browser_ms_source: "reserve", outcome: "failed", readiness_mode: "domcontentloaded", readiness_selector: null },
+    ]);
   } finally {
     sqlite.close();
   }
@@ -1100,9 +1122,30 @@ test('background screenshot assessment records a bounded shadow decision once pe
     sqlite.prepare("UPDATE capture_targets SET current_sha256 = ?, current_size = 1, last_success_at = ?, next_due_at = ? WHERE capture_id = ?")
       .run('a'.repeat(64), now, due, id);
     await env.ASSETS.put(`assets/${'a'.repeat(64)}`, new Uint8Array([1]));
+    for (let index = 0; index < 25; index++) {
+      const sampleJobID = crypto.randomUUID();
+      const sampledAt = now - index * 1000;
+      sqlite.prepare("INSERT INTO capture_jobs (job_id, capture_id, status, attempts, created_at) VALUES (?, ?, 'succeeded', 1, ?)")
+        .run(sampleJobID, id, sampledAt);
+      sqlite.prepare(
+        "INSERT INTO capture_duration_samples (sample_id, capture_id, job_id, attempt, sampled_at, browser_ms, browser_ms_source, reserve_ms, browser_run_elapsed_ms, capture_elapsed_ms, outcome, readiness_mode) " +
+        "VALUES (?, ?, ?, 1, ?, ?, ?, 60000, 20000, 22000, 'succeeded', 'domcontentloaded')",
+      ).run(crypto.randomUUID(), id, sampleJobID, sampledAt, index < 20 ? 10_000 + index * 500 : 60_000,
+        index < 20 ? 'response_header' : 'reserve');
+    }
     sqlite.prepare("INSERT INTO active_playlist (singleton, playlist_id, revision) VALUES (1, 'operations', ?)").run(created.body.revision);
     let calls = 0;
-    const decide = async () => { calls++; return { model: 'test-model', answers: { recommendation: { choice: 'capture_now' }, risk: { score: 1 } } }; };
+    let assessedState;
+    let assessedQuestions;
+    const decide = async (_env, input) => {
+      calls++;
+      assessedState = JSON.parse(input.state);
+      assessedQuestions = input.questions;
+      return { model: 'test-model', answers: {
+        duration_review: { choice: 'review_duration', confidence: 0.95 },
+        recommendation: { choice: 'capture_now' }, risk: { score: 1 },
+      } };
+    };
     await assessUpcomingCaptures(env, now, decide);
     await assessUpcomingCaptures(env, now, decide);
     assert.equal(calls, 1);
@@ -1113,12 +1156,18 @@ test('background screenshot assessment records a bounded shadow decision once pe
     assert.equal(typeof parsedState, 'object');
     assert.equal(parsedState.screenshot_age_seconds, 0);
     assert.equal(parsedState.seconds_until_due, 60);
+    assert.equal(assessedState.capture_duration.total_samples, 25);
+    assert.equal(assessedState.capture_duration.measured_sample_count, 20);
+    assert.equal(assessedState.capture_duration.measured_p90_ms, 18_500);
+    assert.equal(assessedState.capture_duration.configured_reserve_ms, 60_000);
+    assert.deepEqual(Object.keys(assessedQuestions), ['duration_review', 'recommendation', 'risk']);
 
     const response = await handleAdminRequest(await request('/admin/api/capture-decisions'), env);
     assert.equal(response.status, 200);
     const decisions = await response.json();
     assert.equal(decisions[0].capture_id, id);
     assert.equal(decisions[0].action, 'capture');
+    assert.equal(decisions[0].duration_review, 'review');
     assert.equal(decisions[0].model, undefined);
     assert.equal(decisions[0].state_json, undefined);
     const overviewResponse = await handleAdminRequest(await request('/admin/api/overview'), env);

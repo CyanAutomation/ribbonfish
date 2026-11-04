@@ -12,6 +12,7 @@ interface CaptureErrorOptions {
   retryable?: boolean;
   status?: number | null;
   browserMs?: number;
+  browserRunElapsedMs?: number;
   browserStarted?: boolean;
   cause?: unknown;
 }
@@ -27,13 +28,15 @@ export class CaptureError extends Error {
   retryable: boolean;
   status: number | null;
   browserMs: number;
+  browserRunElapsedMs: number;
   browserStarted: boolean;
-  constructor(message: string, { retryable = false, status = null, browserMs = 0, browserStarted = false, cause }: CaptureErrorOptions = {}) {
+  constructor(message: string, { retryable = false, status = null, browserMs = 0, browserRunElapsedMs = 0, browserStarted = false, cause }: CaptureErrorOptions = {}) {
     super(message, cause === undefined ? undefined : { cause });
     this.name = "CaptureError";
     this.retryable = retryable;
     this.status = status;
     this.browserMs = browserMs;
+    this.browserRunElapsedMs = browserRunElapsedMs;
     this.browserStarted = browserStarted;
   }
 }
@@ -112,6 +115,7 @@ export async function captureScreenshot(target: CaptureTarget, env: Pick<Managem
   const waitForSelector = normalizeCaptureSelector(target.wait_for_selector);
 
   let response;
+  const browserRunStartedAt = performance.now();
   try {
     response = await env.BROWSER.quickAction("screenshot", {
       url,
@@ -121,12 +125,17 @@ export async function captureScreenshot(target: CaptureTarget, env: Pick<Managem
       ...(waitForSelector ? { waitForSelector: { selector: waitForSelector } } : {}),
     });
   } catch (error) {
-    throw new CaptureError("Browser Run screenshot request failed.", { retryable: true, browserStarted: true, cause: error });
+    throw new CaptureError("Browser Run screenshot request failed.", {
+      retryable: true,
+      browserStarted: true,
+      browserRunElapsedMs: elapsedSince(browserRunStartedAt),
+      cause: error,
+    });
   }
 
   let browserMs = 0;
   try { browserMs = parseBrowserMilliseconds(response?.headers?.get?.("X-Browser-Ms-Used")); } catch {}
-  const completedRequest = { browserMs, browserStarted: true };
+  const completedRequest = { browserMs, browserStarted: true, browserRunElapsedMs: elapsedSince(browserRunStartedAt) };
   if (!response || typeof response.ok !== "boolean" || typeof response.headers?.get !== "function") {
     throw new CaptureError("Browser Run returned an invalid response.", completedRequest);
   }
@@ -154,6 +163,10 @@ export async function captureScreenshot(target: CaptureTarget, env: Pick<Managem
       retryable: true, ...completedRequest, cause: error,
     });
   }
+}
+
+function elapsedSince(startedAt: number) {
+  return Math.max(0, Math.round(performance.now() - startedAt));
 }
 
 function parseBrowserMilliseconds(value: string | null) {

@@ -87,15 +87,22 @@ the framework-independent `@openuidev/lang-core` package. The management panel
 does not expose the editor or generation prompt. JEV decisions use a separate
 server-side adapter and do not generate or parse OpenUI Lang. The optional
 per-target screenshot assessment uses bounded operational metadata and recent
-screenshot hash-change counts. It validates JEV's answer types, choices,
-probabilities, confidence, and score ranges, then renders only the recommendation
-and a plain-language risk level. JEV cannot change capture scheduling. An admin
-may confirm a single skip for an exact upcoming due time; that confirmation
+screenshot hash-change counts. A pre-due shadow assessment also receives
+measured Browser Run duration summaries, reserve coverage, attempt failures, and
+retry counts. It validates JEV's answer types, choices, probabilities,
+confidence, and score ranges, then renders the skip recommendation, a
+plain-language risk level, and the server-gated reserve-review cue. JEV cannot change capture settings or
+scheduling. It can suggest an operator review of the accounting reserve only
+when at least 20 measured samples, 80% measured-header coverage, measured p90
+at most half the reserve, and JEV confidence of at least 0.8 support the cue.
+An admin may confirm a single skip for an exact upcoming due time; that confirmation
 expires five minutes after the due time, is audited, and the following capture
 remains scheduled. The skip is rejected for missing or stale screenshots,
 recent failures, or active jobs. Screenshot pixels, raw error details, device
 identifiers, playlist identifiers, and URL query or fragment values are not
 sent to JEV.
+Duration metrics are usage evidence, not proof that visible page content was
+complete. The JEV reserve suggestion never applies a new value.
 
 Configure `OPENROUTER_API_KEY` as a secret on the management Worker before using
 JEV. The key is read only by the Worker. Requests use the pinned
@@ -108,14 +115,19 @@ installed.
 Background capture assessment runs in shadow mode when `CAPTURE_ANALYSIS_MODE` is
 `shadow` on the scheduled management Worker. It assesses up to three active
 playlist targets per tick during the five minutes before they are due and
-stores one decision per target and due time for 30 days. Decisions do not alter
-the capture schedule; errors leave the normal capture in place. The latest
+stores one decision per target and due time for 30 days. Its bounded state
+includes up to 500 duration attempts from the trailing 30-day review window,
+split by measured, reserve-estimated, and unknown source, with measured p50/p90,
+failure and retry counts, and readiness mode. The duration API includes the exact
+admin-configured selector for each attempt; JEV receives only whether a selector
+was configured. Decisions do not alter the capture
+schedule or settings; errors leave the normal capture in place. The latest
 assessment appears in each target's schedule details. The stored record
 contains the bounded input summary, provider response and model for evaluation;
-no screenshot pixels are sent. Apply migration `0010_capture_decisions.sql`
-before deploying a Worker with this mode enabled. Shadow suggestions are not
-validated incident detection, and should not be used to suppress captures until
-representative, labelled histories have been evaluated.
+no screenshot pixels are sent. Apply migrations `0010_capture_decisions.sql`
+and `0015_capture_duration_samples.sql` before deploying this code. Shadow
+suggestions are not validated incident detection, and should not be used to
+suppress captures until representative, labelled histories have been evaluated.
 
 Background recommendations also require both JEV answer confidences to be at
 least 0.8 in addition to the existing freshness, hash-stability, asset, and
@@ -127,9 +139,14 @@ advisory and never changes the next capture time. The management panel has a
 separate Capture efficiency and Browser Run usage module that reports these
 outcomes alongside daily accounted Browser Run time and total durations
 across retries, separated between `X-Browser-Ms-Used` and the reserve estimate.
-Existing rows stay unclassified until new captures provide that evidence.
-Apply migration `0013_capture_efficiency_audit.sql` before deploying these
-changes.
+The module now also shows per-site measured p50/p90 and header coverage,
+reserve-estimated totals, failure/retry counts, current reserve, readiness mode,
+and a possible-overestimate review cue. The cue requires at least 20 measured
+samples, 80% header coverage, and measured p90 at most half the configured
+reserve. It is not an automatic reserve change. Existing jobs have no
+per-attempt timing rows and remain unavailable to the duration API. Apply
+migrations `0013_capture_efficiency_audit.sql` and
+`0015_capture_duration_samples.sql` before deploying these changes.
 
 Migration `0011_interval_defaults.sql` sets existing capture targets to 24 hours
 and playlist rotations to 90 seconds. It assigns the active playlist a new
@@ -155,6 +172,11 @@ skips.
 Migration `0012_site_schedule_review.sql` records whether each site schedule
 has been reviewed, while preserving existing sites as reviewed. Apply it with
 `npm run migrate:management` before deploying the site-first admin flow.
+
+Migration `0015_capture_duration_samples.sql` stores per-attempt Browser Run
+duration, source, reserve snapshot, elapsed times, outcome, and readiness mode
+for 90 days. Apply it with `npm run migrate:management` before deploying the
+duration API, Capture Efficiency summary, or JEV duration advisory.
 
 The management config uses a remote Browser binding so screenshot Quick Actions
 can run during local development. Queue messages and D1/R2 state remain local,
@@ -208,6 +230,7 @@ in Wrangler's local mode.
 | `GET /admin/` | Browser management panel |
 | `GET /admin/api/overview` | Devices, playlist revisions, current pointer, missing active assets, unresolved asset integrity issues, recent audit events, and capture usage forecast |
 | `GET /admin/api/capture-forecast` | Current daily Ribbonfish Browser Run usage, free-plan quota, and per-site forecast; read-only |
+| `GET /admin/api/captures/{capture_id}/duration-samples` | Bounded per-attempt Browser Run duration samples and source-separated summary; read-only |
 | `GET /admin/api/intervals` | Supported screenshot and rotation interval values and defaults |
 | `GET /admin/api/devices/{device_id}/health` | Latest validated report, current derived health status, and up to 50 recent health transitions |
 | `GET /admin/api/devices/{device_id}/health-history?limit=100&since={unix_ms}` | Five-minute health samples and health transitions; default window is 30 days, maximum 500 rows per stream |
@@ -251,6 +274,25 @@ included. The projection assumes every scheduled capture starts Browser Run;
 trusted unchanged validators may reduce real usage, while manual runs and
 failures can increase it. Cloudflare's Browser Run dashboard remains the
 account-wide source of actual usage.
+
+`GET /admin/api/captures/{capture_id}/duration-samples` accepts `since` as Unix
+milliseconds, `limit` from 1 to 100, and the paired pagination cursor
+`before` plus `before_sample_id`. `since` is clamped to the retained 90-day
+window. The response includes one row for every attempt that started Browser
+Run, including failed attempts, measured or reserve-estimated milliseconds,
+the reserve value in force, Browser Run and capture elapsed time, readiness
+mode and configured selector, and outcome. Validator hits and budget deferrals
+do not start Browser Run and therefore do not create duration rows. Its source-separated summary is
+capped at 50,000 rows and reports whether the cap was reached. The overview's
+per-site duration summary covers the most recent 30 days.
+
+`browser_ms` is the Browser Run usage header or the configured reserve fallback.
+`browser_run_elapsed_ms` is Worker-measured wall time around the Quick Action;
+`capture_elapsed_ms` also includes receiving and storing the screenshot. Neither
+includes queue wait, and none of these timing values proves that important page
+content had finished rendering. To establish a safe faster readiness policy,
+compare repeated candidate screenshots with a reviewed settled screenshot and
+check the page-specific content that must be visible.
 
 `GET /admin/api/intervals` returns the five supported values and defaults:
 capture values are 900, 1800, 3600, 21600, and 86400 seconds (default 86400);

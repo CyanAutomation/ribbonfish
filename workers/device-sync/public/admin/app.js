@@ -651,7 +651,10 @@ function renderCaptureTargets(targets, decisions = []) {
     if (backgroundDecision) {
       const suggestion = backgroundDecision.action === "defer_once" ? "A later capture could be suitable" :
         backgroundDecision.action === "error" ? "Assessment unavailable" : "Keep the scheduled capture";
-      metadata.dataset.assessment = `Background assessment ${formatTimestamp(backgroundDecision.assessed_at)} for ${formatTimestamp(backgroundDecision.due_at)}: ${suggestion}. ${backgroundDecision.reason} ${formatCaptureObservation(backgroundDecision)} The schedule was unchanged.`;
+      const durationSuggestion = backgroundDecision.duration_review === "review"
+        ? " JEV recommends an operator review of capture timing; no settings were changed."
+        : "";
+      metadata.dataset.assessment = `Background assessment ${formatTimestamp(backgroundDecision.assessed_at)} for ${formatTimestamp(backgroundDecision.due_at)}: ${suggestion}. ${backgroundDecision.reason} ${formatCaptureObservation(backgroundDecision)}${durationSuggestion} The schedule was unchanged.`;
     }
 
     detailContent.append(metadata, advanced);
@@ -1209,7 +1212,15 @@ function renderJevDecision(result, title, { captureID } = {}) {
     const item = node("section", undefined, "jev-result__answer");
     const label = key.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
     item.append(node("h4", label));
-    if (answer.type === "choice") item.append(node("p", `Recommendation: ${answer.choice.replaceAll("_", " ")}`));
+    if (key === "duration_review") {
+      const advice = result.duration_review === "review"
+        ? "The measured timing evidence supports an operator review of the accounting reserve. No setting was changed."
+        : result.duration_review === "insufficient_data"
+          ? "There is not enough measured timing evidence to recommend a reserve review."
+          : "Keep the current accounting reserve based on the available timing evidence.";
+      item.append(node("p", advice));
+    }
+    else if (answer.type === "choice") item.append(node("p", `Recommendation: ${answer.choice.replaceAll("_", " ")}`));
     else if (answer.type === "score") {
       const level = answer.legend?.[String(Math.round(answer.score))];
       if (typeof level === "string") item.append(node("p", `${label}: ${level}`));
