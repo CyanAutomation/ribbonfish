@@ -45,6 +45,12 @@ test("capture settings accept only the supported capture intervals and bounded v
     viewport_height: 1080,
     wait_for_selector: null,
   });
+  for (const capture_interval_seconds of [10800, 43200]) {
+    assert.equal(validateCaptureSettings({
+      capture_interval_seconds,
+      viewport: { width: 1920, height: 1080 },
+    }).capture_interval_seconds, capture_interval_seconds);
+  }
   for (const input of [
     { capture_interval_seconds: 300, viewport: { width: 1920, height: 1080 } },
     { capture_interval_seconds: 900, viewport: { width: 0, height: 1080 } },

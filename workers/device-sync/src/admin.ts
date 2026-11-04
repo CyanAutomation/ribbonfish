@@ -1160,7 +1160,7 @@ async function createPlaylist(request: Request, env: WorkerEnvironment, actorID:
 async function updateCaptureInterval(request: Request, captureID: string, env: WorkerEnvironment, actorID: string) {
   const data = await readJSON(request);
   if (!hasExactKeys(data, ["capture_interval_seconds"]) || !isSupportedCaptureInterval(data.capture_interval_seconds)) {
-    throw new HTTPError(400, "capture_interval_seconds must be one of the supported values: 900, 1800, 3600, 21600, or 86400.");
+    throw new HTTPError(400, "capture_interval_seconds must be one of the supported values: 900, 1800, 3600, 10800, 21600, 43200, or 86400.");
   }
   const existing = await env.DB.prepare(
     "SELECT capture_id, last_success_at, schedule_reviewed_at FROM capture_targets WHERE capture_id = ? AND enabled = 1",

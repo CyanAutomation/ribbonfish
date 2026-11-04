@@ -178,6 +178,11 @@ duration, source, reserve snapshot, elapsed times, outcome, and readiness mode
 for 90 days. Apply it with `npm run migrate:management` before deploying the
 duration API, Capture Efficiency summary, or JEV duration advisory.
 
+Migration `0016_capture_intervals.sql` adds the 3-hour and 12-hour screenshot
+schedules while preserving existing capture targets and their related records.
+Apply it with `npm run migrate:management` before deploying code that accepts
+the expanded interval set.
+
 The management config uses a remote Browser binding so screenshot Quick Actions
 can run during local development. Queue messages and D1/R2 state remain local,
 but Browser Run requests consume the configured Cloudflare account's usage.
@@ -211,7 +216,8 @@ npx wrangler queues create ribbonfish-capture-dead-letter --config wrangler.mana
 ```
 
 Then apply migrations `0005_webpage_capture.sql`, `0006_asset_reconciliation.sql`,
-`0007_capture_validators.sql`, and `0011_interval_defaults.sql` with
+`0007_capture_validators.sql`, `0011_interval_defaults.sql`, and
+`0016_capture_intervals.sql` with
 `npm run migrate:management` before deploying the corresponding code. This implementation has not been deployed to
 production; enable capture only after the Browser Run binding and account quotas
 are available.
@@ -294,8 +300,8 @@ content had finished rendering. To establish a safe faster readiness policy,
 compare repeated candidate screenshots with a reviewed settled screenshot and
 check the page-specific content that must be visible.
 
-`GET /admin/api/intervals` returns the five supported values and defaults:
-capture values are 900, 1800, 3600, 21600, and 86400 seconds (default 86400);
+`GET /admin/api/intervals` returns the seven supported values and defaults:
+capture values are 900, 1800, 3600, 10800, 21600, 43200, and 86400 seconds (default 86400);
 rotation values are `30s`, `60s`, `90s`, `120s`, and `5m` (default `90s`).
 Playlist staging accepts `rotation_interval` and defaults it to `90s` when
 omitted. Register a site first with `POST /admin/api/capture-sites`, then review
@@ -329,7 +335,7 @@ size. A webpage slot references a reusable URL/viewport capture target and
 starts with a bundled holding PNG. The first scheduled capture runs after the
 playlist is activated. The Worker only schedules targets referenced by the
 active playlist. Capture settings accept public HTTPS URLs without embedded
-credentials, intervals of 900, 1800, 3600, 21600, or 86400 seconds, and viewports up to
+credentials, intervals of 900, 1800, 3600, 10800, 21600, 43200, or 86400 seconds, and viewports up to
 3840×2160. Authenticated pages and browser interaction are not supported.
 
 Activation updates the single global pointer only after a revision exists.
