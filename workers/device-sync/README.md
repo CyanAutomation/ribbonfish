@@ -116,8 +116,9 @@ error checks. Each scheduled job records its due time so a completed screenshot
 can label the matching shadow suggestion as followed by changed or unchanged
 content. Validator shortcuts, failures, and budget deferrals are reported
 separately because they do not verify screenshot content. This feedback remains
-advisory and never changes the next capture time. The Sites dashboard reports
-these outcomes alongside daily accounted Browser Run time and total durations
+advisory and never changes the next capture time. The management panel has a
+separate Capture efficiency and Browser Run usage module that reports these
+outcomes alongside daily accounted Browser Run time and total durations
 across retries, separated between `X-Browser-Ms-Used` and the reserve estimate.
 Existing rows stay unclassified until new captures provide that evidence.
 Apply migration `0013_capture_efficiency_audit.sql` before deploying these
