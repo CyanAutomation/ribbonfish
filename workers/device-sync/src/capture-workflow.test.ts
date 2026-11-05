@@ -498,6 +498,18 @@ test("API dashboard captures bypass Browser Run budgets and reuse the shared pla
     assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(failed.job_id).status, "queued");
     assert.equal(sqlite.prepare("SELECT current_sha256, last_success_at FROM capture_targets WHERE capture_id = ?").get(dashboard.capture_id).current_sha256, current.current_sha256);
     assert.equal(JSON.parse(sqlite.prepare("SELECT api_status_json FROM capture_targets WHERE capture_id = ?").get(dashboard.capture_id).api_status_json)[0].freshness, "unavailable");
+
+    sqlite.prepare("UPDATE capture_targets SET api_sources_json = ? WHERE capture_id = ?").run(JSON.stringify({
+      width: 1920, height: 1080,
+      sources: [{ id: "source-one", provider: "atlassian-statuspage", display_name: "Sample services", enabled: true, hostname: "private.internal" }],
+    }), dashboard.capture_id);
+    const invalidConfig = await enqueueCapture(dashboard.capture_id, env);
+    let invalidConfigRetried = false;
+    let invalidConfigAcked = false;
+    await queueHandler({ messages: [{ body: { job_id: invalidConfig.job_id }, ack() { invalidConfigAcked = true; }, retry() { invalidConfigRetried = true; } }] }, env);
+    assert.equal(invalidConfigRetried, false, "permanent source configuration failures should not be retried");
+    assert.equal(invalidConfigAcked, true);
+    assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(invalidConfig.job_id).status, "failed");
     assert.equal(browserCalls, 0);
   } finally {
     globalThis.fetch = original;

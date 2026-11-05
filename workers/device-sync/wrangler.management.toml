@@ -2,6 +2,7 @@ name = "ribbonfish-mgmt"
 account_id = "c40f3cb30efbf8c6d081cf9e50a61931"
 main = "src/index.ts"
 compatibility_date = "2026-10-26"
+compatibility_flags = ["global_fetch_strictly_public"]
 workers_dev = true
 
 [vars]

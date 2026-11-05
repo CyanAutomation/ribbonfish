@@ -10,13 +10,21 @@ as an ordinary playlist asset.
 
 `API_STATUS_ALLOWED_HOSTS` on the management Worker is an optional comma
 separated list of exact hostnames. When it is empty or unset, any hostname that
-passes the adapter's public DNS validation is accepted. As soon as one or more
-hostnames are listed, they form an exact-match allowlist. Keep any configured
-list in Worker settings or local environment configuration rather than source
-control. Requests use HTTPS, manual redirect handling, an 8 second timeout, a
-1 MB response limit, and schema/workload caps. The adapters reject IP
-addresses, single-label hosts, and local or reserved host suffixes. No API
-credentials are supported or needed.
+passes the adapter's hostname syntax checks is accepted. As soon as one or
+more hostnames are listed, they form an exact-match allowlist. Keep any
+configured list in Worker settings or local environment configuration rather
+than source control. Requests use HTTPS, manual redirect handling, an 8 second
+timeout, a 1 MB response limit, and schema/workload caps. The adapters reject
+IP addresses, single-label hosts, and local or reserved host suffixes.
+
+The management Worker enables Cloudflare's `global_fetch_strictly_public`
+compatibility flag. This routes global `fetch()` requests as public Internet
+requests instead of using a zone's origin-routing path; the Worker has no
+private-network VPC binding. Keep this flag enabled when the host allowlist is
+empty. The empty list is intentionally permissive for hostnames; populate it
+when administrators should be limited to a known set of source hosts. See
+[Cloudflare's compatibility flag documentation](https://developers.cloudflare.com/workers/configuration/compatibility-flags/#global-fetch-strictly-public).
+No API credentials are supported or needed.
 
 In **Capture sites**, choose **Add an API status dashboard**. Paste a source
 array in the editor, choose 1920 by 1080 or another supported resolution, and
@@ -67,6 +75,13 @@ keeps the prior image, records source errors and retries through the queue; an
 all-failed poll cannot publish a healthy-looking replacement. The management
 card makes source freshness and errors visible. A device continues displaying
 the last playlist image until a newer successful capture is available.
+
+Queue retries apply to transient request failures (timeouts, HTTP 408, 425, 429,
+and 5xx responses) and unexpected rendering or storage failures. Invalid stored
+configuration, disabled sources, provider schema errors, and configured
+workload-limit violations fail without immediate queue retries. Individual
+source failures remain visible in a partial dashboard and are polled again at
+the next configured interval.
 
 ## Rendering and runtime proof
 
@@ -138,7 +153,7 @@ node --test src/api-dashboard/render-worker.test.ts
 ```
 
 Troubleshooting details appear in the dashboard source list and latest job
-state. Check hostname validation and, if configured, the exact host allowlist,
+state. Check hostname syntax and, if configured, the exact host allowlist,
 then confirm public API access from the management Worker, and review whether
 a source’s heartbeat data is older than the 15 minute freshness threshold.
 Browser screenshot diagnostics and JEV

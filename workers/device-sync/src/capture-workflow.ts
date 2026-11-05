@@ -16,6 +16,15 @@ type JobDecision = Pick<CaptureJob, "capture_id" | "scheduled_due_at">;
 type CaptureMessage = Message<{ job_id?: unknown }>;
 type CaptureFailureDetails = { message?: string; browserMs: number; browserRunElapsedMs: number; browserStarted: boolean; retryable: boolean };
 
+class ApiDashboardCaptureError extends Error {
+  readonly retryable: boolean;
+  constructor(message: string, retryable: boolean) {
+    super(message);
+    this.name = "ApiDashboardCaptureError";
+    this.retryable = retryable;
+  }
+}
+
 export const MAX_CAPTURE_ATTEMPTS = 3;
 export const MAX_CAPTURE_HISTORY = 10;
 export const CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -310,8 +319,10 @@ async function processApiDashboardCapture(message: CaptureMessage, job: CaptureJ
   let renderStarted = 0;
   let renderMs = 0;
   try {
-    if (!job.api_sources_json) throw new Error("API dashboard configuration is missing.");
-    const config = parseApiDashboardConfig(JSON.parse(job.api_sources_json));
+    if (!job.api_sources_json) throw new ApiDashboardCaptureError("API dashboard configuration is missing.", false);
+    let config;
+    try { config = parseApiDashboardConfig(JSON.parse(job.api_sources_json)); }
+    catch (error) { throw new ApiDashboardCaptureError(error instanceof Error ? error.message : "API dashboard configuration is invalid.", false); }
     let previousSources: DashboardSource[] = [];
     try {
       const saved = job.api_status_json;
@@ -320,16 +331,16 @@ async function processApiDashboardCapture(message: CaptureMessage, job: CaptureJ
         if (Array.isArray(parsed)) previousSources = parsed as DashboardSource[];
       }
     } catch {}
-    const sources = await loadDashboardSources(config, env.API_STATUS_ALLOWED_HOSTS ?? "", fetch, new Date(now), previousSources);
+    let sources: DashboardSource[];
+    try { sources = await loadDashboardSources(config, env.API_STATUS_ALLOWED_HOSTS ?? "", fetch, new Date(now), previousSources); }
+    catch (error) { throw new ApiDashboardCaptureError(error instanceof Error ? error.message : "API dashboard source workload is invalid.", false); }
     fetchMs = elapsedSince(fetchStarted);
     sourceStatus = sources;
     await env.DB.prepare("UPDATE capture_targets SET api_status_json = ? WHERE capture_id = ?")
       .bind(JSON.stringify(sources), job.capture_id).run();
     const available = sources.some((source) => source.freshness !== "unavailable");
     if (!available) {
-      const error = new Error("All dashboard sources are unavailable; the last known-good image was retained.");
-      Object.assign(error, { retryable: true });
-      throw error;
+      throw new ApiDashboardCaptureError("All dashboard sources are unavailable; the last known-good image was retained.", sources.some((source) => source.retryableError === true));
     }
     const svg = dashboardSVG(sources, config.width, config.height);
     const contentDigest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(svg));
@@ -381,7 +392,9 @@ async function processApiDashboardCapture(message: CaptureMessage, job: CaptureJ
         .bind(JSON.stringify(sourceStatus), hasSuccessfulFetch ? 1 : 0, now, job.capture_id).run().catch(() => undefined);
     }
     const details = captureFailureDetails(caught);
-    const error: CaptureFailureDetails = { ...details, message: details.message ?? "API dashboard capture failed.", retryable: true, browserMs: 0, browserRunElapsedMs: 0, browserStarted: false };
+    const caughtDetails = caught !== null && typeof caught === "object" ? caught as Record<string, unknown> : {};
+    const retryable = typeof caughtDetails.retryable === "boolean" ? caughtDetails.retryable : true;
+    const error: CaptureFailureDetails = { ...details, message: details.message ?? "API dashboard capture failed.", retryable, browserMs: 0, browserRunElapsedMs: 0, browserStarted: false };
     await env.DB.prepare("UPDATE capture_jobs SET api_fetch_ms = ?, api_render_ms = ? WHERE job_id = ?")
       .bind(fetchMs || elapsedSince(fetchStarted), renderMs || (renderStarted ? elapsedSince(renderStarted) : 0), job.job_id).run();
     await handleCaptureFailure(env, message, job, error, now);
