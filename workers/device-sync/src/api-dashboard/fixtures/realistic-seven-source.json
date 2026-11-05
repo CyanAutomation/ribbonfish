@@ -1,0 +1,133 @@
+{
+  "width": 1920,
+  "height": 1080,
+  "sources": [
+    {
+      "id": "region-west",
+      "provider": "uptime-kuma",
+      "displayName": "Western region",
+      "hostname": "monitor-west.example.org",
+      "fetchedAt": "2026-11-05T12:00:00.000Z",
+      "freshness": "fresh",
+      "status": "operational",
+      "statusDescription": "Latest monitor heartbeats",
+      "groups": [{ "id": "edge", "name": "Edge services", "order": 0 }, { "id": "platform", "name": "Platform", "order": 1 }],
+      "components": [
+        { "id": "dns", "name": "Public DNS", "status": "operational", "latencyMs": 31, "sampledAt": "2026-11-05T11:59:40.000Z", "groupId": "edge", "groupName": "Edge services", "groupOrder": 0, "componentOrder": 0 },
+        { "id": "gateway", "name": "API gateway", "status": "operational", "latencyMs": 48, "sampledAt": "2026-11-05T11:59:35.000Z", "groupId": "edge", "groupName": "Edge services", "groupOrder": 0, "componentOrder": 1 },
+        { "id": "auth", "name": "Authentication", "status": "operational", "latencyMs": 72, "sampledAt": "2026-11-05T11:59:30.000Z", "groupId": "platform", "groupName": "Platform", "groupOrder": 1, "componentOrder": 0 },
+        { "id": "events", "name": "Event processing", "status": "operational", "latencyMs": 105, "sampledAt": "2026-11-05T11:59:25.000Z", "groupId": "platform", "groupName": "Platform", "groupOrder": 1, "componentOrder": 1 }
+      ],
+      "incidents": [],
+      "maintenance": []
+    },
+    {
+      "id": "region-east",
+      "provider": "uptime-kuma",
+      "displayName": "Eastern region",
+      "hostname": "monitor-east.example.org",
+      "fetchedAt": "2026-11-05T12:00:00.000Z",
+      "freshness": "fresh",
+      "status": "degraded",
+      "statusDescription": "Latest monitor heartbeats",
+      "groups": [{ "id": "api", "name": "API services", "order": 0 }, { "id": "data", "name": "Data services", "order": 1 }],
+      "components": [
+        { "id": "public-api", "name": "Public API", "status": "degraded", "latencyMs": 488, "sampledAt": "2026-11-05T11:59:30.000Z", "groupId": "api", "groupName": "API services", "groupOrder": 0, "componentOrder": 0 },
+        { "id": "internal-api", "name": "Internal API", "status": "operational", "latencyMs": 86, "sampledAt": "2026-11-05T11:59:35.000Z", "groupId": "api", "groupName": "API services", "groupOrder": 0, "componentOrder": 1 },
+        { "id": "queue", "name": "Job queue", "status": "operational", "latencyMs": 12, "sampledAt": "2026-11-05T11:59:40.000Z", "groupId": "data", "groupName": "Data services", "groupOrder": 1, "componentOrder": 0 },
+        { "id": "warehouse", "name": "Analytics warehouse", "status": "operational", "latencyMs": 119, "sampledAt": "2026-11-05T11:59:20.000Z", "groupId": "data", "groupName": "Data services", "groupOrder": 1, "componentOrder": 1 }
+      ],
+      "incidents": [{ "id": "incident-east", "name": "Intermittent API response delays", "status": "investigating", "impact": "minor", "updatedAt": "2026-11-05T11:58:00.000Z" }],
+      "maintenance": []
+    },
+    {
+      "id": "region-central",
+      "provider": "uptime-kuma",
+      "displayName": "Central region",
+      "hostname": "monitor-central.example.org",
+      "fetchedAt": "2026-11-05T12:00:00.000Z",
+      "freshness": "fresh",
+      "status": "down",
+      "statusDescription": "Latest monitor heartbeats",
+      "groups": [{ "id": "customer", "name": "Customer services", "order": 0 }],
+      "components": [
+        { "id": "long-name", "name": "Customer identity and account provisioning service across the central processing region", "status": "down", "sampledAt": "2026-11-05T11:59:50.000Z", "groupId": "customer", "groupName": "Customer services", "groupOrder": 0, "componentOrder": 0 },
+        { "id": "profile", "name": "Profile API", "status": "operational", "latencyMs": 91, "sampledAt": "2026-11-05T11:59:40.000Z", "groupId": "customer", "groupName": "Customer services", "groupOrder": 0, "componentOrder": 1 },
+        { "id": "audit", "name": "Audit stream", "status": "operational", "latencyMs": 44, "sampledAt": "2026-11-05T11:59:35.000Z", "groupId": "customer", "groupName": "Customer services", "groupOrder": 0, "componentOrder": 2 }
+      ],
+      "incidents": [{ "id": "incident-central-1", "name": "Identity service unavailable", "status": "identified", "impact": "major", "updatedAt": "2026-11-05T11:57:00.000Z" }, { "id": "incident-central-2", "name": "Elevated login failures", "status": "monitoring", "impact": "minor", "updatedAt": "2026-11-05T11:55:00.000Z" }],
+      "maintenance": []
+    },
+    {
+      "id": "preproduction",
+      "provider": "uptime-kuma",
+      "displayName": "Preproduction",
+      "hostname": "monitor-preprod.example.org",
+      "fetchedAt": "2026-11-05T12:00:00.000Z",
+      "freshness": "fresh",
+      "status": "operational",
+      "statusDescription": "Latest monitor heartbeats",
+      "groups": [{ "id": "test", "name": "Validation services", "order": 0 }],
+      "components": [
+        { "id": "ui", "name": "Web application", "status": "operational", "latencyMs": 73, "sampledAt": "2026-11-05T11:59:40.000Z", "groupId": "test", "groupName": "Validation services", "groupOrder": 0, "componentOrder": 0 },
+        { "id": "api", "name": "API service", "status": "operational", "latencyMs": 109, "sampledAt": "2026-11-05T11:59:35.000Z", "groupId": "test", "groupName": "Validation services", "groupOrder": 0, "componentOrder": 1 },
+        { "id": "mail", "name": "Mail sandbox", "status": "operational", "sampledAt": "2026-11-05T11:59:30.000Z", "groupId": "test", "groupName": "Validation services", "groupOrder": 0, "componentOrder": 2 }
+      ],
+      "incidents": [],
+      "maintenance": []
+    },
+    {
+      "id": "shared-platform",
+      "provider": "uptime-kuma",
+      "displayName": "Shared platform",
+      "hostname": "monitor-shared.example.org",
+      "fetchedAt": "2026-11-05T12:00:00.000Z",
+      "freshness": "fresh",
+      "status": "maintenance",
+      "statusDescription": "Latest monitor heartbeats",
+      "groups": [{ "id": "shared", "name": "Shared services", "order": 0 }],
+      "components": [
+        { "id": "storage", "name": "Object storage", "status": "operational", "latencyMs": 24, "sampledAt": "2026-11-05T11:59:40.000Z", "groupId": "shared", "groupName": "Shared services", "groupOrder": 0, "componentOrder": 0 },
+        { "id": "metrics", "name": "Metrics ingestion", "status": "maintenance", "sampledAt": "2026-11-05T11:59:35.000Z", "groupId": "shared", "groupName": "Shared services", "groupOrder": 0, "componentOrder": 1 },
+        { "id": "notifications", "name": "Notifications", "status": "operational", "latencyMs": 67, "sampledAt": "2026-11-05T11:59:30.000Z", "groupId": "shared", "groupName": "Shared services", "groupOrder": 0, "componentOrder": 2 }
+      ],
+      "incidents": [],
+      "maintenance": [{ "id": "maintenance-1", "name": "Metrics storage upgrade", "status": "in_progress", "impact": "maintenance", "updatedAt": "2026-11-05T11:45:00.000Z" }]
+    },
+    {
+      "id": "status-north",
+      "provider": "atlassian-statuspage",
+      "displayName": "North services",
+      "hostname": "status-north.example.net",
+      "fetchedAt": "2026-11-05T12:00:00.000Z",
+      "freshness": "fresh",
+      "status": "degraded",
+      "statusDescription": "Partial service disruption",
+      "groups": [{ "id": "compute", "name": "Compute", "order": 0 }, { "id": "storage-group", "name": "Storage", "order": 1 }],
+      "components": [
+        { "id": "compute", "name": "Compute", "status": "degraded", "sampledAt": "2026-11-05T11:58:00.000Z", "groupId": null, "groupName": null, "groupOrder": 0, "componentOrder": 0, "isGroup": true },
+        { "id": "web", "name": "Web workers", "status": "degraded", "sampledAt": "2026-11-05T11:58:00.000Z", "groupId": "compute", "groupName": "Compute", "groupOrder": 0, "componentOrder": 1 },
+        { "id": "batch", "name": "Batch processing", "status": "operational", "sampledAt": "2026-11-05T11:58:00.000Z", "groupId": "compute", "groupName": "Compute", "groupOrder": 0, "componentOrder": 2 },
+        { "id": "storage-group", "name": "Storage", "status": "operational", "sampledAt": "2026-11-05T11:58:00.000Z", "groupId": null, "groupName": null, "groupOrder": 1, "componentOrder": 3, "isGroup": true },
+        { "id": "object-store", "name": "Object store", "status": "operational", "sampledAt": "2026-11-05T11:58:00.000Z", "groupId": "storage-group", "groupName": "Storage", "groupOrder": 1, "componentOrder": 4 }
+      ],
+      "incidents": [{ "id": "incident-north", "name": "Elevated worker latency", "status": "investigating", "impact": "minor", "updatedAt": "2026-11-05T11:57:00.000Z" }],
+      "maintenance": []
+    },
+    {
+      "id": "status-south",
+      "provider": "atlassian-statuspage",
+      "displayName": "South services",
+      "hostname": "status-south.example.net",
+      "fetchedAt": "2026-11-05T12:00:00.000Z",
+      "freshness": "unavailable",
+      "status": "stale",
+      "statusDescription": "Status source unavailable",
+      "error": "Status API request timed out.",
+      "requestStats": { "requestCount": 1, "notModifiedCount": 0, "failedRequestCount": 1, "responseBytes": 0, "durationMs": 8000 },
+      "components": [],
+      "incidents": [],
+      "maintenance": []
+    }
+  ]
+}

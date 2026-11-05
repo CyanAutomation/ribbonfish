@@ -33,6 +33,7 @@
         <a href="#dashboard">All modules</a>
         <a href="#overview-section">Overview</a>
         <a href="#sites-section">Capture sites</a>
+        <a href="#dashboards-section">Capture dashboards</a>
         <a href="#capture-efficiency-section">Capture efficiency</a>
         <a href="#playlist-section">Playlists</a>
         <a href="#device-section">Devices</a>
@@ -42,6 +43,7 @@
       <nav id="dashboard-tiles" class="tile-grid" aria-label="Management modules">
         <a class="module-tile" href="#overview-section"><strong>Overview</strong><span>Fleet snapshot and items needing attention</span></a>
         <a class="module-tile" href="#sites-section"><strong>Capture sites</strong><span id="sites-tile-status">Sites, schedules and screenshots</span></a>
+        <a class="module-tile" href="#dashboards-section"><strong>Capture dashboards</strong><span id="dashboards-tile-status">API status dashboards</span></a>
         <a class="module-tile" href="#capture-efficiency-section"><strong>Capture efficiency and Browser Run usage</strong><span id="capture-efficiency-tile-status">Daily usage, runtime forecast and efficiency</span></a>
         <a class="module-tile" href="#playlist-section"><strong>Playlists</strong><span id="playlists-tile-status">Versions, images and content</span></a>
         <a class="module-tile" href="#device-section"><strong>Devices</strong><span id="devices-tile-status">Fleet health and approvals</span></a>
@@ -76,24 +78,41 @@
           <p id="capture-site-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
         </form>
         </details>
-        <details id="api-dashboard-editor" class="editor-disclosure"><summary>Add an API status dashboard</summary>
-        <form id="api-dashboard-form" class="form-grid">
-          <label>Name <input class="field-control" name="name" value="Operations status" maxlength="120" required></label>
-          <label>Refresh interval <select class="field-control" name="capture_interval_seconds"><option value="300">5 minutes</option><option value="60">1 minute</option></select></label>
-          <label>Output resolution <span class="viewport-inputs"><input class="field-control" name="width" type="number" value="1920" min="640" max="3840" step="1" aria-label="Dashboard width" required><span aria-hidden="true">×</span><input class="field-control" name="height" type="number" value="1080" min="360" max="2160" step="1" aria-label="Dashboard height" required></span></label>
-          <label class="field--wide">Sources JSON <textarea class="field-control" name="sources" rows="8" required placeholder='[{"id":"region-a","provider":"uptime-kuma","display_name":"Region A","enabled":true,"hostname":"status.example.org","slug":"sample-page"}]'></textarea></label>
-          <p class="field--wide field-hint">Use provider “uptime-kuma” with an allowlisted hostname and slug, or “atlassian-statuspage” with an allowlisted hostname. Hostnames must be listed in API_STATUS_ALLOWED_HOSTS. Sources are fetched as public HTTPS JSON and never use Browser Run.</p>
-          <div class="field--wide form-actions"><button class="button button--primary" type="submit">Create API dashboard</button></div>
-          <p id="api-dashboard-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
-        </form>
-        </details>
-        <div id="api-dashboard-list" class="capture-target-list" role="region" aria-label="API dashboards" aria-live="polite"></div>
         <div class="capture-filters">
           <label>Search sites <input id="capture-search" class="field-control" type="search" placeholder="Search name or URL"></label>
           <label>Status <select id="capture-filter" class="field-control"><option value="all">All sites</option><option value="attention">Needs attention</option><option value="ready">Ready</option></select></label>
         </div>
         <p id="capture-filter-empty" class="muted" hidden>No sites match your search and filters.</p>
         <div id="capture-target-list" class="capture-target-list" role="region" aria-label="Capture sites" aria-live="polite"></div>
+      </section>
+
+      <section id="dashboards-section" class="panel" aria-labelledby="dashboards-title">
+        <div class="section-heading"><div><p class="eyebrow">API status</p><h2 id="dashboards-title">Capture dashboards</h2></div></div>
+        <p class="muted">Configure public API status sources and inspect generated dashboard images. These captures use the Worker renderer and do not consume Browser Run minutes.</p>
+        <div class="alert alert--success status-banner" data-feedback-slot="dashboards" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss dashboard message">Dismiss</button></div>
+        <details id="api-dashboard-editor" class="editor-disclosure"><summary>Add an API status dashboard</summary>
+        <form id="api-dashboard-form" class="form-grid">
+          <label>Name <input class="field-control" name="name" value="Operations status" maxlength="120" required></label>
+          <label>Refresh interval <select class="field-control" name="capture_interval_seconds"><option value="300">5 minutes</option><option value="60">1 minute</option></select></label>
+          <label>Output resolution <span class="viewport-inputs"><input class="field-control" name="width" type="number" value="1920" min="640" max="3840" step="1" aria-label="Dashboard width" required><span aria-hidden="true">×</span><input class="field-control" name="height" type="number" value="1080" min="360" max="2160" step="1" aria-label="Dashboard height" required></span></label>
+          <div id="api-dashboard-source-list" class="field--wide source-editor-list" aria-label="Dashboard sources">
+            <div class="source-editor-toolbar" data-source-editor-toolbar>
+              <h3>Sources</h3>
+              <button class="button button--secondary" type="button" data-add-dashboard-source>Add source</button>
+            </div>
+            <div class="source-editor-rows" data-source-rows></div>
+            <p class="field-error" data-source-editor-error hidden role="alert"></p>
+          </div>
+          <p class="field--wide field-hint">Uptime Kuma needs a public hostname and status-page slug. Atlassian Statuspage needs a public hostname. The server checks the configured host allowlist. API status requests use HTTPS and never use Browser Run.</p>
+          <details id="api-dashboard-advanced-json" class="field--wide advanced-json-editor">
+            <summary>Advanced source JSON</summary>
+            <label class="field--wide">Sources JSON <textarea class="field-control" name="sources-json" rows="8" spellcheck="false" aria-label="Advanced source JSON"></textarea></label>
+          </details>
+          <div class="field--wide form-actions"><button class="button button--primary" type="submit">Create API dashboard</button></div>
+          <p id="api-dashboard-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
+        </form>
+        </details>
+        <div id="api-dashboard-list" class="capture-target-list" role="region" aria-label="API dashboards" aria-live="polite"></div>
       </section>
 
       <section id="capture-efficiency-section" class="panel" aria-labelledby="capture-efficiency-title">
@@ -123,8 +142,8 @@
           </fieldset>
           <label class="field--wide">Add PNG images <input class="field-control file-control" name="assets" type="file" accept="image/png" multiple></label>
           <fieldset id="available-sites" class="field--wide asset-selection">
-            <legend>Capture sites</legend>
-            <p class="muted">Choose from sites whose screenshot schedule has been reviewed in Sites.</p>
+            <legend>Capture sites and dashboards</legend>
+            <p class="muted">Choose reviewed screenshot sites or API status dashboards for this playlist.</p>
             <div class="asset-selection__list"></div>
           </fieldset>
           <div class="field--wide form-actions">

@@ -26,9 +26,10 @@ when administrators should be limited to a known set of source hosts. See
 [Cloudflare's compatibility flag documentation](https://developers.cloudflare.com/workers/configuration/compatibility-flags/#global-fetch-strictly-public).
 No API credentials are supported or needed.
 
-In **Capture sites**, choose **Add an API status dashboard**. Paste a source
-array in the editor, choose 1920 by 1080 or another supported resolution, and
-select a one or five minute interval. A source entry looks like:
+In **Capture dashboards**, choose **Add an API status dashboard**. Add sources
+with the structured editor, choose 1920 by 1080 or another supported resolution,
+and select a one or five minute interval. The optional advanced JSON editor is
+available for bulk edits. A source entry looks like:
 
 ```json
 {
@@ -48,11 +49,14 @@ for a generic seven source configuration. Replace example hostnames and slugs
 with the values managed by your organization. Source names, actual hostnames,
 and customer identifiers are deliberately absent from this repository.
 
-The configured source JSON is validated and can also be edited in the dashboard
-card. Individual sources can be disabled. A dashboard can be manually refreshed,
-enabled or disabled, removed, and added to any playlist using the existing
-playlist editor. Playlist assignment starts normal scheduled captures on the
-management Worker’s one minute Cron.
+Capture sites is reserved for Browser Run webpage screenshots. API dashboards
+have a separate home tile and page. The structured editor validates fields as
+you edit; saving preserves source IDs, order, enabled state and optional JSON
+properties. Individual sources can be disabled without treating them as failed
+or stale. A dashboard can be manually refreshed, enabled or disabled, removed,
+and added to any playlist using the existing playlist editor. Playlist
+assignment starts normal scheduled captures on the management Worker’s one
+minute Cron.
 
 ## Providers and status rules
 
@@ -62,9 +66,27 @@ latest valid heartbeat, and reports `ping` only when it is a valid non-negative
 measurement. Missing histories are `Unknown`. Heartbeats older than 15 minutes
 are marked stale. Statuspage reads the public summary endpoint, retains parent
 group relationships, and excludes group components from leaf service health
-aggregation. Statuspage ETags are sent with `If-None-Match` when available;
-304 responses reuse the previous normalized source snapshot. The Kuma endpoints
-do not currently have persisted conditional request handling.
+aggregation.
+
+Both adapters persist independent endpoint metadata and send `If-None-Match`
+and/or `If-Modified-Since` on later polls when the prior response supplied those
+validators. A valid 304 reuses the matching cached data. Kuma keeps separate
+metadata for status-page configuration and heartbeat data; a 304 heartbeat
+keeps its original sample times, so revalidation cannot make an old heartbeat
+look current. `Cache-Control: no-store` disables validator reuse for that
+endpoint. A validator is an optimization only: each endpoint is still
+requested on every poll, even when its max-age has not elapsed. A source host or
+Kuma slug change invalidates its prior cache. Missing validators cause a normal
+fetch. An unsolicited 304 or a response without usable cached content is an
+unavailable source, never a healthy one.
+
+The code and tests cover ETag, Last-Modified, independent Kuma endpoint
+validators, `no-store`, changed source configuration and unsolicited 304s. A
+live probe of the seven public source hosts could not complete from the
+development environment: its outbound proxy rejected HTTPS CONNECT with HTTP
+403. Therefore validator support for those specific origins remains unverified;
+the adapters use conditional fetching only when each origin advertises
+validators.
 
 Both providers map into the same normalized component, group, health, incident,
 maintenance, fetch-time and freshness model. Unknown status strings stay
@@ -95,14 +117,24 @@ cosmetic current-time stamp, so an unchanged status image is byte stable.
 
 `npm test` runs a `wrangler dev --local` integration test against Wrangler’s
 Cloudflare Workers runtime. It initializes the bundled Wasm module and font,
-renders a generic seven source dashboard, validates its 1920 by 1080 PNG header,
-and writes [`examples/api-dashboard/status-dashboard.png`](../examples/api-dashboard/status-dashboard.png)
-for visual review. The test also covers deterministic PNG bytes in Node, but the
-Workers runtime test is the compatibility proof. In this environment the
-generic PNG is about 122 KB and local Worker startup plus rendering completed in
-about 1.7 seconds; this is not a production CPU or peak-memory benchmark.
-Cloudflare CPU and memory limits should be observed after enabling the feature
-for representative source sizes. No production deployment was performed.
+renders ten synthetic 1920 by 1080 scenarios, validates their PNG headers, and
+writes them to [`examples/api-dashboard/visual-samples/`](../examples/api-dashboard/visual-samples/).
+The realistic seven-source image is also written to
+[`examples/api-dashboard/status-dashboard.png`](../examples/api-dashboard/status-dashboard.png).
+Scenarios cover operational, degraded, down, incident, maintenance, partial and
+total source failure, a large monitor group, long names, and the seven-source
+layout. They contain generic synthetic data, not captured customer data. The
+test also covers deterministic PNG bytes in Node; the Workers runtime test is
+the compatibility proof. PNGs are checked at native resolution and the main
+sample is inspected at reduced display size as well.
+
+Before these changes, the local baseline for one fixture was about 246 ms for
+Node rendering and 1.8 seconds for Wrangler Worker startup plus rendering. These
+are local wall-clock timings and include Wasm initialization; they are not
+Cloudflare CPU time or production resource measurements. The new runtime test
+renders ten samples in one Worker process to verify compatibility across the
+scenarios. It does not claim a production CPU or peak-memory improvement.
+No production deployment was performed.
 
 ## Scheduling, traffic, and Browser Run cost
 
@@ -116,25 +148,76 @@ milliseconds, last successful source fetch, last changed image time, source
 freshness, and asset reuse are recorded separately and shown in management.
 
 The seven source example contains five Kuma pages (two GETs each) and two
-Statuspage pages (one GET each): 12 requests per poll before any retries.
+Statuspage pages (one GET each): 12 upstream requests per poll before retries.
+Conditional requests reduce transfer bytes only when a source supports them;
+they do not reduce the request count. A dashboard must be in the active playlist
+to receive recurring captures. The table is per active dashboard and assumes
+no retries.
 
-| Refresh interval | Requests per hour | Requests per 24 hours |
-| --- | ---: | ---: |
-| 1 minute | 720 | 17,280 |
-| 5 minutes | 144 | 3,456 |
+| Refresh interval | Upstream requests / day | Upstream requests / 30 days | Queue capture deliveries / day | Queue capture deliveries / 30 days |
+| --- | ---: | ---: | ---: | ---: |
+| 1 minute | 17,280 | 518,400 | 1,440 | 43,200 |
+| 5 minutes | 3,456 | 103,680 | 288 | 8,640 |
 
-The adapters fetch only the two required Kuma endpoints and one required
-Statuspage summary endpoint. Statuspage conditional responses reduce payload
-work when the origin supports ETags. Each render is content hashed; unchanged
-normalized visible content skips rasterization and the existing R2 object is
-reused. Browser Run use for an API only playlist is zero browser minutes.
+The management Worker already runs a shared one-minute Cron for scheduling; the
+queue-delivery counts above are the additional per-dashboard capture jobs. At
+most one rasterization and one new content-addressed R2 object can occur per
+capture cycle. In practice, the existing SVG content hash skips rasterization
+when visible content is unchanged, and the PNG content digest reuses an already
+stored object. Storage depends on PNG size and history retention, so this model
+does not project GB-months from sample images. Browser Run use for an API-only
+playlist is zero browser minutes.
+
+Current published Cloudflare pricing is listed in the linked product pages;
+this workload table is not an account bill estimate. Workers Paid Standard
+includes 10 million Worker requests and 30 million CPU milliseconds per month,
+then charges for excess requests and CPU. Workers Free limits are daily. R2
+Standard includes 10 GB-month storage, 1 million Class A operations and 10
+million Class B operations monthly. D1 Free includes 5 million rows read and
+100,000 rows written daily; Paid includes 25 billion rows read and 50 million
+rows written monthly. These are account-wide allowances, and actual plan,
+account usage, API dashboard image changes and retries affect billing. See
+[Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/),
+[D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/) and
+[R2 pricing](https://developers.cloudflare.com/r2/pricing/) for current terms.
+
+## Efficiency measurements and baseline comparison
+
+The dashboard management card exposes the latest successful capture, last image
+change, latest PNG size and resolution, latest run timings, per-source freshness
+and endpoint cache validators. Its expanded efficiency view summarizes at most
+100 recent capture jobs in the last 30 days: successes and terminal failures,
+retry attempts, partial/all-source failures, upstream requests and 304s,
+response body bytes, API fetch/render and capture-work wall-time p50/p90,
+render failures, content-hash render skips, and R2 asset reuse. Response body
+bytes are counted after reading by the Worker; they are not compressed wire
+bytes, and a 304 contributes no body bytes. Job measurements remain in the
+existing capture job history; the summary adds no separate event store. Source
+cache/freshness details show the last request data available in the normalized
+snapshot.
+
+| Measurement | Before | After |
+| --- | --- | --- |
+| Seven-source upstream requests | 12 per successful poll | Still 12; 304 can reduce response bytes where the origin supports validators |
+| Kuma persisted validators | None | Independent ETag/Last-Modified metadata per endpoint |
+| Unchanged visible dashboard | Existing content hash skipped PNG work | Still skips rendering; request and byte totals are now recorded |
+| Worker render timing | Local wall-clock baseline only | Per-job fetch/render/capture-work wall duration, render failure count and p50/p90 summaries |
+| Production Worker CPU/memory, D1 and R2 usage | Not available in app | Still requires Cloudflare Analytics; never inferred from wall time |
+
+The local repeated-capture test measures one rasterization followed by a
+content-hash match that skips rasterization and reuses the same R2 asset. No live
+origin responses were available to measure byte savings, and no production CPU,
+D1, R2 operations or billed cost was measured. Queue captures bypass Browser
+Run and continue contributing zero Browser Run minutes.
 
 ## Migrations and validation
 
 Migration `0017_api_dashboards.sql` widens the shared capture interval check,
-adds API source/status/content hash fields and API job timing fields, and
-preserves capture history, playlist references, advisory records and asset
-registry triggers. Apply it through the existing management migration command:
+adds API source/status/content hash fields and API job timing fields. Migration
+`0018_api_dashboard_metrics.sql` adds per-job API counters and the index used
+for recent summaries. Both preserve prior job data and existing
+capture/playlist references. Apply pending migrations through the existing
+management migration command:
 
 ```sh
 cd workers/device-sync

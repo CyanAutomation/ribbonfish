@@ -10,9 +10,10 @@ const colors: Record<Health, string> = {
 };
 
 function esc(text: string) { return text.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[char]!); }
-function short(text: string, max: number) { return text.length > max ? `${text.slice(0, max - 1)}…` : text; }
+function short(text: string, max: number) { return text.length > max ? `${text.slice(0, Math.max(0, max - 3))}...` : text; }
 
 function sourceHealth(source: DashboardSource): Health {
+  if (source.disabled) return "unknown";
   if (source.freshness !== "fresh") return "stale";
   const leafStates = source.components.filter((item) => !item.isGroup).map((item) => item.status);
   if (leafStates.includes("down")) return "down";
@@ -29,49 +30,84 @@ function card(source: DashboardSource, x: number, y: number, width: number, heig
   const health = sourceHealth(source);
   const pad = s(22);
   const left = x + pad;
-  let contentY = y + s(100);
-  const lineH = s(Math.max(20, Math.min(24, height / 18)));
-  const groupMap = new Map<string, typeof source.components>();
-  for (const component of source.components) {
-    const key = component.groupName ?? "Services";
-    groupMap.set(key, [...(groupMap.get(key) ?? []), component]);
+  const compact = height < s(170);
+  const contentY = y + s(compact ? 0 : 100);
+  const lineH = s(compact ? 18 : Math.max(20, Math.min(24, height / 18)));
+  const parentGroups = (source.groups ?? source.components.filter((component) => component.isGroup).map((component) => ({ id: component.id, name: component.name, order: component.groupOrder ?? component.componentOrder ?? 0 })))
+    .sort((a, b) => a.order - b.order);
+  const services = source.components.filter((component) => !component.isGroup);
+  const serviceRows: Array<{ kind: "group"; name: string } | { kind: "empty"; name: string } | { kind: "service"; component: typeof services[number] }> = [];
+  const seenServices = new Set<string>();
+  if (parentGroups.length) {
+    for (const parent of parentGroups) {
+      const children = services.filter((component) => component.groupId === parent.id || (!component.groupId && component.groupName === parent.name))
+        .sort((a, b) => (a.componentOrder ?? 0) - (b.componentOrder ?? 0));
+      serviceRows.push({ kind: "group", name: parent.name });
+      if (!children.length) serviceRows.push({ kind: "empty", name: parent.name });
+      for (const component of children) { serviceRows.push({ kind: "service", component }); seenServices.add(component.id); }
+    }
   }
-  const componentLines: string[] = [];
-  for (const [group, components] of groupMap) {
-    if (groupMap.size > 1 || (components[0]?.groupName && components[0].groupName !== "Services")) componentLines.push(`@@${group}`);
-    for (const component of components) componentLines.push(`${component.name}\t${component.status}\t${component.latencyMs === undefined ? "" : `${Math.round(component.latencyMs)} ms`}${component.isGroup ? " (group)" : ""}`);
+  const remaining = services.filter((component) => !seenServices.has(component.id))
+    .sort((a, b) => (a.groupOrder ?? 0) - (b.groupOrder ?? 0) || (a.componentOrder ?? 0) - (b.componentOrder ?? 0));
+  const groups = new Map<string, typeof remaining>();
+  for (const component of remaining) {
+    const name = component.groupName ?? "Services";
+    groups.set(name, [...(groups.get(name) ?? []), component]);
   }
-  const maxLines = Math.max(1, Math.floor((height - s(150)) / lineH));
-  const showLines = componentLines.slice(0, maxLines);
+  const orderedGroups = [...groups.entries()];
+  for (const [groupName, components] of orderedGroups) {
+    if (components.length && (parentGroups.length > 0 || orderedGroups.length > 1 || groupName !== "Services")) serviceRows.push({ kind: "group", name: groupName });
+    for (const component of components) serviceRows.push({ kind: "service", component });
+  }
+  const events = [...source.incidents.map((item) => `Incident (${item.status}, ${item.impact}): ${item.name}`), ...source.maintenance.map((item) => `Maintenance (${item.status}): ${item.name}`)];
+  const footerRows = (serviceRows.some((row) => row.kind === "service" || row.kind === "empty") ? 1 : 0) + (events.length ? 1 : 0);
+  const maxLines = Math.max(0, Math.floor((height - s(compact ? 58 : 150) - s(footerRows * 20)) / lineH));
+  const showRows = serviceRows.slice(0, maxLines);
+  while (showRows.at(-1)?.kind === "group") showRows.pop();
+  const visibleServices = showRows.filter((row) => row.kind === "service").length;
+  const hiddenServices = Math.max(0, services.length - visibleServices);
+  const hiddenGroups = Math.max(0, serviceRows.filter((row) => row.kind === "group").length - showRows.filter((row) => row.kind === "group").length);
   let svg = `<g><rect x="${x}" y="${y}" width="${width}" height="${height}" rx="${s(18)}" fill="#142238" stroke="#283951" stroke-width="${s(2)}"/>`;
   svg += `<rect x="${x}" y="${y}" width="${s(7)}" height="${height}" rx="${s(4)}" fill="${colors[health]}"/>`;
-  svg += `<text x="${left}" y="${y + s(42)}" fill="#f5f8fc" font-size="${s(26)}" font-weight="700">${esc(short(source.displayName, Math.floor(width / s(17))))}</text>`;
-  svg += `<circle cx="${x + width - s(150)}" cy="${y + s(34)}" r="${s(7)}" fill="${colors[health]}"/>`;
-  svg += `<text x="${x + width - s(136)}" y="${y + s(41)}" fill="${colors[health]}" font-size="${s(16)}">${esc(healthLabel[health])}</text>`;
-  if (source.error) svg += `<text x="${left}" y="${y + s(68)}" fill="#ffb86c" font-size="${s(15)}">${esc(short(source.error, Math.floor(width / s(9))))}</text>`;
-  else svg += `<text x="${left}" y="${y + s(70)}" fill="#aab8ca" font-size="${s(14)}">${esc(short(source.statusDescription, Math.floor(width / s(9))))}</text>`;
-  if (!source.components.length && !source.error) svg += `<text x="${left}" y="${y + s(106)}" fill="#aab8ca" font-size="${s(17)}">No component data available</text>`;
-  showLines.forEach((line, index) => {
+  svg += `<text x="${left}" y="${y + s(compact ? 25 : 42)}" fill="#f5f8fc" font-size="${s(compact ? 17 : 26)}" font-weight="700">${esc(short(source.displayName, Math.floor((width - s(185)) / s(compact ? 10 : 17))))}</text>`;
+  svg += `<circle cx="${x + width - s(150)}" cy="${y + s(compact ? 20 : 34)}" r="${s(7)}" fill="${colors[health]}"/>`;
+  const sourceStatusLabel = source.disabled ? "Disabled" : healthLabel[health];
+  svg += `<text x="${x + width - s(136)}" y="${y + s(compact ? 26 : 41)}" fill="${colors[health]}" font-size="${s(compact ? 13 : 16)}">${esc(sourceStatusLabel)}</text>`;
+  if (!compact) {
+    if (source.error) svg += `<text x="${left}" y="${y + s(68)}" fill="#ffb86c" font-size="${s(15)}">${esc(short(source.error, Math.floor(width / s(9))))}</text>`;
+    else svg += `<text x="${left}" y="${y + s(70)}" fill="#aab8ca" font-size="${s(14)}">${esc(short(source.statusDescription, Math.floor(width / s(9))))}</text>`;
+  }
+  if (source.disabled) svg += `<text x="${left}" y="${y + s(compact ? 48 : 106)}" fill="#aab8ca" font-size="${s(17)}">Source is disabled and not polled</text>`;
+  else if (!services.length && !source.error && !parentGroups.length) svg += `<text x="${left}" y="${y + s(compact ? 48 : 106)}" fill="#aab8ca" font-size="${s(17)}">No component data available</text>`;
+  showRows.forEach((row, index) => {
     const cy = contentY + index * lineH;
-    if (line.startsWith("@@")) {
-      svg += `<text x="${left}" y="${cy}" fill="#a9bdd4" font-size="${s(15)}" font-weight="700">${esc(short(line.slice(2), Math.floor(width / s(10))))}</text>`;
+    if (row.kind === "group") {
+      svg += `<text x="${left}" y="${cy}" fill="#a9bdd4" font-size="${s(compact ? 12 : 15)}" font-weight="700">${esc(short(row.name, Math.floor(width / s(10))))}</text>`;
       return;
     }
-    const [name, status, latency] = line.split("\t");
+    if (row.kind === "empty") {
+      svg += `<text x="${left + s(16)}" y="${cy}" fill="#aab8ca" font-size="${s(compact ? 11 : 14)}">No services reported</text>`;
+      return;
+    }
+    const { name, status, latencyMs } = row.component;
     const color = colors[status as Health] ?? colors.unknown;
-    const nameSize = s(16);
     const statusText = healthLabel[status as Health] ?? healthLabel.unknown;
     const right = x + width - pad;
-    const statusWidth = s(Math.min(statusText.length * 8.2 + 8, width * .32));
+    const statusWidth = s(Math.min(statusText.length * (compact ? 6 : 8.2) + 8, width * .32));
     svg += `<circle cx="${left + s(7)}" cy="${cy - s(5)}" r="${s(5)}" fill="${color}"/>`;
-    svg += `<text x="${left + s(22)}" y="${cy}" fill="#e5edf6" font-size="${nameSize}">${esc(short(name, Math.max(8, Math.floor((width - s(220)) / s(8.5)))))}</text>`;
-    if (latency) svg += `<text x="${right - statusWidth - s(8)}" y="${cy}" text-anchor="end" fill="#9db0c5" font-size="${s(14)}">${esc(latency)}</text>`;
-    svg += `<text x="${right}" y="${cy}" text-anchor="end" fill="${color}" font-size="${s(14)}">${esc(statusText)}</text>`;
+    svg += `<text x="${left + s(22)}" y="${cy}" fill="#e5edf6" font-size="${s(compact ? 12 : 16)}">${esc(short(name, Math.max(8, Math.floor((width - s(220)) / s(8.5)))))}</text>`;
+    if (latencyMs !== undefined && !compact) svg += `<text x="${right - statusWidth - s(8)}" y="${cy}" text-anchor="end" fill="#9db0c5" font-size="${s(14)}">${esc(`${Math.round(latencyMs)} ms`)}</text>`;
+    svg += `<text x="${right}" y="${cy}" text-anchor="end" fill="${color}" font-size="${s(compact ? 11 : 14)}">${esc(statusText)}</text>`;
   });
-  const events = [...source.incidents.map((item) => `Incident (${item.status}, ${item.impact}): ${item.name}`), ...source.maintenance.map((item) => `Maintenance (${item.status}): ${item.name}`)];
-  const hasOverflow = componentLines.length > showLines.length;
-  if (hasOverflow) svg += `<text x="${left}" y="${y + height - s(events.length ? 36 : 18)}" fill="#9db0c5" font-size="${s(13)}">+ ${componentLines.length - showLines.length} more services</text>`;
-  if (events.length) svg += `<text x="${left}" y="${y + height - s(18)}" fill="#ffc46b" font-size="${s(13)}">${esc(short(events.join(" · "), Math.floor(width / s(8))))}</text>`;
+  if (hiddenServices || hiddenGroups) {
+    const message = [hiddenGroups ? `${hiddenGroups} more groups` : "", hiddenServices ? `${hiddenServices} more services` : ""].filter(Boolean).join(" · ");
+    svg += `<text x="${left}" y="${y + height - s(events.length ? 36 : 18)}" fill="#9db0c5" font-size="${s(compact ? 10 : 13)}">+ ${esc(message)}</text>`;
+  }
+  if (events.length) {
+    const suffix = events.length > 1 ? ` · +${events.length - 1} more active events` : "";
+    const first = short(events[0], Math.max(8, Math.floor(width / s(compact ? 7 : 8)) - suffix.length));
+    svg += `<text x="${left}" y="${y + height - s(compact ? 8 : 18)}" fill="#ffc46b" font-size="${s(compact ? 10 : 13)}">${esc(first + suffix)}</text>`;
+  }
   svg += "</g>";
   return svg;
 }
@@ -89,7 +125,7 @@ export function dashboardSVG(sources: DashboardSource[], width = 1920, height = 
   const rows = Math.ceil(sources.length / columns);
   const cardH = (height - headerH - pad - gap * Math.max(0, rows - 1)) / Math.max(rows, 1);
   const overall = overallHealth(sources);
-  const anyIssue = sources.some((source) => source.freshness !== "fresh");
+  const anyIssue = sources.some((source) => !source.disabled && source.freshness !== "fresh");
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#0b1422"/>`;
   svg += `<text x="${pad}" y="${60 * scale}" fill="#ffffff" font-family="Ribbon Sans" font-size="${36 * scale}" font-weight="700">Operations status</text>`;
   svg += `<text x="${pad}" y="${100 * scale}" fill="#a8b8cb" font-family="Ribbon Sans" font-size="${18 * scale}">${sources.length} configured sources · API data</text>`;
