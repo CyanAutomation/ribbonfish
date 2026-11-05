@@ -1,0 +1,4 @@
+name = "ribbonfish-api-render-runtime-test"
+main = "src/api-dashboard/render-worker-test.ts"
+compatibility_date = "2026-10-26"
+workers_dev = false

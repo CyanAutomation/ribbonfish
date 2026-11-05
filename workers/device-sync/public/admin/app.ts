@@ -732,6 +732,95 @@ function renderCaptureTargets(targets, decisions = []) {
   filterCaptureTargets();
 }
 
+function renderApiDashboards(dashboards) {
+  const container = requiredElement(document, "#api-dashboard-list");
+  container.replaceChildren();
+  if (!dashboards.length) {
+    container.append(node("p", "No API dashboards yet. Configure public status sources above.", "muted"));
+    return;
+  }
+  dashboards.forEach((dashboard) => {
+    const card = node("article", undefined, "capture-target");
+    const image = node("img", undefined, "capture-target__preview");
+    image.src = dashboard.current_image ?? "/admin/capture-pending.png";
+    image.alt = dashboard.current_image ? `Latest API dashboard image for ${dashboard.name}` : `Waiting for the first API dashboard image for ${dashboard.name}`;
+    image.loading = "lazy";
+    image.addEventListener("error", () => { image.hidden = true; }, { once: true });
+    const content = node("div", undefined, "capture-target__content");
+    const heading = node("div", undefined, "capture-target__heading");
+    heading.append(node("h3", dashboard.name));
+    heading.append(statusBadge(dashboard.enabled ? (dashboard.job_status || "Enabled") : "Disabled", dashboard.last_error ? "warning" : "success"));
+    content.append(heading);
+    content.append(node("p", `${dashboard.capture_interval_seconds / 60} minute refresh · ${dashboard.viewport_width} × ${dashboard.viewport_height} px · ${dashboard.configuration?.sources?.length ?? 0} sources`, "muted"));
+    if (dashboard.api_last_fetch_at) content.append(node("p", `Last successful source fetch ${formatTimestamp(dashboard.api_last_fetch_at)}`, "muted"));
+    if (dashboard.api_last_image_at) content.append(node("p", `Last image generated ${formatTimestamp(dashboard.api_last_image_at)}`, "muted"));
+    if (dashboard.api_fetch_ms !== null && dashboard.api_fetch_ms !== undefined) content.append(node("p", `Last run: API fetch ${dashboard.api_fetch_ms} ms · rendering ${dashboard.api_render_ms ?? 0} ms · asset ${dashboard.api_asset_reused ? "reused" : "created"}`, "muted"));
+    if (dashboard.last_error) content.append(node("p", dashboard.last_error, "capture-target__error error-title"));
+    (dashboard.sources ?? []).forEach((source) => {
+      if (source.error || source.freshness !== "fresh") content.append(node("p", `${source.displayName}: ${source.error || source.freshness}`, "capture-target__error"));
+    });
+    const actions = node("div", undefined, "form-actions");
+    const run = button("Refresh now", "secondary");
+    run.addEventListener("click", async () => {
+      run.disabled = true;
+      try { await api(`/admin/api/captures/${encodeURIComponent(dashboard.capture_id)}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); showMessage("API dashboard refresh queued.", false, "sites"); await refresh(); }
+      catch (error) { showMessage(error.message, true, "sites"); }
+      finally { run.disabled = false; }
+    });
+    const toggle = button(dashboard.enabled ? "Disable" : "Enable", "secondary");
+    toggle.addEventListener("click", async () => {
+      try { await api(`/admin/api/api-dashboards/${encodeURIComponent(dashboard.capture_id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !dashboard.enabled }) }); await refresh(); }
+      catch (error) { showMessage(error.message, true, "sites"); }
+    });
+    const remove = button("Remove", "quiet");
+    remove.addEventListener("click", async () => {
+      try {
+        await confirmBeforeAction(
+          (text) => showConfirmDialog({ title: "Remove API dashboard?", description: text, confirmLabel: "Remove dashboard", destructive: true }),
+          `Remove ${dashboard.name}? Future API captures will stop and existing playlist revisions keep their assigned image.`,
+          () => api(`/admin/api/captures/${encodeURIComponent(dashboard.capture_id)}`, { method: "DELETE" }),
+        );
+        await refresh();
+      } catch (error) { showMessage(error.message, true, "sites"); }
+    });
+    actions.append(run, toggle, remove);
+    content.append(actions);
+    const editor = node("details", undefined, "capture-target__details");
+    editor.append(node("summary", "Edit sources and resolution"));
+    const form = node("div", undefined, "capture-detail-section");
+    const config = dashboard.configuration ?? { sources: [], width: dashboard.viewport_width, height: dashboard.viewport_height };
+    const textarea = node("textarea", undefined, "field-control") as HTMLTextAreaElement;
+    textarea.value = JSON.stringify(config, null, 2);
+    textarea.rows = 9;
+    textarea.setAttribute("aria-label", `Configuration JSON for ${dashboard.name}`);
+    textarea.style.width = "100%";
+    const interval = node("select", undefined, "field-control");
+    for (const [value, label] of [[300, "5 minutes"], [60, "1 minute"]]) {
+      const option = node("option", label) as HTMLOptionElement;
+      option.value = String(value); option.selected = Number(dashboard.capture_interval_seconds) === value; interval.append(option);
+    }
+    const save = button("Save dashboard settings", "secondary");
+    save.addEventListener("click", async () => {
+      save.disabled = true;
+      try {
+        const parsed = JSON.parse(textarea.value);
+        await api(`/admin/api/api-dashboards/${encodeURIComponent(dashboard.capture_id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...parsed, capture_interval_seconds: Number(interval.value) }) });
+        showMessage("API dashboard configuration saved.", false, "sites"); await refresh();
+      } catch (error) { showMessage(error.message, true, "sites"); }
+      finally { save.disabled = false; }
+    });
+    form.append(node("label", "Refresh interval"), interval, textarea, save);
+    editor.append(form);
+    content.append(editor);
+    (dashboard.sources ?? []).forEach((source) => {
+      const state = node("p", `${source.displayName}: ${source.components?.length ?? 0} components · ${source.freshness}`, "muted");
+      content.append(state);
+    });
+    card.append(image, content);
+    container.append(card);
+  });
+}
+
 function renderAvailableSites(targets, selectedIDs = null) {
   const list = requiredElement(document, "#available-sites .asset-selection__list");
   const prior = new Map([...requiredElements<HTMLInputElement>(list, "input[data-capture-id]")].map((input) => [input.dataset.captureId, input.checked]));
@@ -1120,11 +1209,12 @@ function renderAudit(events) {
 }
 
 async function refresh() {
-  const [overview, enrollmentRequests, captureDecisions, intervals] = await Promise.all([
+  const [overview, enrollmentRequests, captureDecisions, intervals, apiDashboards] = await Promise.all([
     api("/admin/api/overview"),
     api("/admin/api/enrollment-requests"),
     api("/admin/api/capture-decisions").catch(() => []),
     api("/admin/api/intervals"),
+    api("/admin/api/api-dashboards").catch(() => []),
   ]);
   intervalDefinitions = intervals;
   populateIntervalSelect(requiredElement(document, "#playlist-form [name=rotation_interval]"), intervals.rotation.options,
@@ -1137,9 +1227,10 @@ async function refresh() {
   renderHealth(overview.asset_health);
   renderFleetAttention(overview, enrollmentRequests);
   renderPlaylists(overview.playlists);
+  const browserTargets = (overview.capture_targets ?? []).filter((target) => target.capture_type !== "api-dashboard");
   const captureForecast = renderCaptureEfficiencyModule(
     requiredElement(document, "#capture-efficiency-content"),
-    overview.capture_targets ?? [],
+    browserTargets,
     overview.capture_efficiency,
   );
   requiredElement(document, "#capture-efficiency-tile-status").textContent = captureForecast
@@ -1147,7 +1238,8 @@ async function refresh() {
       ? "Waiting for active runtime samples"
       : formatRunTime(captureForecast.total_estimated_ms) + " forecast per day"
     : "Forecast unavailable";
-  renderCaptureTargets(overview.capture_targets ?? [], captureDecisions);
+  renderCaptureTargets(browserTargets, captureDecisions);
+  renderApiDashboards(apiDashboards);
   renderAvailableSites(overview.capture_targets ?? []);
   renderDevices(overview.devices, overview.active_playlist);
   renderPendingEnrollments(enrollmentRequests);
@@ -1316,6 +1408,30 @@ requiredElement(document, "#capture-site-form").addEventListener("submit", async
     showInlineMessage(feedback, result.schedule_reviewed
       ? "This site already exists and its schedule has been reviewed."
       : "Site added with the default daily schedule. Review or confirm that schedule below.");
+    await refresh();
+  } catch (error) { showInlineMessage(feedback, error.message, true); }
+  finally { submit.disabled = false; }
+});
+
+requiredElement(document, "#api-dashboard-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget as HTMLFormElement;
+  const feedback = requiredElement(document, "#api-dashboard-feedback");
+  const submit = requiredElement(form, "button[type=submit]");
+  submit.disabled = true;
+  try {
+    const sources = JSON.parse(requiredFormControl<HTMLTextAreaElement>(form, "sources").value);
+    await api("/admin/api/api-dashboards", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: requiredFormControl<HTMLInputElement>(form, "name").value,
+        capture_interval_seconds: Number(requiredFormControl<HTMLSelectElement>(form, "capture_interval_seconds").value),
+        width: Number(requiredFormControl<HTMLInputElement>(form, "width").value),
+        height: Number(requiredFormControl<HTMLInputElement>(form, "height").value),
+        sources,
+      }),
+    });
+    showInlineMessage(feedback, "API dashboard created. Run it now or add it to a playlist to schedule refreshes.");
     await refresh();
   } catch (error) { showInlineMessage(feedback, error.message, true); }
   finally { submit.disabled = false; }
