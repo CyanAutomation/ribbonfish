@@ -8,14 +8,15 @@ as an ordinary playlist asset.
 
 ## Configure
 
-Set `API_STATUS_ALLOWED_HOSTS` on the management Worker to a comma separated
-list of exact public DNS hostnames that administrators may configure. Keep the
+`API_STATUS_ALLOWED_HOSTS` on the management Worker is an optional comma
+separated list of exact hostnames. When it is empty or unset, any hostname that
+passes the adapter's public DNS validation is accepted. As soon as one or more
+hostnames are listed, they form an exact-match allowlist. Keep any configured
 list in Worker settings or local environment configuration rather than source
-control. Requests use HTTPS, the exact allowlisted hostname, manual redirect
-handling, an 8 second timeout, a 1 MB response limit, and schema/workload caps.
-The adapters reject IP addresses, single label hosts, local host suffixes and
-any hostname missing from that allowlist. No API credentials are supported or
-needed.
+control. Requests use HTTPS, manual redirect handling, an 8 second timeout, a
+1 MB response limit, and schema/workload caps. The adapters reject IP
+addresses, single-label hosts, and local or reserved host suffixes. No API
+credentials are supported or needed.
 
 In **Capture sites**, choose **Add an API status dashboard**. Paste a source
 array in the editor, choose 1920 by 1080 or another supported resolution, and
@@ -32,8 +33,8 @@ select a one or five minute interval. A source entry looks like:
 }
 ```
 
-Atlassian Statuspage sources use `"provider": "atlassian-statuspage"` and an
-allowlisted `hostname`; they do not need a slug. See
+Atlassian Statuspage sources use `"provider": "atlassian-statuspage"` and a
+`hostname`; they do not need a slug. See
 [`examples/api-dashboard/config.example.json`](../examples/api-dashboard/config.example.json)
 for a generic seven source configuration. Replace example hostnames and slugs
 with the values managed by your organization. Source names, actual hostnames,
@@ -137,7 +138,8 @@ node --test src/api-dashboard/render-worker.test.ts
 ```
 
 Troubleshooting details appear in the dashboard source list and latest job
-state. Check the hostname allowlist first, then confirm public API access from
-the management Worker, and review whether a source’s heartbeat data is older
-than the 15 minute freshness threshold. Browser screenshot diagnostics and JEV
+state. Check hostname validation and, if configured, the exact host allowlist,
+then confirm public API access from the management Worker, and review whether
+a source’s heartbeat data is older than the 15 minute freshness threshold.
+Browser screenshot diagnostics and JEV
 recommendations remain scoped to browser targets.
