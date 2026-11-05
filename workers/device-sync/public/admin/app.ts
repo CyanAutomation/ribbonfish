@@ -1,7 +1,9 @@
 import { api } from "./api.ts";
 import { requiredElement, requiredElements, requiredFormControl } from "./dom.ts";
 import { formatCaptureObservation, formatRunTime } from "./capture-presentation.ts";
-import { node, button, statusBadge, actionDisclosure } from "./ui-primitives.ts";
+import { node, button, statusBadge, actionDisclosure, metricCard } from "./ui-primitives.ts";
+import { createApiDashboardSourceEditor } from "./api-dashboard-editor.ts";
+import { parseApiDashboardConfig } from "../../src/api-dashboard/config.ts";
 import { renderCaptureEfficiencyModule } from "./capture-efficiency-module.ts";
 import { renderFindingList } from "./ui-components.ts";
 import { initModuleNavigation } from "./module-navigation.ts";
@@ -43,6 +45,12 @@ const confirmButton = requiredElement(document, "#confirm-submit");
 const confirmCancel = requiredElement(document, "#confirm-cancel");
 const environmentTag = requiredElement(document, "#environment-tag");
 const environmentNotice = requiredElement(document, "#environment-notice");
+const apiDashboardCreateForm = requiredElement<HTMLFormElement>(document, "#api-dashboard-form");
+const apiDashboardCreateEditor = createApiDashboardSourceEditor(
+  requiredElement(document, "#api-dashboard-source-list"),
+  [],
+  requiredFormControl<HTMLTextAreaElement>(apiDashboardCreateForm, "sources-json"),
+);
 let latestOverview: any = null;
 let fleetSummaryInitialized = false;
 let pendingEnrollmentsLoaded = false;
@@ -732,11 +740,85 @@ function renderCaptureTargets(targets, decisions = []) {
   filterCaptureTargets();
 }
 
+function buildDashboardSourceEditor(container, sources) {
+  const host = node("div", undefined, "source-editor-list");
+  const toolbar = node("div", undefined, "source-editor-toolbar");
+  toolbar.append(node("h4", "Sources"));
+  const add = button("Add source", "secondary");
+  add.dataset.addDashboardSource = "true";
+  toolbar.append(add);
+  const rows = node("div", undefined, "source-editor-rows");
+  rows.dataset.sourceRows = "true";
+  const error = node("p", undefined, "field-error");
+  error.dataset.sourceEditorError = "true";
+  error.hidden = true;
+  error.setAttribute("role", "alert");
+  host.append(toolbar, rows, error);
+  container.append(host);
+  const advanced = node("details", undefined, "advanced-json-editor");
+  advanced.dataset.apiDashboardAdvanced = "true";
+  advanced.append(node("summary", "Advanced source JSON"));
+  const label = node("label", "Sources JSON");
+  const textarea = node("textarea", undefined, "field-control") as HTMLTextAreaElement;
+  textarea.name = "sources-json";
+  textarea.rows = 8;
+  textarea.spellcheck = false;
+  textarea.setAttribute("aria-label", "Advanced source JSON");
+  label.append(textarea);
+  advanced.append(label);
+  container.append(advanced);
+  return createApiDashboardSourceEditor(host, sources, textarea);
+}
+
+function formatAge(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "unknown age";
+  if (seconds < 60) return `${Math.floor(seconds)} sec`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hr ${minutes % 60} min`;
+  const days = Math.floor(hours / 24);
+  return `${days} days ${hours % 24} hr`;
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(Number(bytes)) || Number(bytes) < 0) return "—";
+  const units = ["B", "KB", "MB", "GB"];
+  let amount = Number(bytes);
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
+  return `${amount.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+function formatMetricMs(value) { return value != null && value !== "" && Number.isFinite(Number(value)) ? `${Math.round(Number(value))} ms` : "—"; }
+
+function renderApiDashboardMetrics(dashboard) {
+  const metrics = dashboard.recent_metrics ?? {};
+  const successes = Number(metrics.successes ?? 0);
+  const failures = Number(metrics.failures ?? 0);
+  const completed = Number(metrics.completed_count ?? successes + failures);
+  const percentage = (numerator, denominator) => denominator > 0 ? `${Math.round(numerator / denominator * 100)}%` : "—";
+  const details = node("details", undefined, "api-dashboard-efficiency");
+  details.append(node("summary", `Efficiency · ${metrics.sample_count ?? 0} recent jobs (up to 30 days)`));
+  const grid = node("div", undefined, "api-dashboard-efficiency__grid");
+  grid.append(metricCard("Successful captures", completed ? `${successes} / ${completed}` : "No completed jobs", `${failures} failed · ${metrics.retry_attempts ?? 0} retries · ${percentage(failures, completed)} failure rate`));
+  grid.append(metricCard("Source outcomes", `${metrics.partial_source_failures ?? 0} partial · ${metrics.all_source_failures ?? 0} all failed`, `${(dashboard.sources ?? []).filter((source) => !source.disabled && source.freshness === "fresh").length} fresh · ${(dashboard.sources ?? []).filter((source) => !source.disabled && source.freshness === "stale").length} stale · ${(dashboard.sources ?? []).filter((source) => !source.disabled && source.freshness === "unavailable").length} unavailable now`));
+  grid.append(metricCard("Upstream traffic", `${metrics.upstream_requests ?? 0} requests`, `${metrics.not_modified_responses ?? 0} HTTP 304 · ${metrics.upstream_failed_requests ?? 0} failed · ${formatBytes(metrics.response_bytes ?? 0)} response body bytes`));
+  grid.append(metricCard("API fetch duration", `${formatMetricMs(metrics.fetch_p50_ms)} p50`, `${formatMetricMs(metrics.fetch_p90_ms)} p90 · ${metrics.completed_count ?? 0} completed-job samples`));
+  const renderFailures = Number(metrics.render_failures ?? 0);
+  grid.append(metricCard("PNG render duration", `${formatMetricMs(metrics.render_p50_ms)} p50`, `${formatMetricMs(metrics.render_p90_ms)} p90 · ${metrics.render_operations ?? 0} renders · ${renderFailures} render ${renderFailures === 1 ? "failure" : "failures"}`));
+  grid.append(metricCard("Capture work wall time", `${formatMetricMs(metrics.total_p50_ms)} p50`, `${formatMetricMs(metrics.total_p90_ms)} p90 · includes API work and asset storage, excludes final D1 update`));
+  grid.append(metricCard("Render and asset reuse", `${percentage(metrics.content_hash_matches ?? 0, successes)} render skips`, `${metrics.content_hash_matches ?? 0} content matches · ${percentage(metrics.asset_reuses ?? 0, successes)} R2 asset reuse`));
+  details.append(grid);
+  details.append(node("p", "These are application measurements from the latest 100 jobs within 30 days. Worker CPU and memory, D1 operation counts, and billed R2 operations or storage require Cloudflare Analytics; wall-clock duration is not a cost estimate. API dashboards use zero Browser Run minutes.", "field-hint"));
+  return details;
+}
+
 function renderApiDashboards(dashboards) {
   const container = requiredElement(document, "#api-dashboard-list");
   container.replaceChildren();
   if (!dashboards.length) {
-    container.append(node("p", "No API dashboards yet. Configure public status sources above.", "muted"));
+    container.append(node("p", "No API dashboards yet. Add a dashboard and configure its public status sources here.", "muted"));
     return;
   }
   dashboards.forEach((dashboard) => {
@@ -752,25 +834,53 @@ function renderApiDashboards(dashboards) {
     heading.append(statusBadge(dashboard.enabled ? (dashboard.job_status || "Enabled") : "Disabled", dashboard.last_error ? "warning" : "success"));
     content.append(heading);
     content.append(node("p", `${dashboard.capture_interval_seconds / 60} minute refresh · ${dashboard.viewport_width} × ${dashboard.viewport_height} px · ${dashboard.configuration?.sources?.length ?? 0} sources`, "muted"));
+    if (dashboard.last_success_at) {
+      const ageSeconds = Math.max(0, (Date.now() - Number(dashboard.last_success_at)) / 1000);
+      content.append(node("p", `Last successful capture ${formatTimestamp(dashboard.last_success_at)} · ${formatAge(ageSeconds)} ago`, "muted"));
+    }
     if (dashboard.api_last_fetch_at) content.append(node("p", `Last successful source fetch ${formatTimestamp(dashboard.api_last_fetch_at)}`, "muted"));
-    if (dashboard.api_last_image_at) content.append(node("p", `Last image generated ${formatTimestamp(dashboard.api_last_image_at)}`, "muted"));
-    if (dashboard.api_fetch_ms !== null && dashboard.api_fetch_ms !== undefined) content.append(node("p", `Last run: API fetch ${dashboard.api_fetch_ms} ms · rendering ${dashboard.api_render_ms ?? 0} ms · asset ${dashboard.api_asset_reused ? "reused" : "created"}`, "muted"));
+    if (dashboard.api_last_image_at) content.append(node("p", `Image last changed ${formatTimestamp(dashboard.api_last_image_at)}`, "muted"));
+    if (dashboard.current_size != null) content.append(node("p", `Latest PNG ${formatBytes(dashboard.current_size)} · ${dashboard.viewport_width} × ${dashboard.viewport_height} px`, "muted"));
+    if (dashboard.api_fetch_ms !== null && dashboard.api_fetch_ms !== undefined) content.append(node("p", `Last run: API fetch ${dashboard.api_fetch_ms} ms · rendering ${dashboard.api_render_ms ?? 0} ms · capture work ${dashboard.api_total_ms ?? 0} ms · asset ${dashboard.api_asset_reused ? "reused" : "created"}`, "muted"));
     if (dashboard.last_error) content.append(node("p", dashboard.last_error, "capture-target__error error-title"));
+    const configuredSources = new Map<string, any>((dashboard.configuration?.sources ?? []).map((source: any): [string, any] => [source.id, source]));
+    const sourceDetails = node("details", undefined, "api-dashboard-source-health");
+    sourceDetails.append(node("summary", `Source health and cache (${(dashboard.sources ?? []).length})`));
+    const sourceList = node("div", undefined, "api-dashboard-source-health__list");
     (dashboard.sources ?? []).forEach((source) => {
-      if (source.error || source.freshness !== "fresh") content.append(node("p", `${source.displayName}: ${source.error || source.freshness}`, "capture-target__error"));
+      const configured = configuredSources.get(source.id);
+      const disabled = source.disabled === true || configured?.enabled === false;
+      const state = disabled ? "Disabled" : source.freshness === "fresh" ? "Fresh" : source.freshness === "stale" ? "Stale" : "Unavailable";
+      const row = node("article", undefined, `api-dashboard-source-health__item${disabled ? " is-disabled" : source.freshness !== "fresh" ? " is-warning" : ""}`);
+      row.append(node("strong", `${source.displayName}: ${state}`));
+      if (!disabled && source.error) row.append(node("p", source.error, "capture-target__error"));
+      const stats = source.requestStats;
+      if (stats) row.append(node("p", `Last poll: ${stats.requestCount} requests · ${stats.notModifiedCount} unchanged · ${stats.failedRequestCount} failed · ${formatBytes(stats.responseBytes)} · ${stats.durationMs} ms`, "muted"));
+      const cache: Record<string, any> = source.cache ?? {};
+      Object.entries(cache).forEach(([endpoint, metadata]) => {
+        if (!metadata) return;
+        const validators = [metadata.etag ? "ETag" : "", metadata.lastModified ? "Last-Modified" : ""].filter(Boolean).join(" + ") || "no validator";
+        const cacheControl = metadata.cacheControl ? ` · Cache-Control ${metadata.cacheControl}` : "";
+        const checked = metadata.revalidatedAt ? ` · last revalidated ${formatTimestamp(metadata.revalidatedAt)}` : "";
+        row.append(node("p", `${endpoint}: ${validators}${cacheControl} · content fetched ${formatTimestamp(metadata.contentFetchedAt)}${checked}`, "muted"));
+      });
+      sourceList.append(row);
     });
+    sourceDetails.append(sourceList);
+    content.append(sourceDetails);
+    content.append(renderApiDashboardMetrics(dashboard));
     const actions = node("div", undefined, "form-actions");
     const run = button("Refresh now", "secondary");
     run.addEventListener("click", async () => {
       run.disabled = true;
-      try { await api(`/admin/api/captures/${encodeURIComponent(dashboard.capture_id)}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); showMessage("API dashboard refresh queued.", false, "sites"); await refresh(); }
-      catch (error) { showMessage(error.message, true, "sites"); }
+      try { await api(`/admin/api/captures/${encodeURIComponent(dashboard.capture_id)}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); showMessage("API dashboard refresh queued.", false, "dashboards"); await refresh(); }
+      catch (error) { showMessage(error.message, true, "dashboards"); }
       finally { run.disabled = false; }
     });
     const toggle = button(dashboard.enabled ? "Disable" : "Enable", "secondary");
     toggle.addEventListener("click", async () => {
       try { await api(`/admin/api/api-dashboards/${encodeURIComponent(dashboard.capture_id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !dashboard.enabled }) }); await refresh(); }
-      catch (error) { showMessage(error.message, true, "sites"); }
+      catch (error) { showMessage(error.message, true, "dashboards"); }
     });
     const remove = button("Remove", "quiet");
     remove.addEventListener("click", async () => {
@@ -781,35 +891,72 @@ function renderApiDashboards(dashboards) {
           () => api(`/admin/api/captures/${encodeURIComponent(dashboard.capture_id)}`, { method: "DELETE" }),
         );
         await refresh();
-      } catch (error) { showMessage(error.message, true, "sites"); }
+      } catch (error) { showMessage(error.message, true, "dashboards"); }
     });
     actions.append(run, toggle, remove);
     content.append(actions);
     const editor = node("details", undefined, "capture-target__details");
-    editor.append(node("summary", "Edit sources and resolution"));
-    const form = node("div", undefined, "capture-detail-section");
+    editor.append(node("summary", "Edit dashboard settings"));
+    const form = node("form", undefined, "capture-detail-section api-dashboard-edit") as HTMLFormElement;
+    form.dataset.apiDashboardEdit = dashboard.capture_id;
     const config = dashboard.configuration ?? { sources: [], width: dashboard.viewport_width, height: dashboard.viewport_height };
-    const textarea = node("textarea", undefined, "field-control") as HTMLTextAreaElement;
-    textarea.value = JSON.stringify(config, null, 2);
-    textarea.rows = 9;
-    textarea.setAttribute("aria-label", `Configuration JSON for ${dashboard.name}`);
-    textarea.style.width = "100%";
+    const nameLabel = node("label", "Dashboard name");
+    const nameInput = node("input", undefined, "field-control");
+    nameInput.name = "name";
+    nameInput.value = dashboard.name;
+    nameInput.maxLength = 120;
+    nameInput.required = true;
+    nameLabel.append(nameInput);
+    const intervalLabel = node("label", "Refresh interval");
     const interval = node("select", undefined, "field-control");
+    interval.name = "capture_interval_seconds";
     for (const [value, label] of [[300, "5 minutes"], [60, "1 minute"]]) {
       const option = node("option", label) as HTMLOptionElement;
       option.value = String(value); option.selected = Number(dashboard.capture_interval_seconds) === value; interval.append(option);
     }
+    intervalLabel.append(interval);
+    const resolutionLabel = node("label", "Output resolution");
+    const resolution = node("span", undefined, "viewport-inputs");
+    const width = node("input", undefined, "field-control");
+    width.name = "width"; width.type = "number"; width.min = "640"; width.max = "3840"; width.step = "1";
+    width.value = String(config.width ?? dashboard.viewport_width);
+    width.setAttribute("aria-label", `Dashboard width for ${dashboard.name}`);
+    const height = node("input", undefined, "field-control");
+    height.name = "height"; height.type = "number"; height.min = "360"; height.max = "2160"; height.step = "1";
+    height.value = String(config.height ?? dashboard.viewport_height);
+    height.setAttribute("aria-label", `Dashboard height for ${dashboard.name}`);
+    resolution.append(width, node("span", "×"), height);
+    resolutionLabel.append(resolution);
+    form.append(nameLabel, intervalLabel, resolutionLabel);
+    const sourceEditor = buildDashboardSourceEditor(form, config.sources ?? []);
+    const feedback = node("p", undefined, "form-feedback");
+    feedback.dataset.editFeedback = "true";
+    feedback.hidden = true;
+    feedback.setAttribute("role", "status");
+    const saveActions = node("div", undefined, "form-actions");
     const save = button("Save dashboard settings", "secondary");
-    save.addEventListener("click", async () => {
+    save.type = "submit";
+    save.dataset.saveApiDashboard = "true";
+    saveActions.append(save);
+    form.append(saveActions, feedback);
+    form.addEventListener("input", () => { form.dataset.dirty = "true"; });
+    form.addEventListener("change", () => { form.dataset.dirty = "true"; });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
       save.disabled = true;
+      feedback.hidden = true;
       try {
-        const parsed = JSON.parse(textarea.value);
-        await api(`/admin/api/api-dashboards/${encodeURIComponent(dashboard.capture_id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...parsed, capture_interval_seconds: Number(interval.value) }) });
-        showMessage("API dashboard configuration saved.", false, "sites"); await refresh();
-      } catch (error) { showMessage(error.message, true, "sites"); }
-      finally { save.disabled = false; }
+        if (!sourceEditor.validate()) throw new Error("Fix the highlighted source fields before saving.");
+        const parsed = parseApiDashboardConfig({ sources: sourceEditor.getSources(), width: Number(width.value), height: Number(height.value) });
+        await api(`/admin/api/api-dashboards/${encodeURIComponent(dashboard.capture_id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: nameInput.value, ...parsed, capture_interval_seconds: Number(interval.value) }) });
+        form.dataset.dirty = "false";
+        showMessage("API dashboard configuration saved.", false, "dashboards");
+        await refresh();
+      } catch (caught) {
+        feedback.textContent = caught instanceof Error ? caught.message : String(caught);
+        feedback.hidden = false;
+      } finally { save.disabled = false; }
     });
-    form.append(node("label", "Refresh interval"), interval, textarea, save);
     editor.append(form);
     content.append(editor);
     (dashboard.sources ?? []).forEach((source) => {
@@ -827,7 +974,7 @@ function renderAvailableSites(targets, selectedIDs = null) {
   list.replaceChildren();
   const eligible = targets.filter((target) => target.schedule_reviewed);
   if (!eligible.length) {
-    list.append(node("p", "No reviewed sites yet. Add and review a site in the Sites section first.", "muted"));
+    list.append(node("p", "No reviewed capture sites or dashboards are available for playlists yet.", "muted"));
     return;
   }
   eligible.forEach((target) => {
@@ -1209,6 +1356,9 @@ function renderAudit(events) {
 }
 
 async function refresh() {
+  const dirtyForms = [...document.querySelectorAll<HTMLFormElement>("#api-dashboard-form, form[data-api-dashboard-edit]")]
+    .filter((form) => form.dataset.dirty === "true");
+  if (dirtyForms.length && !window.confirm("Discard unsaved API dashboard changes and refresh the dashboard list?")) return;
   const [overview, enrollmentRequests, captureDecisions, intervals, apiDashboards] = await Promise.all([
     api("/admin/api/overview"),
     api("/admin/api/enrollment-requests"),
@@ -1220,14 +1370,15 @@ async function refresh() {
   populateIntervalSelect(requiredElement(document, "#playlist-form [name=rotation_interval]"), intervals.rotation.options,
     intervals.rotation.default, (option) => option.value);
   latestOverview = overview;
-  requiredElement(document, "#sites-tile-status").textContent = `${(overview.capture_targets ?? []).length} sites`;
+  const browserTargets = (overview.capture_targets ?? []).filter((target) => target.capture_type !== "api-dashboard");
+  requiredElement(document, "#sites-tile-status").textContent = `${browserTargets.length} screenshot sites`;
+  requiredElement(document, "#dashboards-tile-status").textContent = `${apiDashboards.length} API dashboards`;
   requiredElement(document, "#playlists-tile-status").textContent = `${overview.playlists.length} playlist versions`;
   requiredElement(document, "#devices-tile-status").textContent = `${overview.devices.length} devices · ${enrollmentRequests.length} awaiting approval`;
   renderEnvironment(overview.environment);
   renderHealth(overview.asset_health);
   renderFleetAttention(overview, enrollmentRequests);
   renderPlaylists(overview.playlists);
-  const browserTargets = (overview.capture_targets ?? []).filter((target) => target.capture_type !== "api-dashboard");
   const captureForecast = renderCaptureEfficiencyModule(
     requiredElement(document, "#capture-efficiency-content"),
     browserTargets,
@@ -1413,24 +1564,36 @@ requiredElement(document, "#capture-site-form").addEventListener("submit", async
   finally { submit.disabled = false; }
 });
 
-requiredElement(document, "#api-dashboard-form").addEventListener("submit", async (event) => {
+apiDashboardCreateForm.addEventListener("input", () => { apiDashboardCreateForm.dataset.dirty = "true"; });
+apiDashboardCreateForm.addEventListener("change", () => { apiDashboardCreateForm.dataset.dirty = "true"; });
+window.addEventListener("beforeunload", (event) => {
+  const dirty = [...document.querySelectorAll<HTMLFormElement>("#api-dashboard-form, form[data-api-dashboard-edit]")]
+    .some((form) => form.dataset.dirty === "true");
+  if (dirty) { event.preventDefault(); event.returnValue = ""; }
+});
+
+apiDashboardCreateForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget as HTMLFormElement;
   const feedback = requiredElement(document, "#api-dashboard-feedback");
   const submit = requiredElement(form, "button[type=submit]");
   submit.disabled = true;
   try {
-    const sources = JSON.parse(requiredFormControl<HTMLTextAreaElement>(form, "sources").value);
+    if (!apiDashboardCreateEditor.validate()) throw new Error("Fix the highlighted source fields before creating the dashboard.");
+    const config = parseApiDashboardConfig({
+      sources: apiDashboardCreateEditor.getSources(),
+      width: Number(requiredFormControl<HTMLInputElement>(form, "width").value),
+      height: Number(requiredFormControl<HTMLInputElement>(form, "height").value),
+    });
     await api("/admin/api/api-dashboards", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: requiredFormControl<HTMLInputElement>(form, "name").value,
         capture_interval_seconds: Number(requiredFormControl<HTMLSelectElement>(form, "capture_interval_seconds").value),
-        width: Number(requiredFormControl<HTMLInputElement>(form, "width").value),
-        height: Number(requiredFormControl<HTMLInputElement>(form, "height").value),
-        sources,
+        ...config,
       }),
     });
+    form.dataset.dirty = "false";
     showInlineMessage(feedback, "API dashboard created. Run it now or add it to a playlist to schedule refreshes.");
     await refresh();
   } catch (error) { showInlineMessage(feedback, error.message, true); }

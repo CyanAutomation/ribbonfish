@@ -48,12 +48,13 @@ const overviewFixture = () => ({
   },
 });
 
-function openConsole() {
+function openConsole(initialDashboards = []) {
   const dom = new JSDOM(html, { url: "https://example.test/admin/", runScripts: "outside-only" });
   const { window } = dom;
   const calls = [];
   const requests = [];
   const overview = overviewFixture();
+  let apiDashboards = initialDashboards;
   let fail = false;
   window.confirm = () => true;
   window.fetch = async (path, options = {}) => {
@@ -62,7 +63,7 @@ function openConsole() {
     const body = fail ? { error: "Refresh failed" } :
       path === "/admin/api/capture-sites" ? { schedule_reviewed: false } :
       path === "/admin/api/playlists" ? { revision: "revision-1", capture_count: 2 } :
-      path === "/admin/api/overview" ? overview : path === "/admin/api/intervals" ? {
+      path === "/admin/api/overview" ? overview : path === "/admin/api/api-dashboards" ? apiDashboards : path === "/admin/api/intervals" ? {
         capture: { default: 86400, options: [
           { value: 900, label: "15 minutes" }, { value: 1800, label: "30 minutes" },
           { value: 3600, label: "1 hour" }, { value: 10800, label: "3 hours" },
@@ -83,6 +84,7 @@ function openConsole() {
     requests,
     overview,
     setFailure(value) { fail = value; },
+    setDashboards(value) { apiDashboards = value; },
   };
 }
 
@@ -165,6 +167,83 @@ test("dashboard navigation renders capture efficiency and fleet findings", { tim
     assert.match(window.document.querySelector("#fleet-data-as-of").textContent, /Data as of/);
     await navigate(window, () => window.document.querySelector('#fleet-attention a[href="#sites-section"]').click());
     assert.equal(window.document.querySelector("#sites-section").hidden, false);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("API dashboard editor adds provider-aware sources and preserves existing IDs and order", { timeout: 5000 }, async () => {
+  const { dom, window, requests } = openConsole([{
+      capture_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      name: "Operations status",
+      enabled: true,
+      capture_interval_seconds: 300,
+      viewport_width: 1920,
+      viewport_height: 1080,
+      configuration: {
+        width: 1920,
+        height: 1080,
+        sources: [
+          { id: "keep-kuma", provider: "uptime-kuma", display_name: "Kuma", enabled: false, hostname: "kuma.example.org", slug: "status" },
+          { id: "keep-status", provider: "atlassian-statuspage", display_name: "Status", enabled: true, hostname: "status.example.org", optional_note: "preserve" },
+        ],
+      },
+      sources: [
+        { id: "keep-kuma", displayName: "Kuma", freshness: "unavailable", disabled: true, requestStats: { requestCount: 0, notModifiedCount: 0, failedRequestCount: 0, responseBytes: 0, durationMs: 0 } },
+        { id: "keep-status", displayName: "Status", freshness: "fresh", requestStats: { requestCount: 1, notModifiedCount: 1, failedRequestCount: 0, responseBytes: 1200, durationMs: 45 }, cache: { summary: { etag: '"v1"', cacheControl: "public, max-age=0", contentFetchedAt: "2026-11-05T11:00:00Z", revalidatedAt: "2026-11-05T12:00:00Z" } } },
+      ],
+      last_success_at: 1_794_000_000_000,
+      current_size: 125000,
+      api_last_image_at: 1_793_999_000_000,
+      api_fetch_ms: 180,
+      api_render_ms: 0,
+      api_total_ms: 300,
+      api_asset_reused: 1,
+      recent_metrics: { sample_count: 8, successes: 7, failures: 1, completed_count: 8, retry_attempts: 2, partial_source_failures: 1, all_source_failures: 1, upstream_requests: 12, not_modified_responses: 3, upstream_failed_requests: 1, response_bytes: 24000, fetch_p50_ms: 180, fetch_p90_ms: 560, render_p50_ms: 230, render_p90_ms: 410, total_p50_ms: 300, total_p90_ms: 600, render_operations: 4, render_failures: 1, content_hash_matches: 3, asset_reuses: 6 },
+    }]);
+  try {
+    await settle();
+    await navigate(window, () => window.document.querySelector('#module-navigation a[href="#dashboards-section"]').click());
+    const create = window.document.querySelector("#api-dashboard-form");
+    assert.equal(create.querySelectorAll("[data-dashboard-source]").length, 1);
+    create.querySelector("[data-add-dashboard-source]").click();
+    assert.equal(create.querySelectorAll("[data-dashboard-source]").length, 2);
+    const createProvider = create.querySelector("[data-dashboard-source] select[name=provider]");
+    createProvider.value = "atlassian-statuspage";
+    createProvider.dispatchEvent(new window.Event("change", { bubbles: true }));
+    assert.equal(create.querySelector("[data-dashboard-source] [name=slug]").hidden, true);
+
+    const card = window.document.querySelector("#api-dashboard-list article");
+    assert.ok(card, "existing dashboard is listed in its own module");
+    assert.match(card.textContent, /Last successful capture/);
+    assert.match(card.textContent, /Image last changed/);
+    assert.match(card.textContent, /PNG 122\.1 KB/);
+    assert.match(card.textContent, /capture work 300 ms/);
+    assert.match(card.textContent, /Efficiency · 8 recent jobs/);
+    assert.match(card.textContent, /API fetch duration/);
+    assert.match(card.textContent, /Capture work wall time/);
+    assert.match(card.textContent, /1 render failure/);
+    assert.match(card.textContent, /p50/);
+    assert.match(card.textContent, /Worker CPU and memory/);
+    assert.match(card.textContent, /Kuma: Disabled/);
+    assert.match(card.textContent, /Status: Fresh/);
+    assert.match(card.textContent, /Last-Modified|ETag/);
+    const edit = card.querySelector("[data-api-dashboard-edit]");
+    assert.ok(edit);
+    const sourceRows = edit.querySelectorAll("[data-dashboard-source]");
+    assert.equal(sourceRows.length, 2);
+    assert.deepEqual([...sourceRows].map((row) => row.querySelector("[name=id]").value), ["keep-kuma", "keep-status"]);
+    assert.equal(sourceRows[0].querySelector("[name=enabled]").checked, false);
+    assert.equal(sourceRows[1].querySelector("[name=slug]").hidden, true);
+    sourceRows[0].querySelector("[data-move-source-down]").click();
+    edit.querySelector("[data-save-api-dashboard]").click();
+    await settle();
+    const update = requests.find((request) => request.path.endsWith("/dddddddd-dddd-4ddd-8ddd-dddddddddddd") && request.options.method === "PATCH");
+    assert.ok(update, "save posts a structured configuration update");
+    const body = JSON.parse(update.options.body);
+    assert.deepEqual(body.sources.map((source) => source.id), ["keep-status", "keep-kuma"]);
+    assert.equal(body.sources[1].enabled, false);
+    assert.equal(body.sources[0].optional_note, "preserve");
   } finally {
     dom.window.close();
   }

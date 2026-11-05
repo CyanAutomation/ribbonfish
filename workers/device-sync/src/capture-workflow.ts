@@ -15,6 +15,17 @@ type ValidatorResult = { unchanged: boolean; outcome: string; etag: string | nul
 type JobDecision = Pick<CaptureJob, "capture_id" | "scheduled_due_at">;
 type CaptureMessage = Message<{ job_id?: unknown }>;
 type CaptureFailureDetails = { message?: string; browserMs: number; browserRunElapsedMs: number; browserStarted: boolean; retryable: boolean };
+type ApiDashboardOutcome = "complete" | "partial" | "all_failed" | null;
+type ApiDashboardMetrics = {
+  requestCount: number;
+  notModifiedCount: number;
+  failedRequestCount: number;
+  responseBytes: number;
+  sourceCount: number;
+  unavailableSourceCount: number;
+  staleSourceCount: number;
+  outcome: ApiDashboardOutcome;
+};
 
 class ApiDashboardCaptureError extends Error {
   readonly retryable: boolean;
@@ -35,6 +46,44 @@ const DEFAULT_BUDGET_RESERVE_MS = 60_000;
 const DEFAULT_REQUEST_GAP_MS = 10_000;
 const MAX_PENDING_CAPTURE_JOBS = 100;
 const CAPTURE_VALIDATOR_TIMEOUT_MS = 5_000;
+
+function summarizeApiDashboardSources(sources: DashboardSource[]): ApiDashboardMetrics {
+  const activeSources = sources.filter((source) => !source.disabled);
+  const unavailableSourceCount = activeSources.filter((source) => source.freshness === "unavailable").length;
+  const staleSourceCount = activeSources.filter((source) => source.freshness === "stale").length;
+  return {
+    requestCount: sources.reduce((sum, source) => sum + (source.requestStats?.requestCount ?? 0), 0),
+    notModifiedCount: sources.reduce((sum, source) => sum + (source.requestStats?.notModifiedCount ?? 0), 0),
+    failedRequestCount: sources.reduce((sum, source) => sum + (source.requestStats?.failedRequestCount ?? 0), 0),
+    responseBytes: sources.reduce((sum, source) => sum + (source.requestStats?.responseBytes ?? 0), 0),
+    sourceCount: sources.length,
+    unavailableSourceCount,
+    staleSourceCount,
+    outcome: activeSources.length === 0 || unavailableSourceCount === activeSources.length ? "all_failed" : unavailableSourceCount || staleSourceCount ? "partial" : "complete",
+  };
+}
+
+function updateApiDashboardJobStatement(db: D1Database, jobID: string, {
+  fetchMs, renderMs, totalMs, assetReused, contentHashMatch, renderFailed, metrics,
+}: {
+  fetchMs: number;
+  renderMs: number;
+  totalMs: number;
+  assetReused: boolean;
+  contentHashMatch: boolean;
+  renderFailed: boolean;
+  metrics: ApiDashboardMetrics | null;
+}) {
+  return db.prepare(
+    "UPDATE capture_jobs SET api_fetch_ms = ?, api_render_ms = ?, api_asset_reused = ?, api_total_ms = ?, " +
+    "api_request_count = ?, api_not_modified_count = ?, api_failed_request_count = ?, api_response_bytes = ?, " +
+    "api_source_count = ?, api_unavailable_source_count = ?, api_stale_source_count = ?, api_content_hash_match = ?, api_render_failed = ?, api_outcome = ? " +
+    "WHERE job_id = ?",
+  ).bind(fetchMs, renderMs, assetReused ? 1 : 0, totalMs,
+    metrics?.requestCount ?? 0, metrics?.notModifiedCount ?? 0, metrics?.failedRequestCount ?? 0, metrics?.responseBytes ?? 0,
+    metrics?.sourceCount ?? 0, metrics?.unavailableSourceCount ?? 0, metrics?.staleSourceCount ?? 0, contentHashMatch ? 1 : 0, renderFailed ? 1 : 0,
+    metrics?.outcome ?? null, jobID);
+}
 
 export class CaptureTargetNotAllowedError extends Error {
   constructor() {
@@ -313,11 +362,14 @@ async function processCaptureMessage(message: CaptureMessage, env: CaptureEnv, n
 }
 
 async function processApiDashboardCapture(message: CaptureMessage, job: CaptureJob, env: CaptureEnv, now: number) {
+  const captureStarted = performance.now();
   let sourceStatus: DashboardSource[] = [];
+  let sourceMetrics: ApiDashboardMetrics | null = null;
   const fetchStarted = performance.now();
   let fetchMs = 0;
   let renderStarted = 0;
   let renderMs = 0;
+  let renderFailed = false;
   try {
     if (!job.api_sources_json) throw new ApiDashboardCaptureError("API dashboard configuration is missing.", false);
     let config;
@@ -336,9 +388,10 @@ async function processApiDashboardCapture(message: CaptureMessage, job: CaptureJ
     catch (error) { throw new ApiDashboardCaptureError(error instanceof Error ? error.message : "API dashboard source workload is invalid.", false); }
     fetchMs = elapsedSince(fetchStarted);
     sourceStatus = sources;
+    sourceMetrics = summarizeApiDashboardSources(sources);
     await env.DB.prepare("UPDATE capture_targets SET api_status_json = ? WHERE capture_id = ?")
       .bind(JSON.stringify(sources), job.capture_id).run();
-    const available = sources.some((source) => source.freshness !== "unavailable");
+    const available = sources.some((source) => !source.disabled && source.freshness !== "unavailable");
     if (!available) {
       throw new ApiDashboardCaptureError("All dashboard sources are unavailable; the last known-good image was retained.", sources.some((source) => source.retryableError === true));
     }
@@ -352,8 +405,12 @@ async function processApiDashboardCapture(message: CaptureMessage, job: CaptureJ
           markAssetLiveStatement(env.DB, job.current_sha256, job.current_size, now),
           env.DB.prepare("INSERT INTO capture_history (capture_id, job_id, sha256, size, captured_at, browser_ms, browser_ms_source) VALUES (?, ?, ?, ?, ?, 0, 'unknown')")
             .bind(job.capture_id, job.job_id, job.current_sha256, job.current_size, now),
-          env.DB.prepare("UPDATE capture_jobs SET status = 'succeeded', result_kind = 'screenshot', finished_at = ?, lease_until = NULL, error = NULL, api_fetch_ms = ?, api_render_ms = 0, api_asset_reused = 1 WHERE job_id = ?")
-            .bind(now, fetchMs, job.job_id),
+          updateApiDashboardJobStatement(env.DB, job.job_id, {
+            fetchMs, renderMs: 0, totalMs: elapsedSince(captureStarted), assetReused: true, contentHashMatch: true, metrics: sourceMetrics,
+          renderFailed: false,
+          }),
+          env.DB.prepare("UPDATE capture_jobs SET status = 'succeeded', result_kind = 'screenshot', finished_at = ?, lease_until = NULL, error = NULL WHERE job_id = ?")
+            .bind(now, job.job_id),
           env.DB.prepare("UPDATE capture_targets SET last_attempt_at = ?, last_success_at = ?, last_error = NULL, failure_count = 0, next_due_at = ?, api_status_json = ?, api_last_fetch_at = ? WHERE capture_id = ?")
             .bind(now, now, now + job.capture_interval_seconds * 1000, JSON.stringify(sourceStatus), now, job.capture_id),
         ]);
@@ -363,9 +420,16 @@ async function processApiDashboardCapture(message: CaptureMessage, job: CaptureJ
       }
     }
     renderStarted = performance.now();
-    const png = await renderDashboardPNG(sources, config.width, config.height);
-    renderMs = elapsedSince(renderStarted);
-    if (!isPNG(png) || png.byteLength > MAX_ASSET_BYTES) throw new Error("Dashboard renderer returned an invalid or oversized PNG.");
+    let png: Uint8Array;
+    try {
+      png = await renderDashboardPNG(sources, config.width, config.height);
+      renderMs = elapsedSince(renderStarted);
+      if (!isPNG(png) || png.byteLength > MAX_ASSET_BYTES) throw new Error("Dashboard renderer returned an invalid or oversized PNG.");
+    } catch (error) {
+      renderFailed = true;
+      if (!renderMs) renderMs = elapsedSince(renderStarted);
+      throw error;
+    }
     const digest = await crypto.subtle.digest("SHA-256", png);
     const sha256 = [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
     let reused = false;
@@ -373,13 +437,20 @@ async function processApiDashboardCapture(message: CaptureMessage, job: CaptureJ
       const existing = await env.ASSETS.head(`assets/${sha256}`);
       reused = existing?.size === png.byteLength;
     }
-    if (!reused) await storePngAsset(png, env.ASSETS, { db: env.DB, now, stagingMs: ASSET_WRITE_LEASE_MS });
+    if (!reused) {
+      const stored = await storePngAsset(png, env.ASSETS, { db: env.DB, now, stagingMs: ASSET_WRITE_LEASE_MS });
+      reused = !stored.created;
+    }
     await env.DB.batch([
       markAssetLiveStatement(env.DB, sha256, png.byteLength, now),
       env.DB.prepare("INSERT INTO capture_history (capture_id, job_id, sha256, size, captured_at, browser_ms, browser_ms_source) VALUES (?, ?, ?, ?, ?, 0, 'unknown')")
         .bind(job.capture_id, job.job_id, sha256, png.byteLength, now),
-      env.DB.prepare("UPDATE capture_jobs SET status = 'succeeded', result_kind = 'screenshot', finished_at = ?, lease_until = NULL, error = NULL, api_fetch_ms = ?, api_render_ms = ?, api_asset_reused = ? WHERE job_id = ?")
-        .bind(now, fetchMs, renderMs, reused ? 1 : 0, job.job_id),
+      updateApiDashboardJobStatement(env.DB, job.job_id, {
+        fetchMs, renderMs, totalMs: elapsedSince(captureStarted), assetReused: reused, contentHashMatch: false, metrics: sourceMetrics,
+        renderFailed: false,
+      }),
+      env.DB.prepare("UPDATE capture_jobs SET status = 'succeeded', result_kind = 'screenshot', finished_at = ?, lease_until = NULL, error = NULL WHERE job_id = ?")
+        .bind(now, job.job_id),
       env.DB.prepare("UPDATE capture_targets SET current_sha256 = ?, current_size = ?, last_attempt_at = ?, last_success_at = ?, last_error = NULL, failure_count = 0, next_due_at = ?, api_status_json = ?, api_content_hash = ?, api_last_fetch_at = ?, api_last_image_at = ? WHERE capture_id = ?")
         .bind(sha256, png.byteLength, now, now, now + job.capture_interval_seconds * 1000, JSON.stringify(sourceStatus), contentHash, now, now, job.capture_id),
     ]);
@@ -395,8 +466,13 @@ async function processApiDashboardCapture(message: CaptureMessage, job: CaptureJ
     const caughtDetails = caught !== null && typeof caught === "object" ? caught as Record<string, unknown> : {};
     const retryable = typeof caughtDetails.retryable === "boolean" ? caughtDetails.retryable : true;
     const error: CaptureFailureDetails = { ...details, message: details.message ?? "API dashboard capture failed.", retryable, browserMs: 0, browserRunElapsedMs: 0, browserStarted: false };
-    await env.DB.prepare("UPDATE capture_jobs SET api_fetch_ms = ?, api_render_ms = ? WHERE job_id = ?")
-      .bind(fetchMs || elapsedSince(fetchStarted), renderMs || (renderStarted ? elapsedSince(renderStarted) : 0), job.job_id).run();
+    await env.DB.batch([
+      updateApiDashboardJobStatement(env.DB, job.job_id, {
+        fetchMs: fetchMs || elapsedSince(fetchStarted),
+        renderMs: renderMs || (renderStarted ? elapsedSince(renderStarted) : 0),
+        totalMs: elapsedSince(captureStarted), assetReused: false, contentHashMatch: false, renderFailed, metrics: sourceMetrics,
+      }),
+    ]);
     await handleCaptureFailure(env, message, job, error, now);
   }
 }

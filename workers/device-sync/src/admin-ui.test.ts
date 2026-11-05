@@ -807,6 +807,30 @@ test("module shell provides persistent navigation and an on-demand site form", a
   assert.ok(descendants(siteEditor).some((item) => attribute(item, "id") === "capture-site-form"));
 });
 
+test("capture sites and API dashboards are separate modules with their own home tiles", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const nodes = parseHTML(html);
+  const nav = descendants(byID(nodes, "module-navigation"));
+  const tiles = descendants(byID(nodes, "dashboard-tiles"));
+  assert.ok(nav.some((item) => item.tagName === "a" && attribute(item, "href") === "#dashboards-section"));
+  assert.ok(tiles.some((item) => item.tagName === "a" && attribute(item, "href") === "#dashboards-section"));
+  assert.ok(byID(nodes, "dashboards-section"));
+  assert.equal(byID(nodes, "api-dashboard-form").parentNode?.parentNode?.parentNode?.attrs?.some((item) => item.name === "id" && item.value === "sites-section"), false);
+  assert.ok(descendants(byID(nodes, "dashboards-section")).some((item) => attribute(item, "id") === "api-dashboard-form"));
+  assert.ok(descendants(byID(nodes, "sites-section")).some((item) => attribute(item, "id") === "capture-site-form"));
+  assert.equal(descendants(byID(nodes, "sites-section")).some((item) => attribute(item, "id") === "api-dashboard-list"), false);
+});
+
+test("API dashboard configuration defaults to structured source controls with optional JSON", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const nodes = parseHTML(html);
+  const form = byID(nodes, "api-dashboard-form");
+  assert.ok(descendants(form).some((item) => attribute(item, "id") === "api-dashboard-source-list"));
+  const advanced = byID(nodes, "api-dashboard-advanced-json");
+  assert.equal(attribute(advanced, "open"), undefined);
+  assert.ok(descendants(advanced).some((item) => item.tagName === "textarea" && attribute(item, "name") === "sources-json"));
+});
+
 test("fleet insights have a dashboard tile with a direct link to findings", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const nodes = parseHTML(html);

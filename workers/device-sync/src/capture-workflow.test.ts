@@ -473,6 +473,16 @@ test("API dashboard captures bypass Browser Run budgets and reuse the shared pla
     const listed = await dashboardList.json();
     assert.equal(listed[0].capture_id, dashboard.capture_id);
     assert.equal(listed[0].sources[0].freshness, "fresh");
+    assert.deepEqual({
+      samples: listed[0].recent_metrics.sample_count,
+      successes: listed[0].recent_metrics.successes,
+      failures: listed[0].recent_metrics.failures,
+      requests: listed[0].recent_metrics.upstream_requests,
+      contentHashMatches: listed[0].recent_metrics.content_hash_matches,
+      renders: listed[0].recent_metrics.render_operations,
+    }, { samples: 2, successes: 2, failures: 0, requests: 2, contentHashMatches: 1, renders: 1 });
+    const successfulJobMetrics = { ...sqlite.prepare("SELECT api_total_ms > 0 AS total_measured, api_request_count, api_response_bytes > 0 AS bytes_measured, api_source_count, api_outcome FROM capture_jobs WHERE capture_id = ? AND status = 'succeeded' ORDER BY created_at DESC LIMIT 1").get(dashboard.capture_id) };
+    assert.deepEqual(successfulJobMetrics, { total_measured: 1, api_request_count: 1, bytes_measured: 1, api_source_count: 1, api_outcome: "complete" });
     const updated = await handleAdminRequest(await request(`/admin/api/api-dashboards/${dashboard.capture_id}`, {
       method: "PATCH", body: { capture_interval_seconds: 60 },
     }), env);
@@ -496,6 +506,7 @@ test("API dashboard captures bypass Browser Run budgets and reuse the shared pla
     await queueHandler({ messages: [{ body: { job_id: failed.job_id }, ack() {}, retry(options) { failureRetryDelay = options.delaySeconds; } }] }, env);
     assert.equal(failureRetryDelay, 60);
     assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(failed.job_id).status, "queued");
+    assert.deepEqual({ ...sqlite.prepare("SELECT api_failed_request_count, api_outcome FROM capture_jobs WHERE job_id = ?").get(failed.job_id) }, { api_failed_request_count: 1, api_outcome: "all_failed" });
     assert.equal(sqlite.prepare("SELECT current_sha256, last_success_at FROM capture_targets WHERE capture_id = ?").get(dashboard.capture_id).current_sha256, current.current_sha256);
     assert.equal(JSON.parse(sqlite.prepare("SELECT api_status_json FROM capture_targets WHERE capture_id = ?").get(dashboard.capture_id).api_status_json)[0].freshness, "unavailable");
 
