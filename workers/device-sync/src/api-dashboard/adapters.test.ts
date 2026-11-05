@@ -47,7 +47,12 @@ test("provider codes remain conservative for pending, unknown, and stale states"
   assert.equal(statuspageHealth("new_value"), "unknown");
 });
 
-test("an empty host allowlist permits any valid public hostname", async () => {
+test("management Worker routes global fetches strictly over the public Internet", async () => {
+  const config = await readFile(new URL("../../wrangler.management.toml", import.meta.url), "utf8");
+  assert.match(config, /^compatibility_flags\s*=\s*\["global_fetch_strictly_public"\]\s*$/m);
+});
+
+test("an empty host allowlist permits any hostname that passes syntax checks", async () => {
   const [config, heartbeat] = await Promise.all([fixture("kuma-config.json"), fixture("kuma-heartbeat.json")]);
   const source = await fetchSource({ ...kumaConfig, hostname: "another-public.example.net" }, "", async (input) => new Response(JSON.stringify(String(input).includes("heartbeat") ? heartbeat : config), { headers: { "Content-Type": "application/json" } }), new Date("2026-01-02T03:05:00Z"));
   assert.equal(source.freshness, "fresh");

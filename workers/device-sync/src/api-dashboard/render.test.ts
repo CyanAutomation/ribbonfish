@@ -17,6 +17,20 @@ test("SVG text is escaped and dashboard output is deterministic", () => {
   assert.match(first, /Unknown service/);
 });
 
+test("overflow and active event footer labels occupy separate rows", () => {
+  const crowded: DashboardSource = {
+    ...sample,
+    components: Array.from({ length: 100 }, (_, index) => ({ ...sample.components[0], id: String(index), name: `Component ${index}` })),
+    incidents: [{ id: "incident-1", name: "Active incident", status: "investigating", impact: "major", updatedAt: null }],
+  };
+  const svg = dashboardSVG([crowded]);
+  const overflowY = Number(svg.match(/<text x="[^"]+" y="([\d.]+)"[^>]*>\+ \d+ more services<\/text>/)?.[1]);
+  const eventsY = Number(svg.match(/<text x="[^"]+" y="([\d.]+)"[^>]*>Incident \(/)?.[1]);
+  assert.ok(Number.isFinite(overflowY));
+  assert.ok(Number.isFinite(eventsY));
+  assert.ok(Math.abs(overflowY - eventsY) >= 18, `footer baselines are too close: ${overflowY} and ${eventsY}`);
+});
+
 test("renderer produces a valid dimensioned PNG and stable bytes", async () => {
   const first = await renderDashboardPNG([sample]);
   const second = await renderDashboardPNG([sample]);

@@ -15,6 +15,15 @@ const MAX_MONITORS = 500;
 const MAX_GROUPS = 40;
 const MAX_HEARTBEAT_RECORDS = 5_000;
 
+class StatusApiError extends Error {
+  readonly retryable: boolean;
+  constructor(message: string, retryable = false) {
+    super(message);
+    this.name = "StatusApiError";
+    this.retryable = retryable;
+  }
+}
+
 function record(value: unknown): Record<string, any> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
 }
@@ -29,7 +38,7 @@ function allowedURL(config: SourceConfig, allowlist: string): URL {
   const hosts = new Set(allowlist.split(",").map((host) => host.trim().toLowerCase()).filter(Boolean));
   const hostname = config.hostname.toLowerCase();
   const blockedSuffixes = [".localhost", ".local", ".internal", ".test", ".invalid", ".onion", ".arpa"];
-  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(hostname) || !hostname.includes(".") || hostname === "localhost" || blockedSuffixes.some((suffix) => hostname.endsWith(suffix))) throw new Error("Status API hostname must be a public DNS hostname.");
+  if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(hostname) || !hostname.includes(".") || hostname === "localhost" || blockedSuffixes.some((suffix) => hostname.endsWith(suffix))) throw new Error("Status API hostname is invalid or uses a reserved suffix.");
   if (hosts.size > 0 && !hosts.has(hostname)) throw new Error("Source hostname is not on the configured API status host allowlist.");
   if (config.provider === "uptime-kuma" && (!config.slug || !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(config.slug))) throw new Error("Invalid status-page slug.");
   return new URL(`https://${hostname}`);
@@ -39,24 +48,29 @@ async function getJSON(url: URL, fetcher: typeof fetch, etag?: string): Promise<
   let response: Response;
   try {
     response = await fetcher(url, { method: "GET", redirect: "manual", headers: { Accept: "application/json", ...(etag ? { "If-None-Match": etag } : {}) }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-  } catch { throw new Error("Status API request failed or timed out."); }
+  } catch { throw new StatusApiError("Status API request failed or timed out.", true); }
   if (response.status === 304) return { value: null, etag: response.headers.get("ETag") ?? etag ?? null, notModified: true };
-  if (response.status >= 300 && response.status < 400) throw new Error("Status API redirects are not followed.");
-  if (!response.ok) throw new Error(`Status API returned HTTP ${response.status}.`);
+  if (response.status >= 300 && response.status < 400) throw new StatusApiError("Status API redirects are not followed.");
+  if (!response.ok) throw new StatusApiError(`Status API returned HTTP ${response.status}.`, response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500);
   const type = response.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase();
-  if (type !== "application/json" && !type?.endsWith("+json")) throw new Error("Status API returned a non-JSON response.");
+  if (type !== "application/json" && !type?.endsWith("+json")) throw new StatusApiError("Status API returned a non-JSON response.");
   const length = Number(response.headers.get("Content-Length"));
-  if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) throw new Error("Status API response is too large.");
-  if (!response.body) throw new Error("Status API returned an empty response.");
+  if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) throw new StatusApiError("Status API response is too large.");
+  if (!response.body) throw new StatusApiError("Status API returned an empty response.");
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
-  while (true) {
-    const item = await reader.read();
-    if (item.done) break;
-    size += item.value.byteLength;
-    if (size > MAX_RESPONSE_BYTES) { await reader.cancel(); throw new Error("Status API response is too large."); }
-    chunks.push(item.value);
+  try {
+    while (true) {
+      const item = await reader.read();
+      if (item.done) break;
+      size += item.value.byteLength;
+      if (size > MAX_RESPONSE_BYTES) { await reader.cancel(); throw new StatusApiError("Status API response is too large."); }
+      chunks.push(item.value);
+    }
+  } catch (error) {
+    if (error instanceof StatusApiError) throw error;
+    throw new StatusApiError("Status API request failed or timed out.", true);
   }
   const bytes = new Uint8Array(size);
   let offset = 0;
@@ -78,6 +92,7 @@ function incidentList(values: unknown): DashboardIncident[] {
 function staleSource(config: SourceConfig, fetchedAt: string, error: unknown): DashboardSource {
   return { id: config.id, provider: config.provider, displayName: config.display_name.slice(0, 100), fetchedAt,
     freshness: "unavailable", status: "stale", statusDescription: "Status source unavailable", components: [], incidents: [], maintenance: [],
+    ...(error instanceof StatusApiError && error.retryable ? { retryableError: true } : {}),
     error: error instanceof Error ? error.message.slice(0, 180) : "Status source unavailable." };
 }
 

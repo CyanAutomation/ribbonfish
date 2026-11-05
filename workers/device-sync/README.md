@@ -189,8 +189,10 @@ asset store and playlist delivery flow. Uptime Kuma and Atlassian Statuspage
 sources normalize into a common model and render to PNG with resvg WebAssembly
 inside the management Worker. These captures bypass Browser Run budgets and
 duration accounting. `API_STATUS_ALLOWED_HOSTS` is empty by default, allowing
-any hostname that passes the adapter's public DNS checks; a nonempty
-comma-separated list restricts sources to those exact hostnames. Apply
+hostnames that pass the adapter's syntax checks; a nonempty comma-separated
+list restricts sources to those exact hostnames. The management Worker keeps
+Cloudflare's `global_fetch_strictly_public` compatibility flag enabled for
+public Internet routing. Apply
 `0017_api_dashboards.sql` before deploying dashboard support. Setup, request
 volume, source rules, rendering proof and limitations are in
 [`docs/api-driven-dashboards.md`](../../docs/api-driven-dashboards.md).

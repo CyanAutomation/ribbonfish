@@ -68,8 +68,9 @@ function card(source: DashboardSource, x: number, y: number, width: number, heig
     if (latency) svg += `<text x="${right - statusWidth - s(8)}" y="${cy}" text-anchor="end" fill="#9db0c5" font-size="${s(14)}">${esc(latency)}</text>`;
     svg += `<text x="${right}" y="${cy}" text-anchor="end" fill="${color}" font-size="${s(14)}">${esc(statusText)}</text>`;
   });
-  if (componentLines.length > showLines.length) svg += `<text x="${left}" y="${y + height - s(16)}" fill="#9db0c5" font-size="${s(13)}">+ ${componentLines.length - showLines.length} more services</text>`;
   const events = [...source.incidents.map((item) => `Incident (${item.status}, ${item.impact}): ${item.name}`), ...source.maintenance.map((item) => `Maintenance (${item.status}): ${item.name}`)];
+  const hasOverflow = componentLines.length > showLines.length;
+  if (hasOverflow) svg += `<text x="${left}" y="${y + height - s(events.length ? 36 : 18)}" fill="#9db0c5" font-size="${s(13)}">+ ${componentLines.length - showLines.length} more services</text>`;
   if (events.length) svg += `<text x="${left}" y="${y + height - s(18)}" fill="#ffc46b" font-size="${s(13)}">${esc(short(events.join(" · "), Math.floor(width / s(8))))}</text>`;
   svg += "</g>";
   return svg;

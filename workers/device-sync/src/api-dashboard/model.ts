@@ -36,6 +36,7 @@ export interface DashboardSource {
   incidents: DashboardIncident[];
   maintenance: DashboardIncident[];
   error?: string;
+  retryableError?: boolean;
 }
 
 export interface DashboardData {
