@@ -1,0 +1,15 @@
+{
+  "name": "Operations status",
+  "capture_interval_seconds": 300,
+  "width": 1920,
+  "height": 1080,
+  "sources": [
+    { "id": "region-a", "provider": "uptime-kuma", "display_name": "Service group A", "enabled": true, "hostname": "monitor.example.org", "slug": "sample-a" },
+    { "id": "region-b", "provider": "uptime-kuma", "display_name": "Service group B", "enabled": true, "hostname": "monitor.example.org", "slug": "sample-b" },
+    { "id": "region-c", "provider": "uptime-kuma", "display_name": "Service group C", "enabled": true, "hostname": "monitor.example.org", "slug": "sample-c" },
+    { "id": "region-d", "provider": "uptime-kuma", "display_name": "Service group D", "enabled": true, "hostname": "monitor.example.org", "slug": "sample-d" },
+    { "id": "region-e", "provider": "uptime-kuma", "display_name": "Service group E", "enabled": true, "hostname": "monitor.example.org", "slug": "sample-e" },
+    { "id": "north-america", "provider": "atlassian-statuspage", "display_name": "North America services", "enabled": true, "hostname": "status.example.net" },
+    { "id": "uk", "provider": "atlassian-statuspage", "display_name": "UK services", "enabled": true, "hostname": "status.example.net" }
+  ]
+}

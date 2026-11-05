@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS capture_targets (
   capture_id TEXT PRIMARY KEY,
   variant_key TEXT NOT NULL UNIQUE,
   url TEXT NOT NULL,
-  capture_interval_seconds INTEGER NOT NULL CHECK (capture_interval_seconds IN (900, 1800, 3600, 10800, 21600, 43200, 86400)),
+  capture_interval_seconds INTEGER NOT NULL CHECK (capture_interval_seconds IN (60, 300, 900, 1800, 3600, 10800, 21600, 43200, 86400)),
   viewport_width INTEGER NOT NULL CHECK (viewport_width >= 320 AND viewport_width <= 3840),
   viewport_height INTEGER NOT NULL CHECK (viewport_height >= 240 AND viewport_height <= 2160),
   placeholder_sha256 TEXT NOT NULL,
@@ -130,6 +130,12 @@ CREATE TABLE IF NOT EXISTS capture_targets (
   failure_count INTEGER NOT NULL DEFAULT 0,
   schedule_reviewed_at INTEGER,
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  capture_type TEXT NOT NULL DEFAULT 'browser-screenshot' CHECK (capture_type IN ('browser-screenshot', 'api-dashboard')),
+  api_sources_json TEXT,
+  api_status_json TEXT,
+  api_content_hash TEXT,
+  api_last_fetch_at INTEGER,
+  api_last_image_at INTEGER,
   CHECK ((current_sha256 IS NULL AND current_size IS NULL) OR (current_sha256 IS NOT NULL AND current_size > 0))
 );
 CREATE INDEX IF NOT EXISTS capture_targets_due_idx ON capture_targets(enabled, next_due_at);
@@ -153,6 +159,9 @@ CREATE TABLE IF NOT EXISTS capture_jobs (
   finished_at INTEGER,
   lease_until INTEGER,
   error TEXT,
+  api_fetch_ms INTEGER NOT NULL DEFAULT 0 CHECK (api_fetch_ms >= 0),
+  api_render_ms INTEGER NOT NULL DEFAULT 0 CHECK (api_render_ms >= 0),
+  api_asset_reused INTEGER NOT NULL DEFAULT 0 CHECK (api_asset_reused IN (0, 1)),
   validator_outcome TEXT NOT NULL DEFAULT 'unknown'
     CHECK (validator_outcome IN ('unknown', 'disabled', 'unchanged', 'changed', 'no_stored_validator', 'unavailable', 'cached_asset_missing')),
   result_kind TEXT NOT NULL DEFAULT 'screenshot'

@@ -48,7 +48,7 @@ export async function assessUpcomingCaptures(env: AssessmentEnv, now = Date.now(
   const reserveMs = Number.isSafeInteger(reserveValue) && reserveValue >= 0 ? reserveValue : 60_000;
   const rows = await env.DB.prepare(
     "SELECT t.*, (SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued','running') LIMIT 1) AS job_status " +
-    "FROM capture_targets t WHERE t.enabled = 1 AND t.next_due_at > ? AND t.next_due_at <= ? " +
+    "FROM capture_targets t WHERE t.enabled = 1 AND t.capture_type = 'browser-screenshot' AND t.next_due_at > ? AND t.next_due_at <= ? " +
     "AND EXISTS (SELECT 1 FROM playlist_capture_items p JOIN active_playlist a ON a.playlist_id = p.playlist_id AND a.revision = p.revision WHERE p.capture_id = t.capture_id) " +
     "AND NOT EXISTS (SELECT 1 FROM capture_decisions d WHERE d.capture_id = t.capture_id AND d.due_at = t.next_due_at AND (d.action != 'pending' OR d.assessed_at > ?)) " +
     "ORDER BY t.next_due_at LIMIT 3"
