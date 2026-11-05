@@ -1,0 +1,9 @@
+{
+  "config": { "slug": "sample-prod", "title": "Sample Production", "published": true },
+  "incidents": [{ "id": "evt-1", "name": "Planned service update", "status": "investigating", "updated_at": "2026-01-02T03:04:05Z" }],
+  "maintenanceList": [{ "id": "maint-1", "title": "Scheduled maintenance", "status": "underway" }],
+  "publicGroupList": [
+    { "id": 20, "name": "Second group", "weight": 2, "monitorList": [{ "id": 202, "name": "Worker API" }] },
+    { "id": 10, "name": "First group", "weight": 1, "monitorList": [{ "id": 101, "name": "Primary service" }, { "id": 102, "name": "Secondary service" }] }
+  ]
+}

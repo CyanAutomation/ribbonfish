@@ -15,6 +15,8 @@ import {
 import { deriveDeviceHealth, type DeviceHealthReport } from "./device-health.ts";
 import { isPNG, MAX_ASSET_BYTES, storePngAsset } from "./asset-store.ts";
 import { normalizeCaptureSelector, validateCaptureSettings, validateCaptureTargetURL } from "./capture.ts";
+import { parseApiDashboardConfig } from "./api-dashboard/index.ts";
+import { validateSourceConfig } from "./api-dashboard/adapters.ts";
 import { CaptureTargetNotAllowedError, dispatchDueCaptures, enqueueCapture } from "./capture-workflow.ts";
 import { AssetDeletionInProgressError, markAssetLiveStatement } from "./asset-registry.ts";
 import { callJevDecision, JEVRequestError } from "./jev.ts";
@@ -203,6 +205,18 @@ export async function handleAdminRequest(request: Request, env: WorkerEnvironmen
     if (url.pathname === "/admin/api/capture-sites") {
       if (request.method !== "POST") return methodNotAllowed("POST");
       return await createCaptureSite(request, env, actorID);
+    }
+
+    if (url.pathname === "/admin/api/api-dashboards") {
+      if (request.method === "GET") return jsonResponse(await readApiDashboards(env));
+      if (request.method !== "POST") return methodNotAllowed("GET, POST");
+      return await createApiDashboard(request, env, actorID);
+    }
+
+    const apiDashboardMatch = url.pathname.match(/^\/admin\/api\/api-dashboards\/([0-9a-f-]{36})$/i);
+    if (apiDashboardMatch) {
+      if (request.method !== "PATCH") return methodNotAllowed("PATCH");
+      return await updateApiDashboard(request, apiDashboardMatch[1].toLowerCase(), env, actorID);
     }
 
     const captureDurationSamplesMatch = url.pathname.match(/^\/admin\/api\/captures\/([^/]+)\/duration-samples$/);
@@ -575,7 +589,7 @@ async function readOverview(env: WorkerEnvironment) {
       "FROM audit_events ORDER BY occurred_at DESC LIMIT ?",
     ).bind(20).all(),
     env.DB.prepare(
-      "SELECT t.capture_id, t.url, t.name, t.capture_interval_seconds, t.viewport_width, t.viewport_height, t.wait_for_selector, " +
+      "SELECT t.capture_id, t.url, t.name, t.capture_type, t.api_status_json, t.api_last_fetch_at, t.api_last_image_at, t.capture_interval_seconds, t.viewport_width, t.viewport_height, t.wait_for_selector, " +
       "CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
       "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size, " +
       "t.last_attempt_at, t.last_success_at, " +
@@ -608,14 +622,14 @@ async function readOverview(env: WorkerEnvironment) {
       "SUM(browser_ms_response_header) AS browser_ms_response_header, " +
       "SUM(browser_ms_reserve) AS browser_ms_reserve, " +
       "SUM(browser_ms_legacy_unknown) AS browser_ms_unclassified_jobs " +
-      "FROM capture_jobs WHERE created_at >= ?",
+      "FROM capture_jobs WHERE created_at >= ? AND capture_id IN (SELECT capture_id FROM capture_targets WHERE capture_type = 'browser-screenshot')",
     ).bind(windowStart).first(),
     env.DB.prepare(
       "SELECT " +
       "SUM(CASE WHEN browser_ms_source = 'response_header' THEN 1 ELSE 0 END) AS response_header, " +
       "SUM(CASE WHEN browser_ms_source = 'reserve' THEN 1 ELSE 0 END) AS reserve, " +
       "SUM(CASE WHEN browser_ms_source = 'unknown' THEN 1 ELSE 0 END) AS unknown " +
-      "FROM capture_history WHERE captured_at >= ?",
+      "FROM capture_history WHERE captured_at >= ? AND capture_id IN (SELECT capture_id FROM capture_targets WHERE capture_type = 'browser-screenshot')",
     ).bind(windowStart).first(),
     env.DB.prepare(
       "WITH measured_ranked AS (" +
@@ -680,12 +694,16 @@ async function readOverview(env: WorkerEnvironment) {
   const durationSummaryByCapture = new Map((captureDurationSummaries.results ?? []).map((row) => [row.capture_id, row]));
   const reserveMs = configuredCaptureReserveMs(env);
   const captureTargetSummaries = (captureTargets.results ?? []).map((target) => {
-    const source = new URL(target.url);
+    const source = target.capture_type === "api-dashboard" ? null : new URL(target.url);
     const runtime = runtimeAverageByCapture.get(target.capture_id);
     const duration = durationSummaryByCapture.get(target.capture_id);
     return {
       capture_id: target.capture_id,
-      display_url: source.origin + source.pathname,
+      display_url: source ? source.origin + source.pathname : "API dashboard",
+      capture_type: target.capture_type ?? "browser-screenshot",
+      api_status: parseMetadata(target.api_status_json) ?? [],
+      api_last_fetch_at: target.api_last_fetch_at ?? null,
+      api_last_image_at: target.api_last_image_at ?? null,
       name: target.name ?? null,
       capture_interval_seconds: target.capture_interval_seconds,
       wait_for_selector: target.wait_for_selector,
@@ -699,13 +717,13 @@ async function readOverview(env: WorkerEnvironment) {
       next_due_at: target.next_due_at,
       schedule_reviewed: target.schedule_reviewed_at != null,
       active_in_playlist: target.active_in_playlist === 1,
-      average_browser_ms: typeof runtime?.average_browser_ms === "number" && Number.isFinite(runtime.average_browser_ms)
+      average_browser_ms: target.capture_type !== "api-dashboard" && typeof runtime?.average_browser_ms === "number" && Number.isFinite(runtime.average_browser_ms)
         ? runtime.average_browser_ms : null,
       browser_ms_samples: Number(runtime?.sample_count ?? 0),
-      duration_summary: summarizeDurationAggregate(duration, reserveMs),
+      duration_summary: target.capture_type === "api-dashboard" ? null : summarizeDurationAggregate(duration, reserveMs),
     };
   });
-  const captureUsageSummary = buildCaptureUsageSummary(captureTargetSummaries, captureUsage, budgetMs, now);
+  const captureUsageSummary = buildCaptureUsageSummary(captureTargetSummaries.filter((target) => target.capture_type !== "api-dashboard"), captureUsage, budgetMs, now);
 
   return {
     generated_at: now,
@@ -771,10 +789,10 @@ async function readCaptureForecast(env: WorkerEnvironment, now = Date.now()) {
   const windowStart = now - 30 * 24 * 60 * 60 * 1000;
   const [targets, runtimeAverages, captureUsage] = await Promise.all([
     env.DB.prepare(
-      "SELECT t.capture_id, t.name, t.url, t.capture_interval_seconds, t.schedule_reviewed_at, " +
+      "SELECT t.capture_id, t.name, t.url, t.capture_type, t.capture_interval_seconds, t.schedule_reviewed_at, " +
       "EXISTS (SELECT 1 FROM playlist_capture_items p JOIN active_playlist a " +
       "ON a.playlist_id = p.playlist_id AND a.revision = p.revision WHERE p.capture_id = t.capture_id) AS active_in_playlist " +
-      "FROM capture_targets t WHERE t.enabled = 1 ORDER BY t.next_due_at, t.created_at LIMIT 1000",
+      "FROM capture_targets t WHERE t.enabled = 1 AND t.capture_type = 'browser-screenshot' ORDER BY t.next_due_at, t.created_at LIMIT 1000",
     ).all(),
     env.DB.prepare(
       "SELECT capture_id, AVG(browser_ms) AS average_browser_ms, COUNT(*) AS sample_count " +
@@ -1410,6 +1428,102 @@ async function createCaptureSite(request: Request, env: WorkerEnvironment, actor
   );
 }
 
+async function readApiDashboards(env: WorkerEnvironment) {
+  const rows = await env.DB.prepare(
+    "SELECT t.capture_id, t.name, t.enabled, t.capture_interval_seconds, t.viewport_width, t.viewport_height, " +
+    "t.current_sha256, t.current_size, t.last_attempt_at, t.last_success_at, t.last_error, t.next_due_at, " +
+    "t.api_sources_json, t.api_status_json, t.api_last_fetch_at, t.api_last_image_at, " +
+    "(SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS job_status, " +
+    "(SELECT j.api_fetch_ms FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS api_fetch_ms, " +
+    "(SELECT j.api_render_ms FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS api_render_ms, " +
+    "(SELECT j.api_asset_reused FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS api_asset_reused " +
+    "FROM capture_targets t WHERE t.capture_type = 'api-dashboard' ORDER BY t.created_at DESC LIMIT 100",
+  ).all();
+  return (rows.results ?? []).map((row) => ({
+    ...row,
+    current_image: row.current_sha256 ? `/admin/api/assets/${row.current_sha256}` : null,
+    configuration: parseMetadata(row.api_sources_json),
+    sources: parseMetadataArray(row.api_status_json),
+  }));
+}
+
+function validateApiDashboardInput(data: Record<string, any>, allowedHosts: string) {
+  if (typeof data.name !== "string" || !data.name.trim() || data.name.trim().length > 120 || /[\u0000-\u001f\u007f]/.test(data.name)) throw new HTTPError(400, "Dashboard name must be 1 to 120 characters on one line.");
+  const interval = data.capture_interval_seconds ?? 300;
+  if (![60, 300].includes(interval)) throw new HTTPError(400, "API dashboard interval must be 60 or 300 seconds.");
+  let config;
+  try { config = parseApiDashboardConfig({ sources: data.sources, width: data.width ?? 1920, height: data.height ?? 1080 }); }
+  catch (error) { throw new HTTPError(400, error instanceof Error ? error.message : String(error)); }
+  for (const source of config.sources) {
+    try { validateSourceConfig(source, allowedHosts); }
+    catch (error) { throw new HTTPError(400, error instanceof Error ? error.message : String(error)); }
+  }
+  return { name: data.name.trim(), interval, config };
+}
+
+async function createApiDashboard(request: Request, env: WorkerEnvironment, actorID: string) {
+  const data = await readJSON(request);
+  if (!hasOnlyKeys(data, ["name", "capture_interval_seconds", "width", "height", "sources"]) || !isRecord(data)) throw new HTTPError(400, "Dashboard configuration contains unsupported fields.");
+  const { name, interval, config } = validateApiDashboardInput(data, env.API_STATUS_ALLOWED_HOSTS ?? "");
+  const placeholder = await env.ASSETS.get("admin/capture-pending.png");
+  if (!placeholder) throw new HTTPError(503, "The built-in image is unavailable. Publish management assets and retry.");
+  const placeholderAsset = await storePngAsset(new Uint8Array(await placeholder.arrayBuffer()), env.ASSETS, { db: env.DB });
+  const captureID = crypto.randomUUID();
+  const now = Date.now();
+  const configJson = JSON.stringify(config);
+  const variantKey = `api-${captureID}`;
+  await env.DB.batch([
+    markAssetLiveStatement(env.DB, placeholderAsset.sha256, placeholderAsset.size, now),
+    env.DB.prepare(
+      "INSERT INTO capture_targets (capture_id, variant_key, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, created_at, next_due_at, schedule_reviewed_at, name, capture_type, api_sources_json) " +
+      "VALUES (?, ?, 'https://api-dashboard.invalid/', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'api-dashboard', ?)",
+    ).bind(captureID, variantKey, interval, config.width, config.height, placeholderAsset.sha256, placeholderAsset.size, now, now, now, name, configJson),
+    auditStatement(env, actorID, "api_dashboard.created", "capture", captureID, { capture_interval_seconds: interval, width: config.width, height: config.height, source_count: config.sources.length }),
+  ]);
+  return jsonResponse({ capture_id: captureID, name, capture_interval_seconds: interval, width: config.width, height: config.height, created: true }, 201);
+}
+
+async function updateApiDashboard(request: Request, captureID: string, env: WorkerEnvironment, actorID: string) {
+  const data = await readJSON(request);
+  if (!isRecord(data) || !hasOnlyKeys(data, ["name", "enabled", "capture_interval_seconds", "width", "height", "sources"])) throw new HTTPError(400, "Dashboard update contains unsupported fields.");
+  const existing = await env.DB.prepare("SELECT * FROM capture_targets WHERE capture_id = ? AND capture_type = 'api-dashboard'")
+    .bind(captureID).first();
+  if (!existing) throw new HTTPError(404, "API dashboard could not be found.");
+  const updates: string[] = [];
+  const values: unknown[] = [];
+  if (Object.hasOwn(data, "name")) {
+    if (typeof data.name !== "string" || !data.name.trim() || data.name.trim().length > 120 || /[\u0000-\u001f\u007f]/.test(data.name)) throw new HTTPError(400, "Dashboard name must be 1 to 120 characters on one line.");
+    updates.push("name = ?"); values.push(data.name.trim());
+  }
+  if (Object.hasOwn(data, "enabled")) {
+    if (typeof data.enabled !== "boolean") throw new HTTPError(400, "enabled must be true or false.");
+    updates.push("enabled = ?"); values.push(data.enabled ? 1 : 0);
+  }
+  if (Object.hasOwn(data, "capture_interval_seconds")) {
+    if (data.capture_interval_seconds !== 60 && data.capture_interval_seconds !== 300) throw new HTTPError(400, "API dashboard interval must be 60 or 300 seconds.");
+    updates.push("capture_interval_seconds = ?"); values.push(data.capture_interval_seconds);
+  }
+  if (Object.hasOwn(data, "sources") || Object.hasOwn(data, "width") || Object.hasOwn(data, "height")) {
+    let previous;
+    try { previous = JSON.parse(existing.api_sources_json); } catch { throw new HTTPError(409, "Stored API dashboard configuration is invalid."); }
+    const config = parseApiDashboardConfig({ sources: data.sources ?? previous.sources, width: data.width ?? previous.width, height: data.height ?? previous.height });
+    for (const source of config.sources) {
+      try { validateSourceConfig(source, env.API_STATUS_ALLOWED_HOSTS ?? ""); }
+      catch (error) { throw new HTTPError(400, error instanceof Error ? error.message : String(error)); }
+    }
+    updates.push("api_sources_json = ?", "viewport_width = ?", "viewport_height = ?");
+    values.push(JSON.stringify(config), config.width, config.height);
+  }
+  if (!updates.length) throw new HTTPError(400, "No dashboard changes were supplied.");
+  const now = Date.now();
+  updates.push("next_due_at = ?", "schedule_reviewed_at = ?"); values.push(now, now, captureID);
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE capture_targets SET ${updates.join(", ")} WHERE capture_id = ? AND capture_type = 'api-dashboard'`).bind(...values),
+    auditStatement(env, actorID, "api_dashboard.updated", "capture", captureID, { fields: Object.keys(data) }),
+  ]);
+  return jsonResponse({ capture_id: captureID, updated: true });
+}
+
 async function activatePlaylist(request: Request, env: WorkerEnvironment, actorID: string) {
   const data = await readJSON(request);
   if (!hasExactKeys(data, ["playlist_id", "revision"]) || !isString(data.playlist_id) ||
@@ -1560,6 +1674,14 @@ function parseMetadata(value: unknown): SqlRow | null {
     const parsed: unknown = JSON.parse(value);
     return isRecord(parsed) ? parsed as SqlRow : {};
   } catch { return {}; }
+}
+
+function parseMetadataArray(value: unknown) {
+  if (!isString(value)) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
 }
 
 function methodNotAllowed(allowed: string) {

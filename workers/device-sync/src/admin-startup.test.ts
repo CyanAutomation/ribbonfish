@@ -107,7 +107,7 @@ test("management console renders empty states and the supported rotation default
   const { dom, window, calls } = openConsole();
   try {
     await settle();
-    assert.deepEqual(calls, ["/admin/api/overview", "/admin/api/enrollment-requests", "/admin/api/capture-decisions", "/admin/api/intervals"]);
+    assert.deepEqual(calls, ["/admin/api/overview", "/admin/api/enrollment-requests", "/admin/api/capture-decisions", "/admin/api/intervals", "/admin/api/api-dashboards"]);
     assert.match(window.document.querySelector("#playlists").textContent, /No playlists yet/);
     assert.match(window.document.querySelector("#devices").textContent, /No devices have been approved/);
     const rotation = window.document.querySelector("[name=rotation_interval]");
