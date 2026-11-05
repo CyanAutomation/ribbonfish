@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { dashboardSVG, renderDashboardPNG } from "./render.ts";
 import type { DashboardSource } from "./model.ts";
 
-const sample: DashboardSource = { id: "source-1", provider: "uptime-kuma", displayName: "<script>alert('x')</script>", fetchedAt: "2026-01-01T00:00:00.000Z", freshness: "fresh", status: "operational", statusDescription: "All systems operational", incidents: [], maintenance: [], components: [
+const sample: DashboardSource = { id: "source-1", provider: "uptime-kuma", displayName: "<SCRIPT>alert('x')</SCRIPT>", fetchedAt: "2026-01-01T00:00:00.000Z", freshness: "fresh", status: "operational", statusDescription: "All systems operational", incidents: [], maintenance: [], components: [
   { id: "1", name: "A very long component name that cannot fit in a compact dashboard and must be shortened safely", status: "operational", latencyMs: 87, sampledAt: null, groupId: "g", groupName: "Primary group" },
   { id: "2", name: "Unknown service", status: "unknown", sampledAt: null, groupId: "g", groupName: "Primary group" },
 ] };
@@ -12,8 +12,8 @@ test("SVG text is escaped and dashboard output is deterministic", () => {
   const first = dashboardSVG([sample]);
   const second = dashboardSVG([{ ...sample, fetchedAt: "2026-01-02T00:00:00.000Z" }]);
   assert.equal(first, second);
-  assert.match(first, /&lt;script&gt;/);
-  assert.doesNotMatch(first, /<script>/);
+  assert.match(first, /&lt;script&gt;/i);
+  assert.doesNotMatch(first, /<script\b/i);
   assert.match(first, /Unknown service/);
 });
 
