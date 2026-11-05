@@ -47,8 +47,15 @@ test("provider codes remain conservative for pending, unknown, and stale states"
   assert.equal(statuspageHealth("new_value"), "unknown");
 });
 
-test("API host allowlist and redirects fail closed", async () => {
-  const blocked = await fetchSource(kumaConfig, "", async () => { throw new Error("should not run"); });
+test("an empty host allowlist permits any valid public hostname", async () => {
+  const [config, heartbeat] = await Promise.all([fixture("kuma-config.json"), fixture("kuma-heartbeat.json")]);
+  const source = await fetchSource({ ...kumaConfig, hostname: "another-public.example.net" }, "", async (input) => new Response(JSON.stringify(String(input).includes("heartbeat") ? heartbeat : config), { headers: { "Content-Type": "application/json" } }), new Date("2026-01-02T03:05:00Z"));
+  assert.equal(source.freshness, "fresh");
+  assert.equal(source.components.length, 3);
+});
+
+test("a configured host allowlist restricts hosts and redirects are not followed", async () => {
+  const blocked = await fetchSource(kumaConfig, "different-host.example.org", async () => { throw new Error("should not run"); });
   assert.equal(blocked.freshness, "unavailable");
   assert.match(blocked.error ?? "", /allowlist/);
   const redirected = await fetchSource(kumaConfig, allowed, async () => new Response(null, { status: 302, headers: { Location: "https://other.example" } }));

@@ -30,7 +30,7 @@ function allowedURL(config: SourceConfig, allowlist: string): URL {
   const hostname = config.hostname.toLowerCase();
   const blockedSuffixes = [".localhost", ".local", ".internal", ".test", ".invalid", ".onion", ".arpa"];
   if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(hostname) || !hostname.includes(".") || hostname === "localhost" || blockedSuffixes.some((suffix) => hostname.endsWith(suffix))) throw new Error("Status API hostname must be a public DNS hostname.");
-  if (!hosts.has(hostname)) throw new Error("Source hostname is not on the API status host allowlist.");
+  if (hosts.size > 0 && !hosts.has(hostname)) throw new Error("Source hostname is not on the configured API status host allowlist.");
   if (config.provider === "uptime-kuma" && (!config.slug || !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(config.slug))) throw new Error("Invalid status-page slug.");
   return new URL(`https://${hostname}`);
 }
