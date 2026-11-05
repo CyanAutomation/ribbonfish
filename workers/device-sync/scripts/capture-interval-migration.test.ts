@@ -9,7 +9,7 @@ test("capture interval migration adds choices and preserves target relationships
     db.exec("PRAGMA foreign_keys = ON;");
     const schema = await readFile(new URL("../schema.sql", import.meta.url), "utf8");
     const previousSchema = schema.replace(
-      "CHECK (capture_interval_seconds IN (900, 1800, 3600, 10800, 21600, 43200, 86400))",
+      "CHECK (capture_interval_seconds IN (60, 300, 900, 1800, 3600, 10800, 21600, 43200, 86400))",
       "CHECK (capture_interval_seconds IN (900, 1800, 3600, 21600, 86400))",
     );
     assert.notEqual(previousSchema, schema, "fixture must start with the old interval constraint");

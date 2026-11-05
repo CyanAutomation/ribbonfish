@@ -424,6 +424,99 @@ test("saving a staged webpage queues its first capture and activation serves the
   }
 });
 
+test("API dashboard captures bypass Browser Run budgets and reuse the shared playlist asset path", async () => {
+  const sqlite = await freshDatabase();
+  const summary = JSON.parse(await readFile(new URL("./api-dashboard/fixtures/statuspage-summary.json", import.meta.url), "utf8"));
+  const original = globalThis.fetch;
+  let failApi = false;
+  try {
+    let browserCalls = 0;
+    let puts = 0;
+    globalThis.fetch = async () => failApi
+      ? new Response("unavailable", { status: 503, headers: { "Content-Type": "application/json" } })
+      : new Response(JSON.stringify(summary), { headers: { "Content-Type": "application/json" } });
+    const { env, messages, objects } = environment(sqlite, { async quickAction() { browserCalls++; throw new Error("browser must not run"); } });
+    env.API_STATUS_ALLOWED_HOSTS = "status.example.org";
+    env.DAILY_BROWSER_BUDGET_MS = "1";
+    const originalPut = env.ASSETS.put;
+    env.ASSETS.put = async (...args) => { puts++; return originalPut(...args); };
+    const createdResponse = await handleAdminRequest(await request("/admin/api/api-dashboards", {
+      method: "POST", body: { name: "Sample operations", capture_interval_seconds: 300, width: 1920, height: 1080,
+        sources: [{ id: "source-one", provider: "atlassian-statuspage", display_name: "Sample services", enabled: true, hostname: "status.example.org" }] },
+    }), env);
+    assert.equal(createdResponse.status, 201, await createdResponse.clone().text());
+    const dashboard = await createdResponse.json();
+    const first = await enqueueCapture(dashboard.capture_id, env);
+    const message = { body: { job_id: first.job_id }, ack() {}, retry() { throw new Error("unexpected retry"); } };
+    await queueHandler({ messages: [message] }, env);
+    assert.equal(sqlite.prepare("SELECT status, error FROM capture_jobs WHERE job_id = ?").get(first.job_id).status, "succeeded", sqlite.prepare("SELECT error FROM capture_jobs WHERE job_id = ?").get(first.job_id).error);
+    assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(first.job_id).status, "succeeded");
+    assert.equal(sqlite.prepare("SELECT result_kind FROM capture_jobs WHERE job_id = ?").get(first.job_id).result_kind, "screenshot");
+    assert.equal(sqlite.prepare("SELECT api_fetch_ms > 0 AS fetched, api_render_ms > 0 AS rendered, api_asset_reused FROM capture_jobs WHERE job_id = ?").get(first.job_id).fetched, 1);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_usage").get().count, 0);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_duration_samples").get().count, 0);
+    assert.equal(sqlite.prepare("SELECT SUM(browser_ms) AS total FROM capture_history").get().total, 0);
+    assert.equal(browserCalls, 0);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_decisions WHERE capture_id = ?").get(dashboard.capture_id).count, 0);
+    const current = sqlite.prepare("SELECT current_sha256, current_size, api_status_json FROM capture_targets WHERE capture_id = ?").get(dashboard.capture_id);
+    assert.ok(objects.has(`assets/${current.current_sha256}`));
+    assert.equal(JSON.parse(current.api_status_json)[0].freshness, "fresh");
+    const firstPutCount = puts;
+
+    const second = await enqueueCapture(dashboard.capture_id, env);
+    await queueHandler({ messages: [{ body: { job_id: second.job_id }, ack() {}, retry() { throw new Error("unexpected retry"); } }] }, env);
+    assert.equal(sqlite.prepare("SELECT api_asset_reused FROM capture_jobs WHERE job_id = ?").get(second.job_id).api_asset_reused, 1);
+    assert.equal(sqlite.prepare("SELECT api_render_ms FROM capture_jobs WHERE job_id = ?").get(second.job_id).api_render_ms, 0, "unchanged visible status skips rasterization");
+    assert.equal(puts, firstPutCount, "unchanged dashboard content reuses its current R2 asset");
+
+    const dashboardList = await handleAdminRequest(await request("/admin/api/api-dashboards"), env);
+    const listed = await dashboardList.json();
+    assert.equal(listed[0].capture_id, dashboard.capture_id);
+    assert.equal(listed[0].sources[0].freshness, "fresh");
+    const updated = await handleAdminRequest(await request(`/admin/api/api-dashboards/${dashboard.capture_id}`, {
+      method: "PATCH", body: { capture_interval_seconds: 60 },
+    }), env);
+    assert.equal(updated.status, 200);
+    assert.equal(sqlite.prepare("SELECT capture_interval_seconds FROM capture_targets WHERE capture_id = ?").get(dashboard.capture_id).capture_interval_seconds, 60);
+
+    sqlite.prepare("INSERT INTO playlists (playlist_id, revision, rotation_interval, created_at) VALUES ('api-playlist', 'revision-1', '90s', 1)").run();
+    sqlite.prepare("INSERT INTO playlist_capture_items (playlist_id, revision, position, capture_id) VALUES ('api-playlist', 'revision-1', 0, ?)").run(dashboard.capture_id);
+    sqlite.prepare("INSERT INTO active_playlist (singleton, playlist_id, revision) VALUES (1, 'api-playlist', 'revision-1')").run();
+    const deviceToken = addDevice(sqlite);
+    const playlistResponse = await fetchHandler(new Request("https://worker.test/v2/playlist", {
+      headers: { "X-Ribbonfish-Device-ID": "pi-office", Authorization: `Bearer ${deviceToken}` },
+    }), env);
+    assert.equal(playlistResponse.status, 200);
+    const playlist = await playlistResponse.json();
+    assert.equal(playlist.assets[0].sha256, current.current_sha256);
+
+    failApi = true;
+    const failed = await enqueueCapture(dashboard.capture_id, env);
+    let failureRetryDelay = 0;
+    await queueHandler({ messages: [{ body: { job_id: failed.job_id }, ack() {}, retry(options) { failureRetryDelay = options.delaySeconds; } }] }, env);
+    assert.equal(failureRetryDelay, 60);
+    assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(failed.job_id).status, "queued");
+    assert.equal(sqlite.prepare("SELECT current_sha256, last_success_at FROM capture_targets WHERE capture_id = ?").get(dashboard.capture_id).current_sha256, current.current_sha256);
+    assert.equal(JSON.parse(sqlite.prepare("SELECT api_status_json FROM capture_targets WHERE capture_id = ?").get(dashboard.capture_id).api_status_json)[0].freshness, "unavailable");
+
+    sqlite.prepare("UPDATE capture_targets SET api_sources_json = ? WHERE capture_id = ?").run(JSON.stringify({
+      width: 1920, height: 1080,
+      sources: [{ id: "source-one", provider: "atlassian-statuspage", display_name: "Sample services", enabled: true, hostname: "private.internal" }],
+    }), dashboard.capture_id);
+    const invalidConfig = await enqueueCapture(dashboard.capture_id, env);
+    let invalidConfigRetried = false;
+    let invalidConfigAcked = false;
+    await queueHandler({ messages: [{ body: { job_id: invalidConfig.job_id }, ack() { invalidConfigAcked = true; }, retry() { invalidConfigRetried = true; } }] }, env);
+    assert.equal(invalidConfigRetried, false, "permanent source configuration failures should not be retried");
+    assert.equal(invalidConfigAcked, true);
+    assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(invalidConfig.job_id).status, "failed");
+    assert.equal(browserCalls, 0);
+  } finally {
+    globalThis.fetch = original;
+    sqlite.close();
+  }
+});
+
 test("playlist saves schedule capture dispatch after the response through waitUntil", async () => {
   const sqlite = await freshDatabase();
   try {

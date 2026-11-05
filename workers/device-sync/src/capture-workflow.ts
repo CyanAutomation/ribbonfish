@@ -1,16 +1,29 @@
 import { captureScreenshot, validateCaptureTargetURL, type CaptureTarget } from "./capture.ts";
 import { ASSET_RECONCILIATION_PAGE_SIZE, deleteUnreferencedAssets } from "./asset-maintenance.ts";
-import { markAssetLiveStatement } from "./asset-registry.ts";
+import { ASSET_WRITE_LEASE_MS, markAssetLiveStatement } from "./asset-registry.ts";
 import { DEFAULT_CAPTURE_INTERVAL_SECONDS } from "./intervals.ts";
+import { parseApiDashboardConfig, loadDashboardSources } from "./api-dashboard/index.ts";
+import { dashboardSVG, renderDashboardPNG } from "./api-dashboard/render.ts";
+import { isPNG, storePngAsset, MAX_ASSET_BYTES } from "./asset-store.ts";
+import type { DashboardSource } from "./api-dashboard/model.ts";
 
 type CaptureEnv = ManagementBindings;
-type DueTarget = { capture_id: string; next_due_at: number };
-type CaptureJob = CaptureTarget & { job_id: string; capture_id: string; status: string; attempts: number; lease_until: number; scheduled_due_at: number | null; enabled: number; capture_interval_seconds: number; current_sha256: string | null; current_size: number | null; validator_etag: string | null; validator_last_modified: string | null };
+type DueTarget = { capture_id: string; next_due_at: number; capture_type: string };
+type CaptureJob = CaptureTarget & { job_id: string; capture_id: string; status: string; attempts: number; lease_until: number; scheduled_due_at: number | null; enabled: number; capture_interval_seconds: number; current_sha256: string | null; current_size: number | null; validator_etag: string | null; validator_last_modified: string | null; capture_type: string; api_sources_json: string | null; api_status_json: string | null; api_content_hash: string | null };
 type ValidatorTarget = Pick<CaptureJob, "url" | "current_sha256" | "current_size" | "validator_etag" | "validator_last_modified">;
 type ValidatorResult = { unchanged: boolean; outcome: string; etag: string | null; lastModified: string | null };
 type JobDecision = Pick<CaptureJob, "capture_id" | "scheduled_due_at">;
 type CaptureMessage = Message<{ job_id?: unknown }>;
 type CaptureFailureDetails = { message?: string; browserMs: number; browserRunElapsedMs: number; browserStarted: boolean; retryable: boolean };
+
+class ApiDashboardCaptureError extends Error {
+  readonly retryable: boolean;
+  constructor(message: string, retryable: boolean) {
+    super(message);
+    this.name = "ApiDashboardCaptureError";
+    this.retryable = retryable;
+  }
+}
 
 export const MAX_CAPTURE_ATTEMPTS = 3;
 export const MAX_CAPTURE_HISTORY = 10;
@@ -35,13 +48,15 @@ export async function enqueueCapture(captureID: string, env: CaptureEnv, { now =
     throw new Error("Capture queue is not configured.");
   }
   const target = await env.DB.prepare(
-    "SELECT capture_id, url, capture_interval_seconds, enabled, next_due_at FROM capture_targets WHERE capture_id = ?",
-  ).bind(captureID).first<{ enabled: number; url: string; capture_interval_seconds: number; next_due_at: number }>();
+    "SELECT capture_id, url, capture_interval_seconds, enabled, next_due_at, capture_type FROM capture_targets WHERE capture_id = ?",
+  ).bind(captureID).first<{ enabled: number; url: string; capture_interval_seconds: number; next_due_at: number; capture_type: string }>();
   if (!target || target.enabled !== 1) return null;
-  try {
-    validateCaptureTargetURL(target.url, env.CAPTURE_ALLOWED_HOSTS);
-  } catch {
-    throw new CaptureTargetNotAllowedError();
+  if (target.capture_type !== "api-dashboard") {
+    try {
+      validateCaptureTargetURL(target.url, env.CAPTURE_ALLOWED_HOSTS);
+    } catch {
+      throw new CaptureTargetNotAllowedError();
+    }
   }
 
   const jobID = crypto.randomUUID();
@@ -84,7 +99,7 @@ export async function dispatchDueCaptures(env: CaptureEnv, now = Date.now()) {
   if (capacity === 0) return { enqueued: 0, skipped: false };
   // Staged targets receive a first or stale-image warmup; recurring captures stay active-playlist only.
   const due = await env.DB.prepare(
-    "SELECT t.capture_id, t.next_due_at FROM capture_targets t " +
+    "SELECT t.capture_id, t.next_due_at, t.capture_type FROM capture_targets t " +
     "WHERE t.enabled = 1 AND t.schedule_reviewed_at IS NOT NULL AND t.next_due_at <= ? " +
     "AND (EXISTS (SELECT 1 FROM playlist_capture_items p JOIN active_playlist a " +
     "ON a.playlist_id = p.playlist_id AND a.revision = p.revision WHERE p.capture_id = t.capture_id) " +
@@ -95,7 +110,7 @@ export async function dispatchDueCaptures(env: CaptureEnv, now = Date.now()) {
   ).bind(now, now - CAPTURE_RETENTION_MS, capacity).all<DueTarget>();
   let enqueued = 0;
   for (const target of due.results ?? []) {
-    if (await consumeApprovedCaptureSkip(target, env, now)) continue;
+    if (target.capture_type !== "api-dashboard" && await consumeApprovedCaptureSkip(target, env, now)) continue;
     const stillDue = await env.DB.prepare(
       "SELECT 1 AS due FROM capture_targets WHERE capture_id = ? AND enabled = 1 AND next_due_at <= ?",
     ).bind(target.capture_id, now).first();
@@ -175,7 +190,7 @@ async function processCaptureMessage(message: CaptureMessage, env: CaptureEnv, n
   const job = await env.DB.prepare(
     "SELECT j.job_id, j.capture_id, j.status, j.attempts, j.lease_until, j.scheduled_due_at, " +
     "t.url, t.capture_interval_seconds, t.viewport_width, t.viewport_height, t.wait_for_selector, t.enabled, " +
-    "t.current_sha256, t.current_size, t.validator_etag, t.validator_last_modified " +
+    "t.current_sha256, t.current_size, t.validator_etag, t.validator_last_modified, t.capture_type, t.api_sources_json, t.api_status_json, t.api_content_hash " +
     "FROM capture_jobs j JOIN capture_targets t ON t.capture_id = j.capture_id WHERE j.job_id = ?",
   ).bind(jobID).first<CaptureJob>();
   if (!job || ["succeeded", "failed", "deferred"].includes(job.status)) {
@@ -201,6 +216,12 @@ async function processCaptureMessage(message: CaptureMessage, env: CaptureEnv, n
     return;
   }
 
+  if (job.capture_type === "api-dashboard") {
+    await processApiDashboardCapture(message, job, env, now);
+    return;
+  }
+
+  const attempt = job.attempts + 1;
   const validator = await probeCaptureValidator(job, env);
   await env.DB.prepare("UPDATE capture_jobs SET validator_outcome = ? WHERE job_id = ?")
     .bind(validator.outcome, jobID).run();
@@ -217,7 +238,6 @@ async function processCaptureMessage(message: CaptureMessage, env: CaptureEnv, n
   }
   await markBrowserStart(env, now);
 
-  const attempt = job.attempts + 1;
   const reserveMs = nonNegativeInteger(env.CAPTURE_BUDGET_RESERVE_MS, DEFAULT_BUDGET_RESERVE_MS);
   const captureStartedAt = performance.now();
   let result;
@@ -290,6 +310,95 @@ async function processCaptureMessage(message: CaptureMessage, env: CaptureEnv, n
   ]);
   await pruneCaptureHistory(env, job.capture_id, now);
   message.ack();
+}
+
+async function processApiDashboardCapture(message: CaptureMessage, job: CaptureJob, env: CaptureEnv, now: number) {
+  let sourceStatus: DashboardSource[] = [];
+  const fetchStarted = performance.now();
+  let fetchMs = 0;
+  let renderStarted = 0;
+  let renderMs = 0;
+  try {
+    if (!job.api_sources_json) throw new ApiDashboardCaptureError("API dashboard configuration is missing.", false);
+    let config;
+    try { config = parseApiDashboardConfig(JSON.parse(job.api_sources_json)); }
+    catch (error) { throw new ApiDashboardCaptureError(error instanceof Error ? error.message : "API dashboard configuration is invalid.", false); }
+    let previousSources: DashboardSource[] = [];
+    try {
+      const saved = job.api_status_json;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) previousSources = parsed as DashboardSource[];
+      }
+    } catch {}
+    let sources: DashboardSource[];
+    try { sources = await loadDashboardSources(config, env.API_STATUS_ALLOWED_HOSTS ?? "", fetch, new Date(now), previousSources); }
+    catch (error) { throw new ApiDashboardCaptureError(error instanceof Error ? error.message : "API dashboard source workload is invalid.", false); }
+    fetchMs = elapsedSince(fetchStarted);
+    sourceStatus = sources;
+    await env.DB.prepare("UPDATE capture_targets SET api_status_json = ? WHERE capture_id = ?")
+      .bind(JSON.stringify(sources), job.capture_id).run();
+    const available = sources.some((source) => source.freshness !== "unavailable");
+    if (!available) {
+      throw new ApiDashboardCaptureError("All dashboard sources are unavailable; the last known-good image was retained.", sources.some((source) => source.retryableError === true));
+    }
+    const svg = dashboardSVG(sources, config.width, config.height);
+    const contentDigest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(svg));
+    const contentHash = [...new Uint8Array(contentDigest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+    if (contentHash === job.api_content_hash && job.current_sha256 && job.current_size) {
+      const currentAsset = await env.ASSETS.head(`assets/${job.current_sha256}`);
+      if (currentAsset?.size === job.current_size) {
+        await env.DB.batch([
+          markAssetLiveStatement(env.DB, job.current_sha256, job.current_size, now),
+          env.DB.prepare("INSERT INTO capture_history (capture_id, job_id, sha256, size, captured_at, browser_ms, browser_ms_source) VALUES (?, ?, ?, ?, ?, 0, 'unknown')")
+            .bind(job.capture_id, job.job_id, job.current_sha256, job.current_size, now),
+          env.DB.prepare("UPDATE capture_jobs SET status = 'succeeded', result_kind = 'screenshot', finished_at = ?, lease_until = NULL, error = NULL, api_fetch_ms = ?, api_render_ms = 0, api_asset_reused = 1 WHERE job_id = ?")
+            .bind(now, fetchMs, job.job_id),
+          env.DB.prepare("UPDATE capture_targets SET last_attempt_at = ?, last_success_at = ?, last_error = NULL, failure_count = 0, next_due_at = ?, api_status_json = ?, api_last_fetch_at = ? WHERE capture_id = ?")
+            .bind(now, now, now + job.capture_interval_seconds * 1000, JSON.stringify(sourceStatus), now, job.capture_id),
+        ]);
+        await pruneCaptureHistory(env, job.capture_id, now);
+        message.ack();
+        return;
+      }
+    }
+    renderStarted = performance.now();
+    const png = await renderDashboardPNG(sources, config.width, config.height);
+    renderMs = elapsedSince(renderStarted);
+    if (!isPNG(png) || png.byteLength > MAX_ASSET_BYTES) throw new Error("Dashboard renderer returned an invalid or oversized PNG.");
+    const digest = await crypto.subtle.digest("SHA-256", png);
+    const sha256 = [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+    let reused = false;
+    if (sha256 === job.current_sha256 && job.current_size === png.byteLength) {
+      const existing = await env.ASSETS.head(`assets/${sha256}`);
+      reused = existing?.size === png.byteLength;
+    }
+    if (!reused) await storePngAsset(png, env.ASSETS, { db: env.DB, now, stagingMs: ASSET_WRITE_LEASE_MS });
+    await env.DB.batch([
+      markAssetLiveStatement(env.DB, sha256, png.byteLength, now),
+      env.DB.prepare("INSERT INTO capture_history (capture_id, job_id, sha256, size, captured_at, browser_ms, browser_ms_source) VALUES (?, ?, ?, ?, ?, 0, 'unknown')")
+        .bind(job.capture_id, job.job_id, sha256, png.byteLength, now),
+      env.DB.prepare("UPDATE capture_jobs SET status = 'succeeded', result_kind = 'screenshot', finished_at = ?, lease_until = NULL, error = NULL, api_fetch_ms = ?, api_render_ms = ?, api_asset_reused = ? WHERE job_id = ?")
+        .bind(now, fetchMs, renderMs, reused ? 1 : 0, job.job_id),
+      env.DB.prepare("UPDATE capture_targets SET current_sha256 = ?, current_size = ?, last_attempt_at = ?, last_success_at = ?, last_error = NULL, failure_count = 0, next_due_at = ?, api_status_json = ?, api_content_hash = ?, api_last_fetch_at = ?, api_last_image_at = ? WHERE capture_id = ?")
+        .bind(sha256, png.byteLength, now, now, now + job.capture_interval_seconds * 1000, JSON.stringify(sourceStatus), contentHash, now, now, job.capture_id),
+    ]);
+    await pruneCaptureHistory(env, job.capture_id, now);
+    message.ack();
+  } catch (caught) {
+    if (sourceStatus.length) {
+      const hasSuccessfulFetch = sourceStatus.some((source) => source.freshness !== "unavailable");
+      await env.DB.prepare("UPDATE capture_targets SET api_status_json = ?, api_last_fetch_at = CASE WHEN ? = 1 THEN ? ELSE api_last_fetch_at END WHERE capture_id = ?")
+        .bind(JSON.stringify(sourceStatus), hasSuccessfulFetch ? 1 : 0, now, job.capture_id).run().catch(() => undefined);
+    }
+    const details = captureFailureDetails(caught);
+    const caughtDetails = caught !== null && typeof caught === "object" ? caught as Record<string, unknown> : {};
+    const retryable = typeof caughtDetails.retryable === "boolean" ? caughtDetails.retryable : true;
+    const error: CaptureFailureDetails = { ...details, message: details.message ?? "API dashboard capture failed.", retryable, browserMs: 0, browserRunElapsedMs: 0, browserStarted: false };
+    await env.DB.prepare("UPDATE capture_jobs SET api_fetch_ms = ?, api_render_ms = ? WHERE job_id = ?")
+      .bind(fetchMs || elapsedSince(fetchStarted), renderMs || (renderStarted ? elapsedSince(renderStarted) : 0), job.job_id).run();
+    await handleCaptureFailure(env, message, job, error, now);
+  }
 }
 
 export async function probeCaptureValidator(target: ValidatorTarget, env: CaptureEnv, fetcher = globalThis.fetch): Promise<ValidatorResult> {

@@ -1,0 +1,12 @@
+{
+  "page": { "name": "Sample Services" },
+  "status": { "indicator": "none", "description": "All Systems Operational" },
+  "components": [
+    { "id": "group-1", "name": "Platform", "status": "operational", "group": true },
+    { "id": "component-1", "name": "Core API", "status": "operational", "group_id": "group-1" },
+    { "id": "component-2", "name": "Reporting", "status": "partial_outage", "group_id": "group-1" },
+    { "id": "component-3", "name": "Unknown service", "status": "new_value" }
+  ],
+  "incidents": [{ "id": "incident-1", "name": "Elevated error rate", "status": "investigating", "impact": "minor", "updated_at": "2026-01-02T03:04:05Z" }],
+  "scheduled_maintenances": [{ "id": "maintenance-1", "name": "Database maintenance", "status": "in_progress", "impact": "maintenance" }]
+}

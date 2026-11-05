@@ -4,7 +4,8 @@ The Worker serves one globally active playlist to enrolled devices. D1 stores
 versioned playlists, the active-playlist pointer, legacy credential hashes,
 approved device public keys, pending enrollment requests, last-poll timestamps,
 management audit events, and scheduled webpage capture state. R2 stores private
-content-addressed PNG assets shared by uploads and Browser Run screenshots.
+content-addressed PNG assets shared by uploads, Browser Run screenshots and
+API rendered dashboards.
 Devices keep their own private key; the Worker stores only its public key.
 
 ## Workers and environments
@@ -182,6 +183,19 @@ Migration `0016_capture_intervals.sql` adds the 3-hour and 12-hour screenshot
 schedules while preserving existing capture targets and their related records.
 Apply it with `npm run migrate:management` before deploying code that accepts
 the expanded interval set.
+
+API driven dashboards use the shared capture queue, target/history records, R2
+asset store and playlist delivery flow. Uptime Kuma and Atlassian Statuspage
+sources normalize into a common model and render to PNG with resvg WebAssembly
+inside the management Worker. These captures bypass Browser Run budgets and
+duration accounting. `API_STATUS_ALLOWED_HOSTS` is empty by default, allowing
+hostnames that pass the adapter's syntax checks; a nonempty comma-separated
+list restricts sources to those exact hostnames. The management Worker keeps
+Cloudflare's `global_fetch_strictly_public` compatibility flag enabled for
+public Internet routing. Apply
+`0017_api_dashboards.sql` before deploying dashboard support. Setup, request
+volume, source rules, rendering proof and limitations are in
+[`docs/api-driven-dashboards.md`](../../docs/api-driven-dashboards.md).
 
 The management config uses a remote Browser binding so screenshot Quick Actions
 can run during local development. Queue messages and D1/R2 state remain local,
