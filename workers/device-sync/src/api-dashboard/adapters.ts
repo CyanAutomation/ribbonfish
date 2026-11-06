@@ -226,16 +226,22 @@ export async function fetchSource(config: SourceConfig, allowlist: string, fetch
       components = definitions.map((definition) => {
         if (heartbeatResponse.notModified) {
           const saved = priorByID.get(definition.id);
-          return { ...definition, ...(saved ? { status: saved.status, sampledAt: saved.sampledAt, ...(saved.latencyMs !== undefined ? { latencyMs: saved.latencyMs } : {}) } : {}) };
+          return { ...definition, ...(saved ? { status: saved.status, sampledAt: saved.sampledAt,
+            ...(saved.statusChangedAt ? { statusChangedAt: saved.statusChangedAt } : {}), ...(saved.history ? { history: saved.history } : {}),
+            ...(saved.latencyMs !== undefined ? { latencyMs: saved.latencyMs } : {}) } : {}) };
         }
-        const history = Array.isArray(heartbeatMap[definition.id]) ? heartbeatMap[definition.id] : [];
-        const latest = history.map(record).reduce((selected: any, beat: any) => {
-          const timestamp = parseTimestamp(beat.time);
-          return timestamp && (!selected || Date.parse(timestamp) > Date.parse(selected.time)) ? { ...beat, time: timestamp } : selected;
-        }, null);
-        return { ...definition, status: latest ? kumaHealth(latest.status) : "unknown",
-          ...(typeof latest?.ping === "number" && Number.isFinite(latest.ping) && latest.ping >= 0 && latest.ping <= 600_000 ? { latencyMs: latest.ping } : {}),
-          sampledAt: latest ? parseTimestamp(latest.time) : null };
+        const records = (Array.isArray(heartbeatMap[definition.id]) ? heartbeatMap[definition.id] : [])
+          .map(record).map((beat: any) => ({ beat, at: parseTimestamp(beat.time) })).filter((item: any) => item.at)
+          .sort((a: any, b: any) => Date.parse(a.at) - Date.parse(b.at));
+        const latest = records.at(-1);
+        const latestStatus = latest ? kumaHealth(latest.beat.status) : undefined;
+        const previousDifferentStatus = latest ? [...records.slice(0, -1)].reverse().find((item: any) => kumaHealth(item.beat.status) !== latestStatus) : undefined;
+        const history = records.map((item: any) => ({ at: item.at as string, status: kumaHealth(item.beat.status) }));
+        return { ...definition, status: latest ? kumaHealth(latest.beat.status) : "unknown",
+          ...(typeof latest?.beat.ping === "number" && Number.isFinite(latest.beat.ping) && latest.beat.ping >= 0 && latest.beat.ping <= 600_000 ? { latencyMs: latest.beat.ping } : {}),
+          sampledAt: latest?.at ?? null,
+          ...(previousDifferentStatus ? { statusChangedAt: latest!.at } : {}),
+          ...(history.length ? { history } : {}) };
       });
       const statusData = statusResponse.notModified ? null : record(statusResponse.value);
       incidents = statusResponse.notModified ? previous?.incidents ?? [] : incidentList(statusData?.incidents);

@@ -31,6 +31,8 @@ export interface DashboardComponent {
   status: Health;
   latencyMs?: number;
   sampledAt: string | null;
+  statusChangedAt?: string;
+  history?: Array<{ at: string; status: Health }>;
   groupId: string | null;
   groupName: string | null;
   groupOrder?: number;
