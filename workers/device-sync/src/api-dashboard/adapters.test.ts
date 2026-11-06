@@ -47,6 +47,18 @@ test("provider codes remain conservative for pending, unknown, and stale states"
   assert.equal(statuspageHealth("new_value"), "unknown");
 });
 
+test("disabled sources are identified without making an upstream request", async () => {
+  let requests = 0;
+  const source = await fetchSource({ ...kumaConfig, enabled: false }, allowed, async () => {
+    requests += 1;
+    throw new Error("disabled source must not be requested");
+  });
+  assert.equal(requests, 0);
+  assert.equal(source.disabled, true);
+  assert.equal(source.status, "unknown");
+  assert.equal(source.requestStats?.requestCount, 0);
+});
+
 test("management Worker routes global fetches strictly over the public Internet", async () => {
   const config = await readFile(new URL("../../wrangler.management.toml", import.meta.url), "utf8");
   assert.match(config, /^compatibility_flags\s*=\s*\["global_fetch_strictly_public"\]\s*$/m);
@@ -81,6 +93,98 @@ test("Statuspage uses ETag validators and reuses cached normalized data on 304",
   assert.equal(sentValidator, '"sample-v1"');
   assert.equal(second.components.length, first.components.length);
   assert.equal(second.fetchedAt, "2026-01-02T03:05:00.000Z");
+});
+
+test("Uptime Kuma validators are independent for configuration and heartbeats", async () => {
+  const [config, heartbeat] = await Promise.all([fixture("kuma-config.json"), fixture("kuma-heartbeat.json")]);
+  const first = await fetchSource(kumaConfig, allowed, async (input) => new Response(JSON.stringify(String(input).includes("heartbeat") ? heartbeat : config), {
+    headers: { "Content-Type": "application/json", ETag: String(input).includes("heartbeat") ? '"beat-v1"' : '"config-v1"' },
+  }), new Date("2026-01-02T03:05:00Z"));
+  let configValidator = "";
+  let heartbeatValidator = "";
+  const second = await fetchSource(kumaConfig, allowed, async (input, init) => {
+    const url = String(input);
+    const validator = new Headers(init?.headers).get("If-None-Match") ?? "";
+    if (url.includes("/heartbeat/")) {
+      heartbeatValidator = validator;
+      return new Response(null, { status: 304, headers: { ETag: '"beat-v1"' } });
+    }
+    configValidator = validator;
+    return new Response(null, { status: 304, headers: { ETag: '"config-v1"' } });
+  }, new Date("2026-01-02T03:20:00Z"), first);
+  assert.equal(configValidator, '"config-v1"');
+  assert.equal(heartbeatValidator, '"beat-v1"');
+  assert.equal(second.components[0].sampledAt, first.components[0].sampledAt, "304 keeps original monitor sample time");
+  assert.equal(second.components[0].status, "stale", "revalidation never refreshes monitor health timestamps");
+  assert.equal(second.freshness, "stale");
+  assert.equal(second.fetchedAt, "2026-01-02T03:20:00.000Z");
+});
+
+test("Kuma source changes invalidate both endpoint validators", async () => {
+  const [config, heartbeat] = await Promise.all([fixture("kuma-config.json"), fixture("kuma-heartbeat.json")]);
+  const first = await fetchSource(kumaConfig, allowed, async (input) => new Response(JSON.stringify(String(input).includes("heartbeat") ? heartbeat : config), {
+    headers: { "Content-Type": "application/json", ETag: '"v1"' },
+  }), new Date("2026-01-02T03:05:00Z"));
+  const validators: string[] = [];
+  await fetchSource({ ...kumaConfig, slug: "other-page" }, allowed, async (input, init) => {
+    validators.push(new Headers(init?.headers).get("If-None-Match") ?? "");
+    return new Response(JSON.stringify(String(input).includes("heartbeat") ? heartbeat : config), { headers: { "Content-Type": "application/json" } });
+  }, new Date("2026-01-02T03:06:00Z"), first);
+  assert.deepEqual(validators, ["", ""]);
+});
+
+test("Kuma records request counts, response sizes, and independent cache metadata", async () => {
+  const [config, heartbeat] = await Promise.all([fixture("kuma-config.json"), fixture("kuma-heartbeat.json")]);
+  const source = await fetchSource(kumaConfig, allowed, async (input) => new Response(JSON.stringify(String(input).includes("heartbeat") ? heartbeat : config), {
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "public, max-age=0, must-revalidate",
+      ...(String(input).includes("heartbeat") ? { "Last-Modified": "Fri, 02 Jan 2026 03:04:00 GMT" } : { ETag: '"config-v1"' }),
+    },
+  }), new Date("2026-01-02T03:05:00Z"));
+  assert.deepEqual(source.requestStats && {
+    requestCount: source.requestStats.requestCount,
+    notModifiedCount: source.requestStats.notModifiedCount,
+    failedRequestCount: source.requestStats.failedRequestCount,
+  }, { requestCount: 2, notModifiedCount: 0, failedRequestCount: 0 });
+  assert.ok((source.requestStats?.responseBytes ?? 0) > 0);
+  assert.equal(source.cache?.statusPage?.etag, '"config-v1"');
+  assert.equal(source.cache?.heartbeat?.lastModified, "Fri, 02 Jan 2026 03:04:00 GMT");
+  assert.equal(source.cache?.statusPage?.cacheControl, "public, max-age=0, must-revalidate");
+});
+
+test("Kuma uses Last-Modified independently when ETag is absent", async () => {
+  const [config, heartbeat] = await Promise.all([fixture("kuma-config.json"), fixture("kuma-heartbeat.json")]);
+  const first = await fetchSource(kumaConfig, allowed, async (input) => new Response(JSON.stringify(String(input).includes("heartbeat") ? heartbeat : config), {
+    headers: { "Content-Type": "application/json", ...(String(input).includes("heartbeat") ? { ETag: '"beat-v1"' } : { "Last-Modified": "Fri, 02 Jan 2026 03:04:00 GMT" }) },
+  }), new Date("2026-01-02T03:05:00Z"));
+  const sent: string[] = [];
+  const second = await fetchSource(kumaConfig, allowed, async (input, init) => {
+    const headers = new Headers(init?.headers);
+    sent.push(`${headers.get("If-None-Match") ?? ""}|${headers.get("If-Modified-Since") ?? ""}`);
+    const url = String(input);
+    if (url.includes("heartbeat")) return new Response(null, { status: 304, headers: { ETag: '"beat-v1"' } });
+    return new Response(null, { status: 304, headers: { "Last-Modified": "Fri, 02 Jan 2026 03:04:00 GMT" } });
+  }, new Date("2026-01-02T03:06:00Z"), first);
+  assert.deepEqual(sent, ["|Fri, 02 Jan 2026 03:04:00 GMT", '"beat-v1"|']);
+  assert.equal(second.requestStats?.notModifiedCount, 2);
+  assert.equal(second.freshness, "fresh");
+});
+
+test("Kuma does not cache no-store responses or trust unsolicited 304 responses", async () => {
+  const [config, heartbeat] = await Promise.all([fixture("kuma-config.json"), fixture("kuma-heartbeat.json")]);
+  const first = await fetchSource(kumaConfig, allowed, async (input) => new Response(JSON.stringify(String(input).includes("heartbeat") ? heartbeat : config), {
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ETag: '"must-not-reuse"' },
+  }), new Date("2026-01-02T03:05:00Z"));
+  const sent: string[] = [];
+  await fetchSource(kumaConfig, allowed, async (_input, init) => {
+    sent.push(new Headers(init?.headers).get("If-None-Match") ?? "");
+    return new Response(JSON.stringify(config), { headers: { "Content-Type": "application/json" } });
+  }, new Date("2026-01-02T03:06:00Z"), first);
+  assert.deepEqual(sent, ["", ""]);
+  const unsolicited = await fetchSource(kumaConfig, allowed, async () => new Response(null, { status: 304 }), new Date("2026-01-02T03:07:00Z"));
+  assert.equal(unsolicited.freshness, "unavailable");
+  assert.match(unsolicited.error ?? "", /304 without cached/);
 });
 
 test("old Kuma heartbeat samples are marked stale without becoming operational", async () => {

@@ -162,6 +162,17 @@ CREATE TABLE IF NOT EXISTS capture_jobs (
   api_fetch_ms INTEGER NOT NULL DEFAULT 0 CHECK (api_fetch_ms >= 0),
   api_render_ms INTEGER NOT NULL DEFAULT 0 CHECK (api_render_ms >= 0),
   api_asset_reused INTEGER NOT NULL DEFAULT 0 CHECK (api_asset_reused IN (0, 1)),
+  api_total_ms INTEGER NOT NULL DEFAULT 0 CHECK (api_total_ms >= 0),
+  api_request_count INTEGER NOT NULL DEFAULT 0 CHECK (api_request_count >= 0),
+  api_not_modified_count INTEGER NOT NULL DEFAULT 0 CHECK (api_not_modified_count >= 0),
+  api_failed_request_count INTEGER NOT NULL DEFAULT 0 CHECK (api_failed_request_count >= 0),
+  api_response_bytes INTEGER NOT NULL DEFAULT 0 CHECK (api_response_bytes >= 0),
+  api_source_count INTEGER NOT NULL DEFAULT 0 CHECK (api_source_count >= 0),
+  api_unavailable_source_count INTEGER NOT NULL DEFAULT 0 CHECK (api_unavailable_source_count >= 0),
+  api_stale_source_count INTEGER NOT NULL DEFAULT 0 CHECK (api_stale_source_count >= 0),
+  api_content_hash_match INTEGER NOT NULL DEFAULT 0 CHECK (api_content_hash_match IN (0, 1)),
+  api_render_failed INTEGER NOT NULL DEFAULT 0 CHECK (api_render_failed IN (0, 1)),
+  api_outcome TEXT CHECK (api_outcome IS NULL OR api_outcome IN ('complete', 'partial', 'all_failed')),
   validator_outcome TEXT NOT NULL DEFAULT 'unknown'
     CHECK (validator_outcome IN ('unknown', 'disabled', 'unchanged', 'changed', 'no_stored_validator', 'unavailable', 'cached_asset_missing')),
   result_kind TEXT NOT NULL DEFAULT 'screenshot'

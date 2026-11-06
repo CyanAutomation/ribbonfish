@@ -1,30 +1,12 @@
-import { fetchSource, providerOf, type SourceConfig } from "./adapters.ts";
+import { fetchSource, type SourceConfig } from "./adapters.ts";
 import type { DashboardSource } from "./model.ts";
 import { renderDashboardPNG } from "./render.ts";
+import { parseApiDashboardConfig, type ApiDashboardConfig } from "./config.ts";
 
-export const DEFAULT_API_DASHBOARD_INTERVAL = 300;
-export const MAX_API_DASHBOARD_SOURCES = 30;
+export { DEFAULT_API_DASHBOARD_INTERVAL, MAX_API_DASHBOARD_SOURCES, parseApiDashboardConfig } from "./config.ts";
+export type { ApiDashboardConfig } from "./config.ts";
 export const MAX_API_DASHBOARD_COMPONENTS = 2_000;
 export const API_SOURCE_MAX_AGE_MS = 15 * 60_000;
-
-export type ApiDashboardConfig = { sources: SourceConfig[]; width: number; height: number };
-
-export function parseApiDashboardConfig(value: unknown): ApiDashboardConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Dashboard configuration must be an object.");
-  const input = value as Record<string, unknown>;
-  if (!Array.isArray(input.sources) || input.sources.length < 1 || input.sources.length > MAX_API_DASHBOARD_SOURCES) throw new Error("Dashboard must have between 1 and 30 sources.");
-  const sources = input.sources.map((item) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("Invalid dashboard source.");
-    const row = item as Record<string, unknown>;
-    if (typeof row.id !== "string" || !providerOf(row.provider) || typeof row.display_name !== "string" || typeof row.hostname !== "string" || typeof row.enabled !== "boolean") throw new Error("Dashboard source requires a valid provider, id, display_name, hostname, and enabled.");
-    return { id: row.id, provider: row.provider, display_name: row.display_name, hostname: row.hostname, enabled: row.enabled, ...(typeof row.slug === "string" ? { slug: row.slug } : {}) } as SourceConfig;
-  });
-  if (new Set(sources.map((source) => source.id)).size !== sources.length) throw new Error("Dashboard source IDs must be unique.");
-  const width = input.width ?? 1920;
-  const height = input.height ?? 1080;
-  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || Number(width) < 640 || Number(width) > 3840 || Number(height) < 360 || Number(height) > 2160 || Number(width) * Number(height) > 3840 * 2160) throw new Error("Dashboard resolution is outside the supported range.");
-  return { sources, width: Number(width), height: Number(height) };
-}
 
 export async function loadDashboardSources(config: ApiDashboardConfig, allowedHosts: string, fetcher: typeof fetch = fetch, now = new Date(), previousSources: DashboardSource[] = []): Promise<DashboardSource[]> {
   const enabled = config.sources.filter((source) => source.enabled);

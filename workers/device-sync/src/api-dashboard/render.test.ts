@@ -17,6 +17,14 @@ test("SVG text is escaped and dashboard output is deterministic", () => {
   assert.match(first, /Unknown service/);
 });
 
+test("disabled sources are labelled separately and do not make active sources stale", () => {
+  const disabled: DashboardSource = { ...sample, disabled: true, freshness: "unavailable", status: "unknown", components: [] };
+  const svg = dashboardSVG([sample, disabled]);
+  assert.match(svg, />Disabled<\/text>/);
+  assert.match(svg, /Source is disabled and not polled/);
+  assert.doesNotMatch(svg, /One or more sources unavailable or stale/);
+});
+
 test("overflow and active event footer labels occupy separate rows", () => {
   const crowded: DashboardSource = {
     ...sample,
@@ -29,6 +37,39 @@ test("overflow and active event footer labels occupy separate rows", () => {
   assert.ok(Number.isFinite(overflowY));
   assert.ok(Number.isFinite(eventsY));
   assert.ok(Math.abs(overflowY - eventsY) >= 18, `footer baselines are too close: ${overflowY} and ${eventsY}`);
+});
+
+test("provider group parents render as headings instead of duplicate monitored services", () => {
+  const grouped: DashboardSource = {
+    ...sample,
+    provider: "atlassian-statuspage",
+    components: [
+      { id: "database-group", name: "Database", status: "degraded", sampledAt: null, groupId: null, groupName: null, isGroup: true, groupOrder: 0, componentOrder: 0 },
+      { id: "database-primary", name: "Primary database", status: "degraded", sampledAt: null, groupId: "database-group", groupName: "Database", groupOrder: 0, componentOrder: 1 },
+    ],
+  };
+  const svg = dashboardSVG([grouped]);
+  assert.match(svg, />Database<\/text>/);
+  assert.match(svg, />Primary database<\/text>/);
+  assert.doesNotMatch(svg, /Database \(group\)/);
+});
+
+test("long text uses supported ASCII ellipses rather than missing font glyphs", () => {
+  const longName = { ...sample, displayName: "Synthetic source name with an intentionally long label", components: [{ ...sample.components[0], name: "Synthetic service name with many details that must be shortened to fit the screen" }] };
+  const svg = dashboardSVG([longName]);
+  assert.match(svg, /\.\.\./);
+  assert.doesNotMatch(svg, /…/);
+});
+
+test("overflow counts only omitted services and reports hidden incidents explicitly", () => {
+  const crowded: DashboardSource = {
+    ...sample,
+    components: Array.from({ length: 100 }, (_, index) => ({ ...sample.components[0], id: String(index), name: `Component ${index}` })),
+    incidents: Array.from({ length: 4 }, (_, index) => ({ id: `incident-${index}`, name: `Active incident ${index}`, status: "investigating", impact: "major", updatedAt: null })),
+  };
+  const svg = dashboardSVG([crowded]);
+  assert.match(svg, /more services/);
+  assert.match(svg, /\+3 more active events/);
 });
 
 test("renderer produces a valid dimensioned PNG and stable bytes", async () => {
