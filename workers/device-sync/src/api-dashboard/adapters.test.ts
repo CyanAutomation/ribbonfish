@@ -71,6 +71,8 @@ test("Atlassian Statuspage preserves groups and children without double-counting
   assert.equal(source.components[3].status, "unknown");
   assert.equal(source.incidents[0].name, "Elevated error rate");
   assert.equal(source.maintenance[0].name, "Database maintenance");
+  assert.equal(source.maintenance[0].updatedAt, "2026-01-02T03:00:00.000Z");
+  assert.equal(source.maintenance[0].scheduledFor, "2026-01-02T05:00:00.000Z");
 });
 
 test("provider codes remain conservative for pending, unknown, and stale states", () => {

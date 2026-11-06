@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { dashboardSVG, renderDashboardPNG } from "./render.ts";
-import { svgCheckHistory, svgGroupSummary, svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
+import { svgCheckHistory, svgEventPanel, svgGroupSummary, svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
 import type { DashboardSource } from "./model.ts";
 
 const sample: DashboardSource = { id: "source-1", provider: "uptime-kuma", displayName: "<SCRIPT>alert('x')</SCRIPT>", fetchedAt: "2026-01-01T00:00:00.000Z", freshness: "fresh", status: "operational", statusDescription: "All systems operational", incidents: [], maintenance: [], components: [
@@ -36,7 +36,7 @@ test("overflow and active event footer labels occupy separate rows", () => {
   };
   const svg = dashboardSVG([crowded]);
   const overflowY = Number(svg.match(/<text x="[^"]+" y="([\d.]+)"[^>]*>\+ \d+ more services<\/text>/)?.[1]);
-  const eventsY = Number(svg.match(/<text x="[^"]+" y="([\d.]+)"[^>]*>Incident \(/)?.[1]);
+  const eventsY = Number(svg.match(/<text x="[^"]+" y="([\d.]+)"[^>]*>INCIDENT/)?.[1]);
   assert.ok(Number.isFinite(overflowY));
   assert.ok(Number.isFinite(eventsY));
   assert.ok(Math.abs(overflowY - eventsY) >= 18, `footer baselines are too close: ${overflowY} and ${eventsY}`);
@@ -151,6 +151,32 @@ test("source and event freshness labels distinguish updates from failed checks",
   assert.match(svg, /Updated 12:20 UTC/);
 });
 
+test("Statuspage incidents and scheduled maintenance use a prominent event panel", () => {
+  const source: DashboardSource = {
+    ...sample,
+    provider: "atlassian-statuspage",
+    incidents: [{ id: "incident", name: "Elevated error rate", status: "investigating", impact: "major", updatedAt: null }],
+    maintenance: [{ id: "maintenance", name: "Database upgrade", status: "scheduled", impact: "maintenance", updatedAt: "2026-01-02T03:00:00.000Z", scheduledFor: "2026-01-02T05:00:00.000Z" }],
+  };
+  const svg = dashboardSVG([source]);
+  assert.match(svg, /fill="#202d40"/);
+  assert.match(svg, /INCIDENT/);
+  assert.match(svg, /MAINTENANCE/);
+  assert.match(svg, /Elevated error rate/);
+  assert.match(svg, /Database upgrade/);
+  assert.match(svg, /Starts 2026-01-02 05:00 UTC/);
+  assert.match(svg, /Updated 03:00 UTC/);
+});
+
+test("shared event panel escapes names and gives scheduled time a separate visual line", () => {
+  const panel = svgEventPanel({ x: 0, y: 0, width: 600, height: 72, scale: 1, events: [
+    { kind: "Maintenance", name: "Database <upgrade>", status: "scheduled", color: "#a78bfa", scheduledFor: "2026-01-02T05:00:00.000Z" },
+  ] });
+  assert.match(panel, /MAINTENANCE/);
+  assert.match(panel, /Database &lt;upgrade&gt;/);
+  assert.match(panel, /Starts 2026-01-02 05:00 UTC/);
+});
+
 test("SVG color attributes escape caller-provided values", () => {
   const hostileColor = '#fff" onload="alert(1)';
   const fragments = [
@@ -158,6 +184,7 @@ test("SVG color attributes escape caller-provided values", () => {
     svgPanel(0, 0, 10, 10, 1, hostileColor),
     svgStatusBadge(0, 0, 80, 30, 1, "Status", hostileColor),
     svgServiceRow({ x: 0, y: 12, right: 200, scale: 1, name: "Service", status: "Up", color: hostileColor }),
+    svgEventPanel({ x: 0, y: 0, width: 240, height: 58, scale: 1, events: [{ kind: "Incident", name: "Service", status: "investigating", color: hostileColor }] }),
   ];
   for (const fragment of fragments) {
     assert.doesNotMatch(fragment, /onload="|<script\b/i);
@@ -185,7 +212,7 @@ test("overflow counts only omitted services and reports hidden incidents explici
   };
   const svg = dashboardSVG([crowded]);
   assert.match(svg, /more services/);
-  assert.match(svg, /\+3 more active events/);
+  assert.match(svg, /\+1 more active events/);
 });
 
 test("renderer produces a valid dimensioned PNG and stable bytes", async () => {

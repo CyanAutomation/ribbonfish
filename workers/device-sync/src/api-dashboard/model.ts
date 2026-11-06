@@ -7,6 +7,7 @@ export interface DashboardIncident {
   status: string;
   impact: string;
   updatedAt: string | null;
+  scheduledFor?: string | null;
 }
 
 export interface EndpointCacheMetadata {
