@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { dashboardSVG, renderDashboardPNG } from "./render.ts";
-import { svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
+import { svgCheckHistory, svgGroupSummary, svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
 import type { DashboardSource } from "./model.ts";
 
 const sample: DashboardSource = { id: "source-1", provider: "uptime-kuma", displayName: "<SCRIPT>alert('x')</SCRIPT>", fetchedAt: "2026-01-01T00:00:00.000Z", freshness: "fresh", status: "operational", statusDescription: "All systems operational", incidents: [], maintenance: [], components: [
@@ -23,13 +23,15 @@ test("disabled sources are labelled separately and do not make active sources st
   const svg = dashboardSVG([sample, disabled]);
   assert.match(svg, />Disabled<\/text>/);
   assert.match(svg, /Source is disabled and not polled/);
+  assert.match(svg, /2 configured sources · 2 active services · 1 disabled source/);
+  assert.match(svg, /0 stale · 0 pending/);
   assert.doesNotMatch(svg, /One or more sources unavailable or stale/);
 });
 
 test("overflow and active event footer labels occupy separate rows", () => {
   const crowded: DashboardSource = {
     ...sample,
-    components: Array.from({ length: 100 }, (_, index) => ({ ...sample.components[0], id: String(index), name: `Component ${index}` })),
+    components: Array.from({ length: 100 }, (_, index) => ({ ...sample.components[0], id: String(index), name: `Component ${index}`, status: "down" })),
     incidents: [{ id: "incident-1", name: "Active incident", status: "investigating", impact: "major", updatedAt: null }],
   };
   const svg = dashboardSVG([crowded]);
@@ -73,9 +75,10 @@ test("small source sets use wide cards and identify the Kuma instance and update
   const cards = [...svg.matchAll(/<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)" rx="[\d.]+" fill="#142238" stroke="#344a66"/g)];
   assert.equal(cards.length, 2);
   assert.ok(Number(cards[0][3]) > 800, "two sources should use wide cards on a 1920px canvas");
+  assert.ok(Number(cards[0][4]) < 300, "short status summaries should use compact card heights");
   assert.match(svg, /monitor-west\.example\.org/);
   assert.match(svg, /monitor-east\.example\.org/);
-  assert.match(svg, /Fetched 12:34 UTC/);
+  assert.match(svg, /Updated 12:34 UTC/);
 });
 
 test("shared SVG primitives escape text and render status panels, dots, and badges", () => {
@@ -85,6 +88,67 @@ test("shared SVG primitives escape text and render status panels, dots, and badg
   assert.match(svgStatusDot(4, 5, 6, "#ff647c"), /<circle cx="4" cy="5" r="6" fill="#ff647c"\/>/);
   assert.match(svgStatusBadge(0, 0, 200, 50, 1, "Down", "#ff647c"), />Down<\/text>/);
   assert.match(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API <edge>", status: "Down", color: "#ff647c", latencyMs: 120 }), /API &lt;edge&gt;/);
+  assert.match(svgGroupSummary({ x: 10, y: 30, right: 600, scale: 1, label: "operational", count: 2, history: ["operational", "unknown"] }), />2 services operational<\/text>/);
+  assert.equal((svgCheckHistory({ x: 0, y: 0, width: 100, height: 8, states: ["operational", "down"] }).match(/<rect /g) ?? []).length, 2);
+  assert.doesNotMatch(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API", status: "Operational", color: "#20c997", latencyMs: 120 }), /120 ms/);
+});
+
+test("healthy services collapse into auditable group summaries and omit per-row latency", () => {
+  const healthy: DashboardSource = {
+    ...sample,
+    groups: [{ id: "g", name: "Primary group", order: 0 }],
+    components: Array.from({ length: 8 }, (_, index) => ({ ...sample.components[0], id: String(index), name: `Service ${index}`, latencyMs: 99 })),
+  };
+  const svg = dashboardSVG([healthy]);
+  assert.match(svg, /Primary group/);
+  assert.match(svg, /8 services operational/);
+  assert.doesNotMatch(svg, /99 ms|Service 0/);
+});
+
+test("Kuma group summaries show a labelled 24-hour check strip when history is available", () => {
+  const historical: DashboardSource = {
+    ...sample,
+    fetchedAt: "2026-01-02T03:05:00.000Z",
+    components: [{ ...sample.components[0], status: "operational", history: [
+      { at: "2026-01-01T04:00:00.000Z", status: "down" },
+      { at: "2026-01-02T03:04:00.000Z", status: "operational" },
+    ] }],
+  };
+  const svg = dashboardSVG([historical]);
+  assert.match(svg, />24h<\/text>/);
+  assert.match(svg, /<title>Recent checks<\/title>/);
+  assert.match(svg, /#ff647c/);
+});
+
+test("affected service rows retain a last sample timestamp while healthy rows summarize", () => {
+  const affected: DashboardSource = {
+    ...sample,
+    components: [
+      { ...sample.components[0], id: "api", name: "Public API", status: "down", sampledAt: "2026-01-01T12:34:00.000Z", statusChangedAt: "2026-01-01T12:30:00.000Z" },
+      { ...sample.components[0], id: "web", name: "Web", status: "operational" },
+      { ...sample.components[0], id: "jobs", name: "Job runner", status: "unknown", sampledAt: "2026-01-01T12:31:00.000Z" },
+    ],
+  };
+  const svg = dashboardSVG([affected]);
+  assert.match(svg, /Public API/);
+  assert.match(svg, /Down/);
+  assert.match(svg, /Since 12:30 UTC/);
+  assert.match(svg, /Checked 12:31 UTC/);
+  assert.doesNotMatch(svg, /Down · Since 12:30 UTC · Checked/);
+  assert.match(svg, /1 service operational/);
+  assert.doesNotMatch(svg, /87 ms/);
+});
+
+test("source and event freshness labels distinguish updates from failed checks", () => {
+  const source: DashboardSource = {
+    ...sample,
+    freshness: "stale",
+    fetchedAt: "2026-01-01T12:34:00.000Z",
+    incidents: [{ id: "incident", name: "API interruption", status: "investigating", impact: "major", updatedAt: "2026-01-01T12:20:00.000Z" }],
+  };
+  const svg = dashboardSVG([source]);
+  assert.match(svg, /Last check 12:34 UTC/);
+  assert.match(svg, /Updated 12:20 UTC/);
 });
 
 test("SVG color attributes escape caller-provided values", () => {
@@ -110,13 +174,13 @@ test("affected services appear before operational services within a group", () =
     ],
   };
   const svg = dashboardSVG([mixed]);
-  assert.ok(svg.indexOf("Failed service") < svg.indexOf("Healthy service"));
+  assert.ok(svg.indexOf("Failed service") < svg.indexOf("1 service operational"));
 });
 
 test("overflow counts only omitted services and reports hidden incidents explicitly", () => {
   const crowded: DashboardSource = {
     ...sample,
-    components: Array.from({ length: 100 }, (_, index) => ({ ...sample.components[0], id: String(index), name: `Component ${index}` })),
+    components: Array.from({ length: 100 }, (_, index) => ({ ...sample.components[0], id: String(index), name: `Component ${index}`, status: "down" })),
     incidents: Array.from({ length: 4 }, (_, index) => ({ id: `incident-${index}`, name: `Active incident ${index}`, status: "investigating", impact: "major", updatedAt: null })),
   };
   const svg = dashboardSVG([crowded]);

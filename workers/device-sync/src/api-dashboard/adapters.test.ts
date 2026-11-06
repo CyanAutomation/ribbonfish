@@ -34,6 +34,11 @@ test("Uptime Kuma maps latest heartbeat, group membership, latency, events and e
     { name: "Worker API", groupName: "Second group", status: "maintenance", latencyMs: 12 },
   ]);
   assert.equal(source.components[0].sampledAt, "2026-01-02T03:04:05.000Z");
+  assert.equal(source.components[0].statusChangedAt, "2026-01-02T03:04:05.000Z");
+  assert.deepEqual(source.components[0].history, [
+    { at: "2026-01-02T03:03:00.000Z", status: "down" },
+    { at: "2026-01-02T03:04:05.000Z", status: "operational" },
+  ]);
   assert.equal(source.components[0].groupOrder, 0);
   assert.equal(source.components[0].componentOrder, 0);
   assert.equal(source.incidents.length, 1);
@@ -132,6 +137,7 @@ test("Uptime Kuma validators are independent for configuration and heartbeats", 
   assert.equal(heartbeatValidator, '"beat-v1"');
   assert.equal(second.components[0].sampledAt, first.components[0].sampledAt, "304 keeps original monitor sample time");
   assert.equal(second.components[0].status, "stale", "revalidation never refreshes monitor health timestamps");
+  assert.deepEqual(second.components[0].history, first.components[0].history, "304 keeps the prior heartbeat history");
   assert.equal(second.freshness, "stale");
   assert.equal(second.fetchedAt, "2026-01-02T03:20:00.000Z");
 });
