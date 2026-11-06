@@ -235,12 +235,14 @@ export async function fetchSource(config: SourceConfig, allowlist: string, fetch
           .sort((a: any, b: any) => Date.parse(a.at) - Date.parse(b.at));
         const latest = records.at(-1);
         const latestStatus = latest ? kumaHealth(latest.beat.status) : undefined;
-        const previousDifferentStatus = latest ? [...records.slice(0, -1)].reverse().find((item: any) => kumaHealth(item.beat.status) !== latestStatus) : undefined;
+        let currentRunStart = records.length - 1;
+        while (currentRunStart > 0 && kumaHealth(records[currentRunStart - 1].beat.status) === latestStatus) currentRunStart -= 1;
+        const statusChangedAt = currentRunStart > 0 ? records[currentRunStart].at : undefined;
         const history = records.map((item: any) => ({ at: item.at as string, status: kumaHealth(item.beat.status) }));
         return { ...definition, status: latest ? kumaHealth(latest.beat.status) : "unknown",
           ...(typeof latest?.beat.ping === "number" && Number.isFinite(latest.beat.ping) && latest.beat.ping >= 0 && latest.beat.ping <= 600_000 ? { latencyMs: latest.beat.ping } : {}),
           sampledAt: latest?.at ?? null,
-          ...(previousDifferentStatus ? { statusChangedAt: latest!.at } : {}),
+          ...(statusChangedAt ? { statusChangedAt } : {}),
           ...(history.length ? { history } : {}) };
       });
       const statusData = statusResponse.notModified ? null : record(statusResponse.value);

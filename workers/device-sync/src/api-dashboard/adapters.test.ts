@@ -45,6 +45,20 @@ test("Uptime Kuma maps latest heartbeat, group membership, latency, events and e
   assert.equal(source.maintenance.length, 1);
 });
 
+test("Kuma state-change time is the first heartbeat in the current consecutive state run", async () => {
+  const [config, heartbeat] = await Promise.all([fixture("kuma-config.json"), fixture("kuma-heartbeat.json")]);
+  heartbeat.heartbeatList["101"] = [
+    { status: 0, time: "2026-01-02T03:01:00Z", ping: null },
+    { status: 1, time: "2026-01-02T03:02:00Z", ping: 80 },
+    { status: 0, time: "2026-01-02T03:03:00Z", ping: null },
+    { status: 1, time: "2026-01-02T03:04:00Z", ping: 87 },
+    { status: 1, time: "2026-01-02T03:04:30Z", ping: 89 },
+  ];
+  const source = await fetchSource(kumaConfig, allowed, async (input) => new Response(JSON.stringify(String(input).includes("heartbeat") ? heartbeat : config), { headers: { "Content-Type": "application/json" } }), new Date("2026-01-02T03:05:00Z"));
+  assert.equal(source.components[0].sampledAt, "2026-01-02T03:04:30.000Z");
+  assert.equal(source.components[0].statusChangedAt, "2026-01-02T03:04:00.000Z");
+});
+
 test("Atlassian Statuspage preserves groups and children without double-counting group relationships", async () => {
   const summary = await fixture("statuspage-summary.json");
   const source = await fetchSource({ id: "status-b", provider: "atlassian-statuspage", display_name: "Sample Status", enabled: true, hostname: "status-page.example.net" }, allowed,

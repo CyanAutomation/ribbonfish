@@ -87,10 +87,10 @@ test("shared SVG primitives escape text and render status panels, dots, and badg
   assert.match(svgPanel(1, 2, 30, 40, 1, "#20c997"), /stroke="#344a66"/);
   assert.match(svgStatusDot(4, 5, 6, "#ff647c"), /<circle cx="4" cy="5" r="6" fill="#ff647c"\/>/);
   assert.match(svgStatusBadge(0, 0, 200, 50, 1, "Down", "#ff647c"), />Down<\/text>/);
-  assert.match(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API <edge>", status: "Down", color: "#ff647c", latencyMs: 120 }), /API &lt;edge&gt;/);
+  assert.match(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API <edge>", status: "Down", color: "#ff647c" }), /API &lt;edge&gt;/);
   assert.match(svgGroupSummary({ x: 10, y: 30, right: 600, scale: 1, label: "operational", count: 2, history: ["operational", "unknown"] }), />2 services operational<\/text>/);
   assert.equal((svgCheckHistory({ x: 0, y: 0, width: 100, height: 8, states: ["operational", "down"] }).match(/<rect /g) ?? []).length, 2);
-  assert.doesNotMatch(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API", status: "Operational", color: "#20c997", latencyMs: 120 }), /120 ms/);
+  assert.doesNotMatch(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API", status: "Operational", color: "#20c997" }), /120 ms/);
 });
 
 test("healthy services collapse into auditable group summaries and omit per-row latency", () => {
