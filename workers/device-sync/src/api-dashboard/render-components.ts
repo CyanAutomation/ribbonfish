@@ -11,6 +11,25 @@ export function svgStatusDot(cx: number, cy: number, radius: number, color: stri
   return `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="${svgText(color)}"/>`;
 }
 
+const healthLegendItems = [
+  ["Operational", "#20c997"], ["Degraded", "#f6c453"], ["Down", "#ff647c"],
+  ["Maintenance", "#a78bfa"], ["Pending", "#60a5fa"], ["Unknown", "#94a3b8"], ["Stale", "#fb923c"],
+] as const;
+
+/** Shared, visible status key for dashboards that use color to encode health. */
+export function svgHealthLegend(x: number, y: number, width: number, scale: number): string {
+  const s = (value: number) => value * scale;
+  const labelWidth = s(110);
+  const itemWidth = (width - labelWidth) / healthLegendItems.length;
+  let result = `<g role="group" aria-label="Status key"><text x="${x}" y="${y}" fill="#b9c9dc" font-size="${s(18)}" font-weight="700">Status key</text>`;
+  healthLegendItems.forEach(([label, color], index) => {
+    const itemX = x + labelWidth + index * itemWidth;
+    result += svgStatusDot(itemX + s(5), y - s(6), s(5), color);
+    result += `<text x="${itemX + s(16)}" y="${y}" fill="#d0dbea" font-size="${s(18)}">${label}</text>`;
+  });
+  return `${result}</g>`;
+}
+
 export function svgPanel(x: number, y: number, width: number, height: number, scale: number, accentColor: string): string {
   return `<rect x="${x}" y="${y}" width="${width}" height="${height}" rx="${18 * scale}" fill="#142238" stroke="#344a66" stroke-width="${2 * scale}"/><rect x="${x}" y="${y}" width="${7 * scale}" height="${height}" rx="${4 * scale}" fill="${svgText(accentColor)}"/>`;
 }
@@ -24,9 +43,9 @@ export function svgFreshnessBadge(x: number, y: number, scale: number, label: st
   return `${svgStatusDot(x, y - 4 * scale, 4 * scale, color)}<text x="${x + 12 * scale}" y="${y}" fill="${svgText(color)}" font-size="${13 * scale}" font-weight="700">${svgText(label)}</text>`;
 }
 
-export function svgServiceRow(input: { x: number; y: number; right: number; scale: number; name: string; status: string; color: string; statusMeta?: string; compact?: boolean }): string {
-  const { x, y, right, scale, name, status, color, statusMeta, compact = false } = input;
-  const statusLabel = status === "Operational" ? "" : [status, statusMeta].filter(Boolean).join(" · ");
+export function svgServiceRow(input: { x: number; y: number; right: number; scale: number; name: string; status: string; color: string; statusMeta?: string; compact?: boolean; showStatus?: boolean }): string {
+  const { x, y, right, scale, name, status, color, statusMeta, compact = false, showStatus = false } = input;
+  const statusLabel = status === "Operational" && !showStatus ? "" : [status, statusMeta].filter(Boolean).join(" · ");
   const statusCharWidth = scale * (compact ? 6.5 : 8.5);
   const maxStatusChars = Math.floor((right - x) * .48 / statusCharWidth);
   const shownStatus = statusLabel ? truncateText(statusLabel, maxStatusChars) : "";
@@ -43,8 +62,9 @@ export function svgGroupSummary(input: { x: number; y: number; right: number; sc
   const plural = count === 1 ? "service" : "services";
   let result = `<text x="${x}" y="${y}" fill="#a9d9ca" font-size="${scale * 13}">${svgText(`${count} ${plural} ${label}`)}</text>`;
   if (history.length) {
-    result += `<text x="${right - scale * 156}" y="${y}" text-anchor="end" fill="#8497ad" font-size="${scale * 10}">24h</text>`;
-    result += svgCheckHistory({ x: right - scale * 150, y: y - scale * 10, width: scale * 144, height: scale * 10, states: history, scale });
+    result += `<text x="${right - scale * 178}" y="${y}" text-anchor="end" fill="#c0cede" font-size="${scale * 14}">24h</text>`;
+    result += svgCheckHistory({ x: right - scale * 166, y: y - scale * 10, width: scale * 136, height: scale * 10, states: history, scale });
+    result += `<text x="${right}" y="${y}" text-anchor="end" fill="#c0cede" font-size="${scale * 12}">Now</text>`;
   }
   return result;
 }
@@ -96,5 +116,7 @@ export function svgCheckHistory(input: { x: number; y: number; width: number; he
   if (!states.length) return "";
   const gap = scale * 2;
   const cellWidth = (width - gap * (states.length - 1)) / states.length;
-  return `<g aria-label="Recent checks"><title>Recent checks</title>${states.map((state, index) => `<rect x="${x + index * (cellWidth + gap)}" y="${y}" width="${cellWidth}" height="${height}" rx="${scale * 2}" fill="${palette[state] ?? palette.unknown}"/>`).join("")}</g>`;
+  const labels: Record<string, string> = { operational: "Operational", degraded: "Degraded", down: "Down", maintenance: "Maintenance", pending: "Pending", unknown: "Unknown", stale: "Stale" };
+  const historyDescription = `Recent checks from 24 hours ago to now: ${states.map((state) => labels[state] ?? "Unknown").join(", ")}`;
+  return `<g role="img" aria-label="${svgText(historyDescription)}"><title>${svgText(historyDescription)}</title>${states.map((state, index) => `<rect x="${x + index * (cellWidth + gap)}" y="${y}" width="${cellWidth}" height="${height}" rx="${scale * 2}" fill="${palette[state] ?? palette.unknown}"/>`).join("")}</g>`;
 }
