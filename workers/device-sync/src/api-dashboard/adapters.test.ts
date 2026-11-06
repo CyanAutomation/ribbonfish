@@ -8,6 +8,22 @@ const fixture = async (name: string) => JSON.parse(await readFile(new URL(`./fix
 const kumaConfig = { id: "kuma-a", provider: "uptime-kuma" as const, display_name: "Sample Production", enabled: true, hostname: "status.example.org", slug: "sample-prod" };
 const allowed = "status.example.org,status-page.example.net";
 
+test("Uptime Kuma accepts up to 8,000 heartbeat records and explains when the limit is exceeded", async () => {
+  const config = await fixture("kuma-config.json");
+  const makeFetcher = (recordCount: number): typeof fetch => async (input) => {
+    const heartbeat = { heartbeatList: { unused: Array.from({ length: recordCount }, () => ({ status: 1, time: "2026-01-02T03:04:05Z" })) } };
+    return new Response(JSON.stringify(String(input).includes("heartbeat") ? heartbeat : config), { headers: { "Content-Type": "application/json" } });
+  };
+
+  const atLimit = await fetchSource(kumaConfig, allowed, makeFetcher(8_000), new Date("2026-01-02T03:05:00Z"));
+  assert.equal(atLimit.freshness, "fresh");
+
+  const overLimit = await fetchSource(kumaConfig, allowed, makeFetcher(8_001), new Date("2026-01-02T03:05:00Z"));
+  assert.equal(overLimit.freshness, "unavailable");
+  assert.match(overLimit.error ?? "", /8,001 heartbeat records; dashboard limit is 8,000/i);
+  assert.match(overLimit.error ?? "", /reduce monitor history or count/i);
+});
+
 test("Uptime Kuma maps latest heartbeat, group membership, latency, events and empty history", async () => {
   const [config, heartbeat] = await Promise.all([fixture("kuma-config.json"), fixture("kuma-heartbeat.json")]);
   const source = await fetchSource(kumaConfig, allowed, async (input) => new Response(JSON.stringify(String(input).includes("heartbeat") ? heartbeat : config), { headers: { "Content-Type": "application/json" } }), new Date("2026-01-02T03:05:00Z"));

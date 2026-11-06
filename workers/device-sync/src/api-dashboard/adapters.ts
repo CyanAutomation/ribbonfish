@@ -8,7 +8,7 @@ const MAX_RESPONSE_BYTES = 1_000_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 const MAX_MONITORS = 500;
 const MAX_GROUPS = 40;
-const MAX_HEARTBEAT_RECORDS = 5_000;
+const MAX_HEARTBEAT_RECORDS = 8_000;
 
 type FetchTelemetry = ApiSourceRequestStats;
 type JSONResponse = { value: any; cache: EndpointCacheMetadata | null; notModified: boolean; status: number };
@@ -219,7 +219,9 @@ export async function fetchSource(config: SourceConfig, allowlist: string, fetch
         heartbeatMap = record(heartbeatData.heartbeatList);
       }
       const heartbeatCount = Object.values(heartbeatMap).reduce((sum, value) => sum + (Array.isArray(value) ? value.length : 0), 0);
-      if (heartbeatCount > MAX_HEARTBEAT_RECORDS) throw new Error("Status page exceeds the heartbeat limit.");
+      if (heartbeatCount > MAX_HEARTBEAT_RECORDS) {
+        throw new Error(`Kuma status page returned ${heartbeatCount.toLocaleString("en-US")} heartbeat records; dashboard limit is ${MAX_HEARTBEAT_RECORDS.toLocaleString("en-US")}. Reduce monitor history or count.`);
+      }
       const priorByID = new Map((previous?.components ?? []).map((component) => [component.id, component]));
       components = definitions.map((definition) => {
         if (heartbeatResponse.notModified) {
