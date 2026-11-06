@@ -79,7 +79,7 @@ function card(source: DashboardSource, x: number, y: number, width: number, heig
   svg += `<text x="${left}" y="${y + s(compact ? 25 : 42)}" fill="#f5f8fc" font-size="${s(compact ? 17 : 26)}" font-weight="700">${svgText(truncateText(source.displayName, Math.floor((width - s(185)) / s(compact ? 10 : 17))))}</text>`;
   svg += svgStatusDot(x + width - s(150), y + s(compact ? 20 : 34), s(7), colors[health]);
   const sourceStatusLabel = source.disabled ? "Disabled" : healthLabel[health];
-  svg += `<text x="${x + width - s(136)}" y="${y + s(compact ? 26 : 41)}" fill="${colors[health]}" font-size="${s(compact ? 13 : 16)}">${svgText(sourceStatusLabel)}</text>`;
+  svg += `<text x="${x + width - s(136)}" y="${y + s(compact ? 26 : 41)}" fill="${svgText(colors[health])}" font-size="${s(compact ? 13 : 16)}">${svgText(sourceStatusLabel)}</text>`;
   if (!compact) {
     const sourceIdentity = source.hostname ?? (source.provider === "uptime-kuma" ? "Uptime Kuma" : "Statuspage");
     const updated = formatFetched(source.fetchedAt);

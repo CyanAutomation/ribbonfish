@@ -87,6 +87,20 @@ test("shared SVG primitives escape text and render status panels, dots, and badg
   assert.match(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API <edge>", status: "Down", color: "#ff647c", latencyMs: 120 }), /API &lt;edge&gt;/);
 });
 
+test("SVG color attributes escape caller-provided values", () => {
+  const hostileColor = '#fff" onload="alert(1)';
+  const fragments = [
+    svgStatusDot(0, 0, 2, hostileColor),
+    svgPanel(0, 0, 10, 10, 1, hostileColor),
+    svgStatusBadge(0, 0, 80, 30, 1, "Status", hostileColor),
+    svgServiceRow({ x: 0, y: 12, right: 200, scale: 1, name: "Service", status: "Up", color: hostileColor }),
+  ];
+  for (const fragment of fragments) {
+    assert.doesNotMatch(fragment, /onload="|<script\b/i);
+    assert.match(fragment, /&quot; onload=&quot;/);
+  }
+});
+
 test("affected services appear before operational services within a group", () => {
   const mixed: DashboardSource = {
     ...sample,
