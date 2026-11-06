@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { dashboardSVG, renderDashboardPNG } from "./render.ts";
+import { svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
 import type { DashboardSource } from "./model.ts";
 
 const sample: DashboardSource = { id: "source-1", provider: "uptime-kuma", displayName: "<SCRIPT>alert('x')</SCRIPT>", fetchedAt: "2026-01-01T00:00:00.000Z", freshness: "fresh", status: "operational", statusDescription: "All systems operational", incidents: [], maintenance: [], components: [
@@ -56,9 +57,46 @@ test("provider group parents render as headings instead of duplicate monitored s
 
 test("long text uses supported ASCII ellipses rather than missing font glyphs", () => {
   const longName = { ...sample, displayName: "Synthetic source name with an intentionally long label", components: [{ ...sample.components[0], name: "Synthetic service name with many details that must be shortened to fit the screen" }] };
-  const svg = dashboardSVG([longName]);
+  const svg = dashboardSVG([longName, ...Array.from({ length: 6 }, (_, index) => ({ ...sample, id: `source-${index + 2}` }))]);
   assert.match(svg, /\.\.\./);
   assert.doesNotMatch(svg, /…/);
+});
+
+test("small source sets use wide cards and identify the Kuma instance and update time", () => {
+  const kuma: DashboardSource = {
+    ...sample,
+    displayName: "Operations status",
+    hostname: "monitor-west.example.org",
+    fetchedAt: "2026-01-01T12:34:00.000Z",
+  };
+  const svg = dashboardSVG([kuma, { ...kuma, id: "source-2", displayName: "Operations status", hostname: "monitor-east.example.org" }]);
+  const cards = [...svg.matchAll(/<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)" rx="[\d.]+" fill="#142238" stroke="#344a66"/g)];
+  assert.equal(cards.length, 2);
+  assert.ok(Number(cards[0][3]) > 800, "two sources should use wide cards on a 1920px canvas");
+  assert.match(svg, /monitor-west\.example\.org/);
+  assert.match(svg, /monitor-east\.example\.org/);
+  assert.match(svg, /Fetched 12:34 UTC/);
+});
+
+test("shared SVG primitives escape text and render status panels, dots, and badges", () => {
+  assert.equal(svgText("<service & 'status'>"), "&lt;service &amp; &apos;status&apos;&gt;");
+  assert.equal(truncateText("long-name", 6), "lon...");
+  assert.match(svgPanel(1, 2, 30, 40, 1, "#20c997"), /stroke="#344a66"/);
+  assert.match(svgStatusDot(4, 5, 6, "#ff647c"), /<circle cx="4" cy="5" r="6" fill="#ff647c"\/>/);
+  assert.match(svgStatusBadge(0, 0, 200, 50, 1, "Down", "#ff647c"), />Down<\/text>/);
+  assert.match(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API <edge>", status: "Down", color: "#ff647c", latencyMs: 120 }), /API &lt;edge&gt;/);
+});
+
+test("affected services appear before operational services within a group", () => {
+  const mixed: DashboardSource = {
+    ...sample,
+    components: [
+      { ...sample.components[0], id: "healthy", name: "Healthy service", status: "operational", componentOrder: 0 },
+      { ...sample.components[0], id: "failed", name: "Failed service", status: "down", componentOrder: 1 },
+    ],
+  };
+  const svg = dashboardSVG([mixed]);
+  assert.ok(svg.indexOf("Failed service") < svg.indexOf("Healthy service"));
 });
 
 test("overflow counts only omitted services and reports hidden incidents explicitly", () => {
