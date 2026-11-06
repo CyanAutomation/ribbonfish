@@ -430,6 +430,7 @@ test("API dashboard captures bypass Browser Run budgets and reuse the shared pla
   const original = globalThis.fetch;
   let failApi = false;
   try {
+    const captureTime = Date.now();
     let browserCalls = 0;
     let puts = 0;
     globalThis.fetch = async () => failApi
@@ -464,9 +465,9 @@ test("API dashboard captures bypass Browser Run budgets and reuse the shared pla
     }), env);
     assert.equal(createdResponse.status, 201, await createdResponse.clone().text());
     const dashboard = await createdResponse.json();
-    const first = await enqueueCapture(dashboard.capture_id, env);
+    const first = await enqueueCapture(dashboard.capture_id, env, { now: captureTime });
     const message = { body: { job_id: first.job_id }, ack() {}, retry() { throw new Error("unexpected retry"); } };
-    await queueHandler({ messages: [message] }, env);
+    await handleCaptureQueue({ messages: [message] }, env, captureTime);
     assert.equal(sqlite.prepare("SELECT status, error FROM capture_jobs WHERE job_id = ?").get(first.job_id).status, "succeeded", sqlite.prepare("SELECT error FROM capture_jobs WHERE job_id = ?").get(first.job_id).error);
     assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(first.job_id).status, "succeeded");
     assert.equal(sqlite.prepare("SELECT result_kind FROM capture_jobs WHERE job_id = ?").get(first.job_id).result_kind, "screenshot");
@@ -482,8 +483,8 @@ test("API dashboard captures bypass Browser Run budgets and reuse the shared pla
     assert.equal(standaloneApiStatusWrites, 0, "API status cache writes are batched with capture finalization");
     const firstPutCount = puts;
 
-    const second = await enqueueCapture(dashboard.capture_id, env);
-    await queueHandler({ messages: [{ body: { job_id: second.job_id }, ack() {}, retry() { throw new Error("unexpected retry"); } }] }, env);
+    const second = await enqueueCapture(dashboard.capture_id, env, { now: captureTime });
+    await handleCaptureQueue({ messages: [{ body: { job_id: second.job_id }, ack() {}, retry() { throw new Error("unexpected retry"); } }] }, env, captureTime);
     assert.equal(sqlite.prepare("SELECT api_asset_reused FROM capture_jobs WHERE job_id = ?").get(second.job_id).api_asset_reused, 1);
     assert.equal(sqlite.prepare("SELECT api_render_ms FROM capture_jobs WHERE job_id = ?").get(second.job_id).api_render_ms, 0, "unchanged visible status skips rasterization");
     assert.equal(puts, firstPutCount, "unchanged dashboard content reuses its current R2 asset");
@@ -520,9 +521,9 @@ test("API dashboard captures bypass Browser Run budgets and reuse the shared pla
     assert.equal(playlist.assets[0].sha256, current.current_sha256);
 
     failApi = true;
-    const failed = await enqueueCapture(dashboard.capture_id, env);
+    const failed = await enqueueCapture(dashboard.capture_id, env, { now: captureTime });
     let failureRetryDelay = 0;
-    await queueHandler({ messages: [{ body: { job_id: failed.job_id }, ack() {}, retry(options) { failureRetryDelay = options.delaySeconds; } }] }, env);
+    await handleCaptureQueue({ messages: [{ body: { job_id: failed.job_id }, ack() {}, retry(options) { failureRetryDelay = options.delaySeconds; } }] }, env, captureTime);
     assert.equal(failureRetryDelay, 60);
     assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(failed.job_id).status, "queued");
     assert.deepEqual({ ...sqlite.prepare("SELECT api_failed_request_count, api_outcome FROM capture_jobs WHERE job_id = ?").get(failed.job_id) }, { api_failed_request_count: 1, api_outcome: "all_failed" });
@@ -533,10 +534,10 @@ test("API dashboard captures bypass Browser Run budgets and reuse the shared pla
       width: 1920, height: 1080,
       sources: [{ id: "source-one", provider: "atlassian-statuspage", display_name: "Sample services", enabled: true, hostname: "private.internal" }],
     }), dashboard.capture_id);
-    const invalidConfig = await enqueueCapture(dashboard.capture_id, env);
+    const invalidConfig = await enqueueCapture(dashboard.capture_id, env, { now: captureTime });
     let invalidConfigRetried = false;
     let invalidConfigAcked = false;
-    await queueHandler({ messages: [{ body: { job_id: invalidConfig.job_id }, ack() { invalidConfigAcked = true; }, retry() { invalidConfigRetried = true; } }] }, env);
+    await handleCaptureQueue({ messages: [{ body: { job_id: invalidConfig.job_id }, ack() { invalidConfigAcked = true; }, retry() { invalidConfigRetried = true; } }] }, env, captureTime);
     assert.equal(invalidConfigRetried, false, "permanent source configuration failures should not be retried");
     assert.equal(invalidConfigAcked, true);
     assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(invalidConfig.job_id).status, "failed");
