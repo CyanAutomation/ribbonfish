@@ -438,6 +438,24 @@ test("API dashboard captures bypass Browser Run budgets and reuse the shared pla
     const { env, messages, objects } = environment(sqlite, { async quickAction() { browserCalls++; throw new Error("browser must not run"); } });
     env.API_STATUS_ALLOWED_HOSTS = "status.example.org";
     env.DAILY_BROWSER_BUDGET_MS = "1";
+    let standaloneApiStatusWrites = 0;
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    env.DB.prepare = (sql) => {
+      const statement = originalPrepare(sql);
+      if (sql !== "UPDATE capture_targets SET api_status_json = ? WHERE capture_id = ?") return statement;
+      return {
+        bind(...values) {
+          const bound = statement.bind(...values);
+          return {
+            ...bound,
+            async run() {
+              standaloneApiStatusWrites++;
+              return bound.run();
+            },
+          };
+        },
+      };
+    };
     const originalPut = env.ASSETS.put;
     env.ASSETS.put = async (...args) => { puts++; return originalPut(...args); };
     const createdResponse = await handleAdminRequest(await request("/admin/api/api-dashboards", {
@@ -461,6 +479,7 @@ test("API dashboard captures bypass Browser Run budgets and reuse the shared pla
     const current = sqlite.prepare("SELECT current_sha256, current_size, api_status_json FROM capture_targets WHERE capture_id = ?").get(dashboard.capture_id);
     assert.ok(objects.has(`assets/${current.current_sha256}`));
     assert.equal(JSON.parse(current.api_status_json)[0].freshness, "fresh");
+    assert.equal(standaloneApiStatusWrites, 0, "API status cache writes are batched with capture finalization");
     const firstPutCount = puts;
 
     const second = await enqueueCapture(dashboard.capture_id, env);
