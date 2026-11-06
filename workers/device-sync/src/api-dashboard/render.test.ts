@@ -140,6 +140,24 @@ test("large healthy Uptime Kuma groups show representative monitors and summariz
   assert.match(svg, /99 ms/);
 });
 
+test("large-group history includes checks from both visible and overflow monitors", () => {
+  const grouped: DashboardSource = {
+    ...sample,
+    groups: [{ id: "g", name: "Primary group", order: 0 }],
+    components: Array.from({ length: 32 }, (_, index) => ({
+      ...sample.components[0],
+      id: String(index),
+      name: `Service ${index}`,
+      history: [{
+        at: index === 0 ? "2025-12-31T23:00:00.000Z" : "2025-12-31T23:10:00.000Z",
+        status: index === 0 ? "down" as const : "operational" as const,
+      }],
+    })),
+  };
+  const svg = dashboardSVG([grouped]);
+  assert.match(svg, /Recent checks from 24 hours ago to now:[^\"]*Down/);
+});
+
 test("small Uptime Kuma groups list monitor names, state, and response time", () => {
   const smallGroup: DashboardSource = {
     ...sample,

@@ -77,7 +77,7 @@ function buildServiceRows(source: DashboardSource): ServiceDisplayRow[] {
     } else if (source.provider === "uptime-kuma") {
       const visible = components.slice(0, 16);
       for (const component of visible) rows.push({ kind: "service", component });
-      rows.push({ kind: "summary", count: components.length - visible.length, history: recentGroupChecks(components.slice(visible.length), source.fetchedAt) });
+      rows.push({ kind: "summary", count: components.length - visible.length, history: recentGroupChecks(components, source.fetchedAt) });
     } else rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components, source.fetchedAt) });
   };
   const seenServices = new Set<string>();
