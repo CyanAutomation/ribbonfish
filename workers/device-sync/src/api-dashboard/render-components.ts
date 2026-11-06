@@ -19,6 +19,11 @@ export function svgStatusBadge(x: number, y: number, width: number, height: numb
   return `<rect x="${x}" y="${y}" width="${width}" height="${height}" rx="${18 * scale}" fill="#142238" stroke="${svgText(color)}" stroke-width="${2 * scale}"/>${svgStatusDot(x + 34 * scale, y + height / 2, 9 * scale, color)}<text x="${x + 56 * scale}" y="${y + height / 2 + 7 * scale}" fill="${svgText(color)}" font-family="Ribbon Sans" font-size="${20 * scale}" font-weight="700">${svgText(label)}</text>`;
 }
 
+/** Compact, reusable feed-health label kept visually distinct from service status. */
+export function svgFreshnessBadge(x: number, y: number, scale: number, label: string, color: string): string {
+  return `${svgStatusDot(x, y - 4 * scale, 4 * scale, color)}<text x="${x + 12 * scale}" y="${y}" fill="${svgText(color)}" font-size="${13 * scale}" font-weight="700">${svgText(label)}</text>`;
+}
+
 export function svgServiceRow(input: { x: number; y: number; right: number; scale: number; name: string; status: string; color: string; statusMeta?: string; compact?: boolean }): string {
   const { x, y, right, scale, name, status, color, statusMeta, compact = false } = input;
   const statusLabel = status === "Operational" ? "" : [status, statusMeta].filter(Boolean).join(" · ");

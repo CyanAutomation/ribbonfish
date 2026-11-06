@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { dashboardSVG, renderDashboardPNG } from "./render.ts";
-import { svgCheckHistory, svgEventPanel, svgGroupSummary, svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
+import { svgCheckHistory, svgEventPanel, svgFreshnessBadge, svgGroupSummary, svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
 import type { DashboardSource } from "./model.ts";
 
 const sample: DashboardSource = { id: "source-1", provider: "uptime-kuma", displayName: "<SCRIPT>alert('x')</SCRIPT>", fetchedAt: "2026-01-01T00:00:00.000Z", freshness: "fresh", status: "operational", statusDescription: "All systems operational", incidents: [], maintenance: [], components: [
@@ -24,7 +24,8 @@ test("disabled sources are labelled separately and do not make active sources st
   assert.match(svg, />Disabled<\/text>/);
   assert.match(svg, /Source is disabled and not polled/);
   assert.match(svg, /2 configured sources · 2 active services · 1 disabled source/);
-  assert.match(svg, /0 stale · 0 pending/);
+  assert.match(svg, /1 unknown/);
+  assert.doesNotMatch(svg, /0 stale|0 pending/);
   assert.doesNotMatch(svg, /One or more sources unavailable or stale/);
 });
 
@@ -78,7 +79,7 @@ test("small source sets use wide cards and identify the Kuma instance and update
   assert.ok(Number(cards[0][4]) < 300, "short status summaries should use compact card heights");
   assert.match(svg, /monitor-west\.example\.org/);
   assert.match(svg, /monitor-east\.example\.org/);
-  assert.match(svg, /Updated 12:34 UTC/);
+  assert.match(svg, /Checked 12:34 UTC/);
 });
 
 test("shared SVG primitives escape text and render status panels, dots, and badges", () => {
@@ -147,8 +148,45 @@ test("source and event freshness labels distinguish updates from failed checks",
     incidents: [{ id: "incident", name: "API interruption", status: "investigating", impact: "major", updatedAt: "2026-01-01T12:20:00.000Z" }],
   };
   const svg = dashboardSVG([source]);
-  assert.match(svg, /Last check 12:34 UTC/);
+  assert.match(svg, /Checked 12:34 UTC/);
   assert.match(svg, /Updated 12:20 UTC/);
+  assert.match(svg, /Services: Unknown/);
+  assert.match(svg, /Data stale/);
+});
+
+test("Statuspage provider status and dashboard feed freshness have separate labels", () => {
+  const source: DashboardSource = {
+    ...sample,
+    provider: "atlassian-statuspage",
+    statusDescription: "All Systems Operational",
+    status: "operational",
+    freshness: "fresh",
+    hostname: "status.example.com",
+    fetchedAt: "2026-01-01T12:34:00.000Z",
+    components: [{ ...sample.components[0], status: "operational" }],
+  };
+  const svg = dashboardSVG([source]);
+  assert.match(svg, /Services: Operational/);
+  assert.match(svg, /Data fresh/);
+  assert.match(svg, /Checked 12:34 UTC/);
+  assert.match(svg, /All Systems Operational/);
+  assert.match(svg, /1 configured source · 1 active service · 1 service operational/);
+});
+
+test("unavailable feeds do not summarize old component data as operational", () => {
+  const unavailable: DashboardSource = {
+    ...sample,
+    provider: "atlassian-statuspage",
+    freshness: "unavailable",
+    status: "stale",
+    statusDescription: "Status source unavailable",
+    hostname: "status.example.com",
+    error: "Status API request failed.",
+  };
+  const svg = dashboardSVG([unavailable]);
+  assert.match(svg, /1 stale or unavailable source/);
+  assert.match(svg, /Feed unavailable/);
+  assert.doesNotMatch(svg, /2 active services · 2 services operational/);
 });
 
 test("Statuspage incidents and scheduled maintenance use a prominent event panel", () => {
@@ -177,12 +215,19 @@ test("shared event panel escapes names and gives scheduled time a separate visua
   assert.match(panel, /Starts 2026-01-02 05:00 UTC/);
 });
 
+test("freshness badge is a reusable, labelled SVG primitive for every feed state", () => {
+  assert.match(svgFreshnessBadge(10, 20, 1, "Data fresh", "#20c997"), /Data fresh/);
+  assert.match(svgFreshnessBadge(10, 20, 1, "Feed unavailable", "#ff647c"), /#ff647c/);
+  assert.doesNotMatch(svgFreshnessBadge(10, 20, 1, '<img onerror="x">', "#20c997"), /<img/);
+});
+
 test("SVG color attributes escape caller-provided values", () => {
   const hostileColor = '#fff" onload="alert(1)';
   const fragments = [
     svgStatusDot(0, 0, 2, hostileColor),
     svgPanel(0, 0, 10, 10, 1, hostileColor),
     svgStatusBadge(0, 0, 80, 30, 1, "Status", hostileColor),
+    svgFreshnessBadge(0, 20, 1, "Data fresh", hostileColor),
     svgServiceRow({ x: 0, y: 12, right: 200, scale: 1, name: "Service", status: "Up", color: hostileColor }),
     svgEventPanel({ x: 0, y: 0, width: 240, height: 58, scale: 1, events: [{ kind: "Incident", name: "Service", status: "investigating", color: hostileColor }] }),
   ];
