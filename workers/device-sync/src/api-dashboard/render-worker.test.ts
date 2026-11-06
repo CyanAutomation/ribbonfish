@@ -34,7 +34,7 @@ function visualScenarios(base: { width: number; height: number; sources: any[] }
   incident.sources[0].incidents = [{ id: "incident-active", name: "Elevated API response times", status: "investigating", impact: "minor", updatedAt: "2026-11-05T11:58:00.000Z" }];
   scenarios.push({ name: "active-incident", value: incident });
   const maintenance = clone();
-  maintenance.sources[1].maintenance = [{ id: "maintenance-active", name: "Scheduled database cluster maintenance", status: "in_progress", impact: "maintenance", updatedAt: "2026-11-05T11:45:00.000Z" }];
+  maintenance.sources[1].maintenance = [{ id: "maintenance-active", name: "Scheduled database cluster maintenance", status: "scheduled", impact: "maintenance", updatedAt: "2026-11-05T11:45:00.000Z", scheduledFor: "2026-11-06T02:00:00.000Z" }];
   maintenance.sources[1].components[0].status = "maintenance";
   scenarios.push({ name: "scheduled-maintenance", value: maintenance });
   const partial = clone();

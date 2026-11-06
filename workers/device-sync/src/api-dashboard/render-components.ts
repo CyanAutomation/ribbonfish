@@ -44,6 +44,47 @@ export function svgGroupSummary(input: { x: number; y: number; right: number; sc
   return result;
 }
 
+export interface SvgDashboardEvent {
+  kind: "Incident" | "Maintenance";
+  name: string;
+  status: string;
+  impact?: string;
+  color: string;
+  updatedAt?: string | null;
+  scheduledFor?: string | null;
+}
+
+function eventClock(value: string | null | undefined, includeDate = false): string | undefined {
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return undefined;
+  return includeDate ? `${date.toISOString().slice(0, 10)} ${date.toISOString().slice(11, 16)} UTC` : `${date.toISOString().slice(11, 16)} UTC`;
+}
+
+/** Shared, high-contrast event panel for active incidents and scheduled work. */
+export function svgEventPanel(input: { x: number; y: number; width: number; height: number; scale: number; events: SvgDashboardEvent[]; hiddenCount?: number }): string {
+  const { x, y, width, height, scale, events, hiddenCount = 0 } = input;
+  if (!events.length || width <= 0 || height <= 0) return "";
+  const s = (value: number) => value * scale;
+  let result = `<rect x="${x}" y="${y}" width="${width}" height="${height}" rx="${s(10)}" fill="#202d40"/>`;
+  events.forEach((event, index) => {
+    const rowY = y + s(7 + index * 44);
+    const titleBaseline = rowY + s(15);
+    const metaBaseline = rowY + s(33);
+    const title = `${event.kind.toUpperCase()} · ${event.name}`;
+    const meta = event.kind === "Maintenance"
+      ? [event.status.replace(/_/g, " "), event.scheduledFor ? `Starts ${eventClock(event.scheduledFor, true)}` : undefined, event.updatedAt ? `Updated ${eventClock(event.updatedAt)}` : undefined].filter(Boolean).join(" · ")
+      : [event.status.replace(/_/g, " "), event.impact ? `${event.impact} impact` : undefined, event.updatedAt ? `Updated ${eventClock(event.updatedAt)}` : undefined].filter(Boolean).join(" · ");
+    const isLast = index === events.length - 1;
+    const suffix = isLast && hiddenCount ? ` · +${hiddenCount} more active events` : "";
+    const maxChars = Math.max(8, Math.floor((width - s(48)) / s(8.5)));
+    result += `<rect x="${x}" y="${rowY}" width="${s(4)}" height="${s(34)}" rx="${s(2)}" fill="${svgText(event.color)}"/>`;
+    result += `<text x="${x + s(14)}" y="${titleBaseline}" fill="#f4f7fb" font-size="${s(15)}" font-weight="700">${svgText(truncateText(title, maxChars))}</text>`;
+    result += `<text x="${x + s(14)}" y="${metaBaseline}" fill="${svgText(event.color)}" font-size="${s(12)}">${svgText(truncateText(`${meta}${suffix}`, maxChars))}</text>`;
+  });
+  return result;
+}
+
 export function svgCheckHistory(input: { x: number; y: number; width: number; height: number; states: string[]; scale?: number }): string {
   const { x, y, width, height, states, scale = 1 } = input;
   const palette: Record<string, string> = { operational: "#20c997", degraded: "#f6c453", down: "#ff647c", maintenance: "#a78bfa", pending: "#60a5fa", unknown: "#64748b", stale: "#fb923c" };
