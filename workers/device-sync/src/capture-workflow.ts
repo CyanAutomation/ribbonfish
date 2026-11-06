@@ -389,8 +389,6 @@ async function processApiDashboardCapture(message: CaptureMessage, job: CaptureJ
     fetchMs = elapsedSince(fetchStarted);
     sourceStatus = sources;
     sourceMetrics = summarizeApiDashboardSources(sources);
-    await env.DB.prepare("UPDATE capture_targets SET api_status_json = ? WHERE capture_id = ?")
-      .bind(JSON.stringify(sources), job.capture_id).run();
     const available = sources.some((source) => !source.disabled && source.freshness !== "unavailable");
     if (!available) {
       throw new ApiDashboardCaptureError("All dashboard sources are unavailable; the last known-good image was retained.", sources.some((source) => source.retryableError === true));
