@@ -8,5 +8,5 @@
     { "id": "component-3", "name": "Unknown service", "status": "new_value" }
   ],
   "incidents": [{ "id": "incident-1", "name": "Elevated error rate", "status": "investigating", "impact": "minor", "updated_at": "2026-01-02T03:04:05Z" }],
-  "scheduled_maintenances": [{ "id": "maintenance-1", "name": "Database maintenance", "status": "in_progress", "impact": "maintenance" }]
+  "scheduled_maintenances": [{ "id": "maintenance-1", "name": "Database maintenance", "status": "scheduled", "impact": "maintenance", "scheduled_for": "2026-01-02T05:00:00Z", "updated_at": "2026-01-02T03:00:00Z" }]
 }
