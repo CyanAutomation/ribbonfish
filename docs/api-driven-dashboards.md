@@ -117,14 +117,18 @@ cosmetic current-time stamp, so an unchanged status image is byte stable.
 
 Healthy monitors are summarized by group with exact operational counts; affected
 rows sort ahead of those summaries, with excess rows counted in the overflow
-label. Kuma rows for down, degraded, or maintenance states show their last
-transition time when heartbeat history contains one. Pending, unknown, and stale
-rows show their latest sample time. The default dashboard omits individual ping latency.
+label. Small healthy Kuma groups list each monitor with its state and available
+response time. Larger healthy Kuma groups list up to 16 monitors and summarize
+the remainder. Kuma rows for down, degraded, or maintenance states show their
+last transition time when heartbeat history contains one. Pending, unknown, and
+stale rows show their latest sample time.
 Group summaries can show a 24-hour check strip from available Kuma heartbeats;
 missing two-hour buckets are shown as unknown, and the strip does not claim an
 uptime percentage. Shared SVG components in
 `src/api-dashboard/render-components.ts` provide escaped status dots, badges,
-panels, service rows, group summaries, event panels, and check-history strips.
+panels, service rows, group summaries, event panels, a named status key, and
+check-history strips. The status key names each health color, and history strips
+show their 24-hour-to-now direction.
 Incident and maintenance events have a dedicated high-contrast area on each
 source card. Scheduled maintenance keeps its start time separate from its last
 update and shows both when available. Major incidents use a stronger severity

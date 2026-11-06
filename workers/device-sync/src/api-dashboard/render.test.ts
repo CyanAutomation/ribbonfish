@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { dashboardSVG, renderDashboardPNG } from "./render.ts";
-import { svgCheckHistory, svgEventPanel, svgFreshnessBadge, svgGroupSummary, svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
+import { svgCheckHistory, svgEventPanel, svgFreshnessBadge, svgGroupSummary, svgHealthLegend, svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
 import type { DashboardSource } from "./model.ts";
 
 const sample: DashboardSource = { id: "source-1", provider: "uptime-kuma", displayName: "<SCRIPT>alert('x')</SCRIPT>", fetchedAt: "2026-01-01T00:00:00.000Z", freshness: "fresh", status: "operational", statusDescription: "All systems operational", incidents: [], maintenance: [], components: [
@@ -94,16 +94,66 @@ test("shared SVG primitives escape text and render status panels, dots, and badg
   assert.doesNotMatch(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API", status: "Operational", color: "#20c997" }), /120 ms/);
 });
 
-test("healthy services collapse into auditable group summaries and omit per-row latency", () => {
+test("health legend names every state so color is never the only status cue", () => {
+  const legend = svgHealthLegend(12, 24, 1000, 1);
+  for (const state of ["Operational", "Degraded", "Down", "Maintenance", "Pending", "Unknown", "Stale"]) {
+    assert.match(legend, new RegExp(state));
+  }
+  assert.match(legend, /Status key/);
+});
+
+test("history strip explains its time direction and each sampled status", () => {
+  const history = svgCheckHistory({ x: 10, y: 20, width: 144, height: 10, states: ["operational", "down"] });
+  assert.match(history, /24 hours ago/);
+  assert.match(history, /now/i);
+  assert.match(history, /Operational/);
+  assert.match(history, /Down/);
+});
+
+test("dashboard includes a visible status key and gives history strips a now label", () => {
+  const historical: DashboardSource = {
+    ...sample,
+    fetchedAt: "2026-01-02T03:05:00.000Z",
+    components: [{ ...sample.components[0], status: "operational", history: [
+      { at: "2026-01-01T04:00:00.000Z", status: "down" },
+      { at: "2026-01-02T03:04:00.000Z", status: "operational" },
+    ] }],
+  };
+  const svg = dashboardSVG([historical]);
+  assert.match(svg, /Status key/);
+  assert.match(svg, />Now</);
+  assert.match(svg, /24 hours ago/);
+});
+
+test("large healthy Uptime Kuma groups show representative monitors and summarize the remainder", () => {
   const healthy: DashboardSource = {
     ...sample,
     groups: [{ id: "g", name: "Primary group", order: 0 }],
-    components: Array.from({ length: 8 }, (_, index) => ({ ...sample.components[0], id: String(index), name: `Service ${index}`, latencyMs: 99 })),
+    components: Array.from({ length: 32 }, (_, index) => ({ ...sample.components[0], id: String(index), name: `Service ${index}`, latencyMs: 99 })),
   };
   const svg = dashboardSVG([healthy]);
   assert.match(svg, /Primary group/);
-  assert.match(svg, /8 services operational/);
-  assert.doesNotMatch(svg, /99 ms|Service 0/);
+  assert.match(svg, /16 services operational/);
+  assert.match(svg, /Service 0/);
+  assert.match(svg, /Service 15/);
+  assert.doesNotMatch(svg, /Service 16/);
+  assert.match(svg, /99 ms/);
+});
+
+test("small Uptime Kuma groups list monitor names, state, and response time", () => {
+  const smallGroup: DashboardSource = {
+    ...sample,
+    groups: [{ id: "g", name: "West Europe", order: 0 }],
+    components: [
+      { ...sample.components[0], id: "web", name: "Public web", latencyMs: 84, sampledAt: "2026-01-01T12:30:00.000Z" },
+      { ...sample.components[0], id: "api", name: "API", latencyMs: 121, sampledAt: "2026-01-01T12:30:00.000Z" },
+    ],
+  };
+  const svg = dashboardSVG([smallGroup]);
+  assert.match(svg, /Public web/);
+  assert.match(svg, /API/);
+  assert.match(svg, /Operational/);
+  assert.match(svg, /84 ms/);
 });
 
 test("Kuma group summaries show a labelled 24-hour check strip when history is available", () => {
@@ -117,7 +167,7 @@ test("Kuma group summaries show a labelled 24-hour check strip when history is a
   };
   const svg = dashboardSVG([historical]);
   assert.match(svg, />24h<\/text>/);
-  assert.match(svg, /<title>Recent checks<\/title>/);
+  assert.match(svg, /<title>Recent checks from 24 hours ago to now:/);
   assert.match(svg, /#ff647c/);
 });
 
@@ -137,7 +187,7 @@ test("affected service rows retain a last sample timestamp while healthy rows su
   assert.match(svg, /Checked 12:31 UTC/);
   assert.doesNotMatch(svg, /Down · Since 12:30 UTC · Checked/);
   assert.match(svg, /1 service operational/);
-  assert.doesNotMatch(svg, /87 ms/);
+  assert.match(svg, /87 ms/);
 });
 
 test("source and event freshness labels distinguish updates from failed checks", () => {
