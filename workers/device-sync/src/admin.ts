@@ -1428,22 +1428,79 @@ async function createCaptureSite(request: Request, env: WorkerEnvironment, actor
   );
 }
 
+function percentile(values: number[], proportion: number): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.max(0, Math.ceil(sorted.length * proportion) - 1)];
+}
+
+function summarizeApiDashboardJobs(jobs: Array<Record<string, any>>) {
+  const succeeded = jobs.filter((job) => job.status === "succeeded");
+  const fetchTimes = succeeded.map((job) => Number(job.api_fetch_ms)).filter((value) => Number.isFinite(value) && value > 0);
+  const renderTimes = succeeded.map((job) => Number(job.api_render_ms)).filter((value) => Number.isFinite(value) && value > 0);
+  const totalTimes = succeeded.map((job) => Number(job.api_total_ms)).filter((value) => Number.isFinite(value) && value > 0);
+  const count = jobs.length;
+  return {
+    sample_count: count,
+    successes: succeeded.length,
+    failures: jobs.filter((job) => job.status === "failed").length,
+    completed_count: succeeded.length + jobs.filter((job) => job.status === "failed").length,
+    failure_rate: succeeded.length + jobs.filter((job) => job.status === "failed").length
+      ? jobs.filter((job) => job.status === "failed").length / (succeeded.length + jobs.filter((job) => job.status === "failed").length)
+      : null,
+    retry_attempts: jobs.reduce((sum, job) => sum + Math.max(0, Number(job.attempts ?? 0) - 1), 0),
+    partial_source_failures: jobs.filter((job) => job.api_outcome === "partial").length,
+    all_source_failures: jobs.filter((job) => job.api_outcome === "all_failed").length,
+    upstream_requests: jobs.reduce((sum, job) => sum + Number(job.api_request_count ?? 0), 0),
+    not_modified_responses: jobs.reduce((sum, job) => sum + Number(job.api_not_modified_count ?? 0), 0),
+    upstream_failed_requests: jobs.reduce((sum, job) => sum + Number(job.api_failed_request_count ?? 0), 0),
+    response_bytes: jobs.reduce((sum, job) => sum + Number(job.api_response_bytes ?? 0), 0),
+    fetch_p50_ms: percentile(fetchTimes, 0.5),
+    fetch_p90_ms: percentile(fetchTimes, 0.9),
+    render_p50_ms: percentile(renderTimes, 0.5),
+    render_p90_ms: percentile(renderTimes, 0.9),
+    total_p50_ms: percentile(totalTimes, 0.5),
+    total_p90_ms: percentile(totalTimes, 0.9),
+    render_operations: renderTimes.length,
+    render_failures: jobs.filter((job) => Number(job.api_render_failed) === 1).length,
+    content_hash_matches: succeeded.filter((job) => Number(job.api_content_hash_match) === 1).length,
+    asset_reuses: succeeded.filter((job) => Number(job.api_asset_reused) === 1).length,
+  };
+}
+
 async function readApiDashboards(env: WorkerEnvironment) {
-  const rows = await env.DB.prepare(
+  const [rows, recentJobs] = await Promise.all([env.DB.prepare(
     "SELECT t.capture_id, t.name, t.enabled, t.capture_interval_seconds, t.viewport_width, t.viewport_height, " +
     "t.current_sha256, t.current_size, t.last_attempt_at, t.last_success_at, t.last_error, t.next_due_at, " +
     "t.api_sources_json, t.api_status_json, t.api_last_fetch_at, t.api_last_image_at, " +
     "(SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS job_status, " +
     "(SELECT j.api_fetch_ms FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS api_fetch_ms, " +
     "(SELECT j.api_render_ms FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS api_render_ms, " +
+    "(SELECT j.api_total_ms FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS api_total_ms, " +
     "(SELECT j.api_asset_reused FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS api_asset_reused " +
     "FROM capture_targets t WHERE t.capture_type = 'api-dashboard' ORDER BY t.created_at DESC LIMIT 100",
-  ).all();
+  ).all(), env.DB.prepare(
+    "WITH ranked AS (SELECT j.capture_id, j.status, j.attempts, j.created_at, j.api_fetch_ms, j.api_render_ms, j.api_total_ms, j.api_render_failed, j.api_asset_reused, " +
+    "j.api_request_count, j.api_not_modified_count, j.api_failed_request_count, j.api_response_bytes, j.api_content_hash_match, j.api_outcome, " +
+    "ROW_NUMBER() OVER (PARTITION BY j.capture_id ORDER BY j.created_at DESC, j.job_id DESC) AS sample_rank " +
+    "FROM capture_jobs j JOIN capture_targets t ON t.capture_id = j.capture_id " +
+    "WHERE t.capture_type = 'api-dashboard' AND j.created_at >= ?) " +
+    "SELECT capture_id, status, attempts, created_at, api_fetch_ms, api_render_ms, api_total_ms, api_render_failed, api_asset_reused, api_request_count, " +
+    "api_not_modified_count, api_failed_request_count, api_response_bytes, api_content_hash_match, api_outcome " +
+    "FROM ranked WHERE sample_rank <= 100 ORDER BY capture_id, created_at DESC",
+  ).bind(Date.now() - 30 * 24 * 60 * 60 * 1000).all()]);
+  const jobsByCapture = new Map<string, Array<Record<string, any>>>();
+  for (const job of recentJobs.results ?? []) {
+    const items = jobsByCapture.get(job.capture_id) ?? [];
+    items.push(job);
+    jobsByCapture.set(job.capture_id, items);
+  }
   return (rows.results ?? []).map((row) => ({
     ...row,
     current_image: row.current_sha256 ? `/admin/api/assets/${row.current_sha256}` : null,
     configuration: parseMetadata(row.api_sources_json),
     sources: parseMetadataArray(row.api_status_json),
+    recent_metrics: summarizeApiDashboardJobs(jobsByCapture.get(row.capture_id) ?? []),
   }));
 }
 

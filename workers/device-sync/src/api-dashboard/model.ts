@@ -9,6 +9,22 @@ export interface DashboardIncident {
   updatedAt: string | null;
 }
 
+export interface EndpointCacheMetadata {
+  etag?: string;
+  lastModified?: string;
+  cacheControl?: string;
+  contentFetchedAt: string;
+  revalidatedAt?: string;
+}
+
+export interface ApiSourceRequestStats {
+  requestCount: number;
+  notModifiedCount: number;
+  failedRequestCount: number;
+  responseBytes: number;
+  durationMs: number;
+}
+
 export interface DashboardComponent {
   id: string;
   name: string;
@@ -22,17 +38,32 @@ export interface DashboardComponent {
   isGroup?: boolean;
 }
 
+export interface DashboardGroup {
+  id: string;
+  name: string;
+  order: number;
+}
+
 export interface DashboardSource {
   id: string;
   provider: Provider;
   displayName: string;
   hostname?: string;
+  sourceKey?: string;
   fetchedAt: string;
   freshness: "fresh" | "stale" | "unavailable";
+  disabled?: boolean;
   status: Health;
   statusDescription: string;
   etag?: string;
+  cache?: {
+    summary?: EndpointCacheMetadata;
+    statusPage?: EndpointCacheMetadata;
+    heartbeat?: EndpointCacheMetadata;
+  };
+  requestStats?: ApiSourceRequestStats;
   components: DashboardComponent[];
+  groups?: DashboardGroup[];
   incidents: DashboardIncident[];
   maintenance: DashboardIncident[];
   error?: string;
@@ -82,8 +113,9 @@ export function parseTimestamp(value: unknown): string | null {
 }
 
 export function overallHealth(sources: DashboardSource[]): Health {
-  const states = sources.flatMap((source) => [source.status, ...source.components.filter((component) => !component.isGroup).map((component) => component.status)]);
-  if (sources.some((source) => source.freshness !== "fresh")) return "stale";
+  const activeSources = sources.filter((source) => !source.disabled);
+  const states = activeSources.flatMap((source) => [source.status, ...source.components.filter((component) => !component.isGroup).map((component) => component.status)]);
+  if (activeSources.some((source) => source.freshness !== "fresh")) return "stale";
   if (states.includes("down")) return "down";
   if (states.includes("degraded")) return "degraded";
   if (states.includes("maintenance")) return "maintenance";

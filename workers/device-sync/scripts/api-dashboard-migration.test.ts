@@ -5,7 +5,22 @@ import test from "node:test";
 
 test("API dashboard migration preserves references and enables 1- and 5-minute schedules", async () => {
   const latest = await readFile(new URL("../schema.sql", import.meta.url), "utf8");
-  const prior = latest
+  const metricColumns = [
+    "api_total_ms INTEGER NOT NULL DEFAULT 0 CHECK (api_total_ms >= 0),",
+    "api_request_count INTEGER NOT NULL DEFAULT 0 CHECK (api_request_count >= 0),",
+    "api_not_modified_count INTEGER NOT NULL DEFAULT 0 CHECK (api_not_modified_count >= 0),",
+    "api_failed_request_count INTEGER NOT NULL DEFAULT 0 CHECK (api_failed_request_count >= 0),",
+    "api_response_bytes INTEGER NOT NULL DEFAULT 0 CHECK (api_response_bytes >= 0),",
+    "api_source_count INTEGER NOT NULL DEFAULT 0 CHECK (api_source_count >= 0),",
+    "api_unavailable_source_count INTEGER NOT NULL DEFAULT 0 CHECK (api_unavailable_source_count >= 0),",
+    "api_stale_source_count INTEGER NOT NULL DEFAULT 0 CHECK (api_stale_source_count >= 0),",
+    "api_content_hash_match INTEGER NOT NULL DEFAULT 0 CHECK (api_content_hash_match IN (0, 1)),",
+    "api_render_failed INTEGER NOT NULL DEFAULT 0 CHECK (api_render_failed IN (0, 1)),",
+    "api_outcome TEXT CHECK (api_outcome IS NULL OR api_outcome IN ('complete', 'partial', 'all_failed')),",
+  ];
+  let prior = latest;
+  for (const column of metricColumns) prior = prior.replace(`  ${column}\n`, "");
+  prior = prior
     .replace("CHECK (capture_interval_seconds IN (60, 300, 900, 1800, 3600, 10800, 21600, 43200, 86400))", "CHECK (capture_interval_seconds IN (900, 1800, 3600, 10800, 21600, 43200, 86400))")
     .replace("  capture_type TEXT NOT NULL DEFAULT 'browser-screenshot' CHECK (capture_type IN ('browser-screenshot', 'api-dashboard')),\n  api_sources_json TEXT,\n  api_status_json TEXT,\n  api_content_hash TEXT,\n  api_last_fetch_at INTEGER,\n  api_last_image_at INTEGER,\n", "")
     .replace("  api_fetch_ms INTEGER NOT NULL DEFAULT 0 CHECK (api_fetch_ms >= 0),\n  api_render_ms INTEGER NOT NULL DEFAULT 0 CHECK (api_render_ms >= 0),\n  api_asset_reused INTEGER NOT NULL DEFAULT 0 CHECK (api_asset_reused IN (0, 1)),\n", "");

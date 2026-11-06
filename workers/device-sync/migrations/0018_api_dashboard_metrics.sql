@@ -1,0 +1,12 @@
+ALTER TABLE capture_jobs ADD COLUMN api_total_ms INTEGER NOT NULL DEFAULT 0 CHECK (api_total_ms >= 0);
+ALTER TABLE capture_jobs ADD COLUMN api_request_count INTEGER NOT NULL DEFAULT 0 CHECK (api_request_count >= 0);
+ALTER TABLE capture_jobs ADD COLUMN api_not_modified_count INTEGER NOT NULL DEFAULT 0 CHECK (api_not_modified_count >= 0);
+ALTER TABLE capture_jobs ADD COLUMN api_failed_request_count INTEGER NOT NULL DEFAULT 0 CHECK (api_failed_request_count >= 0);
+ALTER TABLE capture_jobs ADD COLUMN api_response_bytes INTEGER NOT NULL DEFAULT 0 CHECK (api_response_bytes >= 0);
+ALTER TABLE capture_jobs ADD COLUMN api_source_count INTEGER NOT NULL DEFAULT 0 CHECK (api_source_count >= 0);
+ALTER TABLE capture_jobs ADD COLUMN api_unavailable_source_count INTEGER NOT NULL DEFAULT 0 CHECK (api_unavailable_source_count >= 0);
+ALTER TABLE capture_jobs ADD COLUMN api_stale_source_count INTEGER NOT NULL DEFAULT 0 CHECK (api_stale_source_count >= 0);
+ALTER TABLE capture_jobs ADD COLUMN api_content_hash_match INTEGER NOT NULL DEFAULT 0 CHECK (api_content_hash_match IN (0, 1));
+ALTER TABLE capture_jobs ADD COLUMN api_render_failed INTEGER NOT NULL DEFAULT 0 CHECK (api_render_failed IN (0, 1));
+ALTER TABLE capture_jobs ADD COLUMN api_outcome TEXT CHECK (api_outcome IS NULL OR api_outcome IN ('complete', 'partial', 'all_failed'));
+CREATE INDEX IF NOT EXISTS capture_jobs_capture_created_idx ON capture_jobs(capture_id, created_at DESC);
