@@ -1,6 +1,6 @@
 import { Resvg, initWasm } from "@resvg/resvg-wasm";
 import { healthLabel, overallHealth, type DashboardSource, type Health } from "./model.ts";
-import { svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
+import { svgGroupSummary, svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
 
 const MAX_PIXELS = 3840 * 2160;
 const MAX_PNG_BYTES = 32 * 1024 * 1024;
@@ -14,10 +14,77 @@ function healthOrder(health: Health): number {
   return ({ down: 0, degraded: 1, stale: 2, pending: 3, unknown: 4, maintenance: 5, operational: 6 })[health];
 }
 
-function formatFetched(value: string): string | undefined {
+function formatClock(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return undefined;
-  return `Fetched ${date.toISOString().slice(11, 16)} UTC`;
+  return `${date.toISOString().slice(11, 16)} UTC`;
+}
+
+function formatFetched(value: string, freshness: DashboardSource["freshness"]): string | undefined {
+  const time = formatClock(value);
+  return time ? `${freshness === "fresh" ? "Updated" : "Last check"} ${time}` : undefined;
+}
+
+function recentGroupChecks(components: DashboardSource["components"], fetchedAt: string): string[] {
+  const reference = Date.parse(fetchedAt);
+  if (!Number.isFinite(reference)) return [];
+  const buckets: Array<Health | undefined> = Array.from({ length: 12 }, () => undefined);
+  const rank = (health: Health) => ({ down: 0, degraded: 1, stale: 2, pending: 3, unknown: 4, maintenance: 5, operational: 6 })[health];
+  for (const component of components) for (const beat of component.history ?? []) {
+    const age = reference - Date.parse(beat.at);
+    if (!Number.isFinite(age) || age < 0 || age >= 24 * 60 * 60_000) continue;
+    const index = 11 - Math.floor(age / (2 * 60 * 60_000));
+    const existing = buckets[index];
+    if (!existing || rank(beat.status) < rank(existing)) buckets[index] = beat.status;
+  }
+  return buckets.some(Boolean) ? buckets.map((state) => state ?? "unknown") : [];
+}
+
+type ServiceDisplayRow = { kind: "group"; name: string } | { kind: "empty"; name: string } | { kind: "summary"; count: number; history: string[] } | { kind: "service"; component: DashboardSource["components"][number] };
+
+function buildServiceRows(source: DashboardSource): ServiceDisplayRow[] {
+  const parentGroups = (source.groups ?? source.components.filter((component) => component.isGroup).map((component) => ({ id: component.id, name: component.name, order: component.groupOrder ?? component.componentOrder ?? 0 })))
+    .sort((a, b) => a.order - b.order);
+  const services = source.components.filter((component) => !component.isGroup);
+  const rows: ServiceDisplayRow[] = [];
+  const addGroupRows = (name: string, components: typeof services, groupHeader: boolean) => {
+    if (groupHeader) rows.push({ kind: "group", name });
+    if (!components.length) { rows.push({ kind: "empty", name }); return; }
+    const issues = components.filter((component) => component.status !== "operational");
+    const operationalCount = components.length - issues.length;
+    if (issues.length) {
+      issues.sort((a, b) => healthOrder(a.status) - healthOrder(b.status) || (a.componentOrder ?? 0) - (b.componentOrder ?? 0));
+      for (const component of issues) rows.push({ kind: "service", component });
+      if (operationalCount) rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components.filter((component) => component.status === "operational"), source.fetchedAt) });
+    } else rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components, source.fetchedAt) });
+  };
+  const seenServices = new Set<string>();
+  for (const parent of parentGroups) {
+    const children = services.filter((component) => component.groupId === parent.id || (!component.groupId && component.groupName === parent.name))
+      .sort((a, b) => healthOrder(a.status) - healthOrder(b.status) || (a.componentOrder ?? 0) - (b.componentOrder ?? 0));
+    addGroupRows(parent.name, children, true);
+    for (const component of children) seenServices.add(component.id);
+  }
+  const remaining = services.filter((component) => !seenServices.has(component.id))
+    .sort((a, b) => (a.groupOrder ?? 0) - (b.groupOrder ?? 0) || healthOrder(a.status) - healthOrder(b.status) || (a.componentOrder ?? 0) - (b.componentOrder ?? 0));
+  const groups = new Map<string, typeof remaining>();
+  for (const component of remaining) {
+    const name = component.groupName ?? "Services";
+    groups.set(name, [...(groups.get(name) ?? []), component]);
+  }
+  const orderedGroups = [...groups.entries()];
+  for (const [groupName, components] of orderedGroups) addGroupRows(groupName, components, components.length > 0 && (parentGroups.length > 0 || orderedGroups.length > 1 || groupName !== "Services"));
+  return rows;
+}
+
+function cardHeightFor(source: DashboardSource, scale: number): number {
+  const rows = buildServiceRows(source);
+  const hasDetails = rows.some((row) => row.kind === "summary" || row.kind === "service" || row.kind === "empty");
+  const hasEvents = source.incidents.length + source.maintenance.length > 0;
+  const footerLines = (hasDetails ? 1 : 0) + (hasEvents ? 1 : 0);
+  const serviceLines = rows.length;
+  return Math.max(176 * scale, 150 * scale + serviceLines * 24 * scale + footerLines * 20 * scale);
 }
 
 function sourceHealth(source: DashboardSource): Health {
@@ -39,40 +106,17 @@ function card(source: DashboardSource, x: number, y: number, width: number, heig
   const pad = s(22);
   const left = x + pad;
   const compact = height < s(170);
-  const contentY = y + s(compact ? 0 : source.error ? 120 : 100);
+  const hasParentGroups = Boolean(source.groups?.length || source.components.some((component) => component.isGroup));
+  const contentY = y + s(compact ? 60 : source.error ? 120 : 100);
   const lineH = s(compact ? 18 : Math.max(20, Math.min(24, height / 18)));
-  const parentGroups = (source.groups ?? source.components.filter((component) => component.isGroup).map((component) => ({ id: component.id, name: component.name, order: component.groupOrder ?? component.componentOrder ?? 0 })))
-    .sort((a, b) => a.order - b.order);
   const services = source.components.filter((component) => !component.isGroup);
-  const serviceRows: Array<{ kind: "group"; name: string } | { kind: "empty"; name: string } | { kind: "service"; component: typeof services[number] }> = [];
-  const seenServices = new Set<string>();
-  if (parentGroups.length) {
-    for (const parent of parentGroups) {
-      const children = services.filter((component) => component.groupId === parent.id || (!component.groupId && component.groupName === parent.name))
-        .sort((a, b) => healthOrder(a.status) - healthOrder(b.status) || (a.componentOrder ?? 0) - (b.componentOrder ?? 0));
-      serviceRows.push({ kind: "group", name: parent.name });
-      if (!children.length) serviceRows.push({ kind: "empty", name: parent.name });
-      for (const component of children) { serviceRows.push({ kind: "service", component }); seenServices.add(component.id); }
-    }
-  }
-  const remaining = services.filter((component) => !seenServices.has(component.id))
-    .sort((a, b) => (a.groupOrder ?? 0) - (b.groupOrder ?? 0) || healthOrder(a.status) - healthOrder(b.status) || (a.componentOrder ?? 0) - (b.componentOrder ?? 0));
-  const groups = new Map<string, typeof remaining>();
-  for (const component of remaining) {
-    const name = component.groupName ?? "Services";
-    groups.set(name, [...(groups.get(name) ?? []), component]);
-  }
-  const orderedGroups = [...groups.entries()];
-  for (const [groupName, components] of orderedGroups) {
-    if (components.length && (parentGroups.length > 0 || orderedGroups.length > 1 || groupName !== "Services")) serviceRows.push({ kind: "group", name: groupName });
-    for (const component of components) serviceRows.push({ kind: "service", component });
-  }
-  const events = [...source.incidents.map((item) => `Incident (${item.status}, ${item.impact}): ${item.name}`), ...source.maintenance.map((item) => `Maintenance (${item.status}): ${item.name}`)];
-  const footerRows = (serviceRows.some((row) => row.kind === "service" || row.kind === "empty") ? 1 : 0) + (events.length ? 1 : 0);
+  const serviceRows = buildServiceRows(source);
+  const events = [...source.incidents.map((item) => `Incident (${item.status}, ${item.impact}): ${item.name}${item.updatedAt ? ` · Updated ${formatClock(item.updatedAt)}` : ""}`), ...source.maintenance.map((item) => `Maintenance (${item.status}): ${item.name}${item.updatedAt ? ` · Updated ${formatClock(item.updatedAt)}` : ""}`)];
+  const footerRows = (serviceRows.some((row) => row.kind === "service" || row.kind === "empty" || row.kind === "summary") ? 1 : 0) + (events.length ? 1 : 0);
   const maxLines = Math.max(0, Math.floor((height - s(compact ? 58 : source.error ? 170 : 150) - s(footerRows * 20)) / lineH));
   const showRows = serviceRows.slice(0, maxLines);
   while (showRows.at(-1)?.kind === "group") showRows.pop();
-  const visibleServices = showRows.filter((row) => row.kind === "service").length;
+  const visibleServices = showRows.reduce((count, row) => count + (row.kind === "service" ? 1 : row.kind === "summary" ? row.count : 0), 0);
   const hiddenServices = Math.max(0, services.length - visibleServices);
   const hiddenGroups = Math.max(0, serviceRows.filter((row) => row.kind === "group").length - showRows.filter((row) => row.kind === "group").length);
   let svg = `<g>${svgPanel(x, y, width, height, scale, colors[health])}`;
@@ -82,13 +126,14 @@ function card(source: DashboardSource, x: number, y: number, width: number, heig
   svg += `<text x="${x + width - s(136)}" y="${y + s(compact ? 26 : 41)}" fill="${svgText(colors[health])}" font-size="${s(compact ? 13 : 16)}">${svgText(sourceStatusLabel)}</text>`;
   if (!compact) {
     const sourceIdentity = source.hostname ?? (source.provider === "uptime-kuma" ? "Uptime Kuma" : "Statuspage");
-    const updated = formatFetched(source.fetchedAt);
-    svg += `<text x="${left}" y="${y + s(70)}" fill="#b9c9dc" font-size="${s(15)}">${svgText(truncateText(sourceIdentity, Math.floor(width / s(10))))}</text>`;
+    const updated = formatFetched(source.fetchedAt, source.freshness);
+    const identityLimit = Math.max(8, Math.floor((width - pad * 2 - s(170)) / (s(8.5))));
+    svg += `<text x="${left}" y="${y + s(70)}" fill="#b9c9dc" font-size="${s(15)}">${svgText(truncateText(sourceIdentity, identityLimit))}</text>`;
     if (updated) svg += `<text x="${x + width - pad}" y="${y + s(70)}" text-anchor="end" fill="#b9c9dc" font-size="${s(14)}">${svgText(updated)}</text>`;
     if (source.error) svg += `<text x="${left}" y="${y + s(94)}" fill="#ffb86c" font-size="${s(14)}">${svgText(truncateText(source.error, Math.floor(width / s(9))))}</text>`;
   }
   if (source.disabled) svg += `<text x="${left}" y="${y + s(compact ? 48 : 106)}" fill="#aab8ca" font-size="${s(17)}">Source is disabled and not polled</text>`;
-  else if (!services.length && !source.error && !parentGroups.length) svg += `<text x="${left}" y="${y + s(compact ? 48 : 106)}" fill="#aab8ca" font-size="${s(17)}">No component data available</text>`;
+  else if (!services.length && !source.error && !hasParentGroups) svg += `<text x="${left}" y="${y + s(compact ? 48 : 106)}" fill="#aab8ca" font-size="${s(17)}">No component data available</text>`;
   showRows.forEach((row, index) => {
     const cy = contentY + index * lineH;
     if (row.kind === "group") {
@@ -99,11 +144,19 @@ function card(source: DashboardSource, x: number, y: number, width: number, heig
       svg += `<text x="${left + s(16)}" y="${cy}" fill="#aab8ca" font-size="${s(compact ? 11 : 14)}">No services reported</text>`;
       return;
     }
-    const { name, status, latencyMs } = row.component;
+    if (row.kind === "summary") {
+      svg += svgGroupSummary({ x: left + s(16), y: cy, right: x + width - pad, scale, label: "operational", count: row.count, history: row.history });
+      return;
+    }
+    const { name, status } = row.component;
     const color = colors[status as Health] ?? colors.unknown;
     const statusText = healthLabel[status as Health] ?? healthLabel.unknown;
+    const changedTime = formatClock(row.component.statusChangedAt);
+    const sampledTime = formatClock(row.component.sampledAt);
+    const stateChangeTime = changedTime && ["down", "degraded", "maintenance"].includes(status) ? changedTime : undefined;
+    const statusMeta = stateChangeTime ? `Since ${stateChangeTime}` : sampledTime ? `Checked ${sampledTime}` : undefined;
     const right = x + width - pad;
-    svg += svgServiceRow({ x: left, y: cy, right, scale, name, status: statusText, color, latencyMs, compact });
+    svg += svgServiceRow({ x: left, y: cy, right, scale, name, status: statusText, color, statusMeta, compact });
   });
   if (hiddenServices || hiddenGroups) {
     const message = [hiddenGroups ? `${hiddenGroups} more groups` : "", hiddenServices ? `${hiddenServices} more services` : ""].filter(Boolean).join(" · ");
@@ -129,7 +182,13 @@ export function dashboardSVG(sources: DashboardSource[], width = 1920, height = 
   const columns = Math.min(sources.length || 1, 4, Math.max(1, Math.floor((width - 2 * pad + gap) / 430)));
   const cardW = (width - 2 * pad - gap * (columns - 1)) / columns;
   const rows = Math.ceil(sources.length / columns);
-  const cardH = (height - headerH - pad - gap * Math.max(0, rows - 1)) / Math.max(rows, 1);
+  const orderedSources = [...sources].sort((a, b) => healthOrder(sourceHealth(a)) - healthOrder(sourceHealth(b)));
+  const availableCardHeight = (height - headerH - pad - gap * Math.max(0, rows - 1)) / Math.max(rows, 1);
+  const rowHeights = Array.from({ length: rows }, (_, row) => {
+    const rowSources = orderedSources.slice(row * columns, (row + 1) * columns);
+    const desired = Math.max(176 * scale, ...rowSources.map((source) => cardHeightFor(source, scale)));
+    return Math.min(availableCardHeight, desired);
+  });
   const overall = overallHealth(sources);
   const activeSources = sources.filter((source) => !source.disabled);
   const totalServices = activeSources.reduce((sum, source) => sum + source.components.filter((component) => !component.isGroup).length, 0);
@@ -138,18 +197,21 @@ export function dashboardSVG(sources: DashboardSource[], width = 1920, height = 
   const maintenanceServices = activeSources.reduce((sum, source) => sum + source.components.filter((component) => !component.isGroup && component.status === "maintenance").length, 0);
   const pendingServices = activeSources.reduce((sum, source) => sum + source.components.filter((component) => !component.isGroup && component.status === "pending").length, 0);
   const unknownServices = activeSources.reduce((sum, source) => sum + source.components.filter((component) => !component.isGroup && component.status === "unknown").length, 0);
+  const staleServices = activeSources.reduce((sum, source) => sum + source.components.filter((component) => !component.isGroup && component.status === "stale").length, 0);
   const staleSources = activeSources.filter((source) => source.freshness !== "fresh").length;
+  const disabledSources = sources.length - activeSources.length;
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#0b1422"/>`;
   svg += `<text x="${pad}" y="${60 * scale}" fill="#ffffff" font-family="Ribbon Sans" font-size="${36 * scale}" font-weight="700">Operations status</text>`;
-  const summary = `${sources.length} configured ${sources.length === 1 ? "source" : "sources"} · ${totalServices} ${totalServices === 1 ? "service" : "services"} · ${downServices} down · ${degradedServices} degraded · ${pendingServices} pending · ${maintenanceServices} in maintenance · ${unknownServices} unknown`;
+  const summary = `${sources.length} configured ${sources.length === 1 ? "source" : "sources"} · ${totalServices} active ${totalServices === 1 ? "service" : "services"}${disabledSources ? ` · ${disabledSources} disabled ${disabledSources === 1 ? "source" : "sources"}` : ""} · ${downServices} down · ${degradedServices} degraded · ${staleServices} stale · ${pendingServices} pending · ${maintenanceServices} in maintenance · ${unknownServices} unknown`;
   svg += `<text x="${pad}" y="${100 * scale}" fill="#c0cede" font-family="Ribbon Sans" font-size="${17 * scale}">${svgText(summary)}</text>`;
   svg += svgStatusBadge(width - pad - 320 * scale, 24 * scale, 320 * scale, 62 * scale, scale, healthLabel[overall], colors[overall]);
   if (staleSources) svg += `<text x="${width - pad - 320 * scale}" y="${112 * scale}" fill="#ffbd78" font-family="Ribbon Sans" font-size="${15 * scale}" font-weight="700">${staleSources} source${staleSources === 1 ? "" : "s"} stale or unavailable</text>`;
   if (!sources.length) svg += `<text x="${pad}" y="${(headerH + 45 * scale)}" fill="#c0cede" font-family="Ribbon Sans" font-size="${20 * scale}">No status sources are configured.</text>`;
-  [...sources].sort((a, b) => healthOrder(sourceHealth(a)) - healthOrder(sourceHealth(b))).forEach((source, index) => {
+  orderedSources.forEach((source, index) => {
     const col = index % columns;
     const row = Math.floor(index / columns);
-    svg += card(source, pad + col * (cardW + gap), headerH + row * (cardH + gap), cardW, cardH, scale);
+    const y = headerH + rowHeights.slice(0, row).reduce((sum, value) => sum + value + gap, 0);
+    svg += card(source, pad + col * (cardW + gap), y, cardW, rowHeights[row], scale);
   });
   svg += "</svg>";
   return svg;
