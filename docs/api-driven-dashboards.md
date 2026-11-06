@@ -115,6 +115,17 @@ above the existing 32 MiB asset limit, more than 30 sources, or more than 2,000
 components. Long names are shortened to fit each service row. Output has no
 cosmetic current-time stamp, so an unchanged status image is byte stable.
 
+Healthy monitors are summarized by group with exact operational counts; affected
+rows sort ahead of those summaries, with excess rows counted in the overflow
+label. Kuma rows for down, degraded, or maintenance states show their last
+transition time when heartbeat history contains one. Pending, unknown, and stale
+rows show their latest sample time. The default dashboard omits individual ping latency.
+Group summaries can show a 24-hour check strip from available Kuma heartbeats;
+missing two-hour buckets are shown as unknown, and the strip does not claim an
+uptime percentage. Shared SVG components in
+`src/api-dashboard/render-components.ts` provide escaped status dots, badges,
+panels, service rows, group summaries, and check-history strips.
+
 `npm test` runs a `wrangler dev --local` integration test against Wrangler’s
 Cloudflare Workers runtime. It initializes the bundled Wasm module and font,
 renders ten synthetic 1920 by 1080 scenarios, validates their PNG headers, and
