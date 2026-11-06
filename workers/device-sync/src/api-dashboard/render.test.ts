@@ -227,6 +227,7 @@ test("SVG color attributes escape caller-provided values", () => {
     svgStatusDot(0, 0, 2, hostileColor),
     svgPanel(0, 0, 10, 10, 1, hostileColor),
     svgStatusBadge(0, 0, 80, 30, 1, "Status", hostileColor),
+    svgFreshnessBadge(0, 20, 1, "Data fresh", hostileColor),
     svgServiceRow({ x: 0, y: 12, right: 200, scale: 1, name: "Service", status: "Up", color: hostileColor }),
     svgEventPanel({ x: 0, y: 0, width: 240, height: 58, scale: 1, events: [{ kind: "Incident", name: "Service", status: "investigating", color: hostileColor }] }),
   ];
