@@ -1290,15 +1290,17 @@ async function resolveCaptureTarget(
 ) {
   if (hasExactKeys(input, ["capture_id"])) {
     const existing = await env.DB.prepare(
-      "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, schedule_reviewed_at " +
+      "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, schedule_reviewed_at, capture_type " +
       "FROM capture_targets WHERE capture_id = ? AND enabled = 1",
     ).bind(input.capture_id).first();
     if (!existing) throw new HTTPError(409, "One of the webpage captures is no longer available.");
     if (existing.schedule_reviewed_at == null) throw new HTTPError(409, "Review and save this site's screenshot schedule before adding it to a playlist.");
-    try {
-      validateCaptureTargetURL(existing.url, env.CAPTURE_ALLOWED_HOSTS);
-    } catch {
-      throw new HTTPError(409, "One of the webpage capture hosts is not on the configured capture allowlist.");
+    if (existing.capture_type !== "api-dashboard") {
+      try {
+        validateCaptureTargetURL(existing.url, env.CAPTURE_ALLOWED_HOSTS);
+      } catch {
+        throw new HTTPError(409, "One of the webpage capture hosts is not on the configured capture allowlist.");
+      }
     }
     return {
       capture_id: existing.capture_id,

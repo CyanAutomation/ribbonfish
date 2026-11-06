@@ -547,6 +547,32 @@ test("API dashboard captures bypass Browser Run budgets and reuse the shared pla
   }
 });
 
+test("API dashboards can be added to playlists without browser capture host allowlist validation", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env } = environment(sqlite);
+    env.API_STATUS_ALLOWED_HOSTS = "status.example.org";
+    const dashboardResponse = await handleAdminRequest(await request("/admin/api/api-dashboards", {
+      method: "POST", body: { name: "Sample operations", capture_interval_seconds: 300, width: 1920, height: 1080,
+        sources: [{ id: "source-one", provider: "atlassian-statuspage", display_name: "Sample services", enabled: true, hostname: "status.example.org" }] },
+    }), env);
+    assert.equal(dashboardResponse.status, 201, await dashboardResponse.clone().text());
+    const dashboard = await dashboardResponse.json();
+
+    const response = await handleAdminRequest(await request("/admin/api/playlists", {
+      method: "POST", body: { id: "dashboard-playlist", rotation_interval: "90s", assets: [], captures: [{ capture_id: dashboard.capture_id }] },
+    }), env);
+
+    assert.equal(response.status, 201, await response.clone().text());
+    const playlist = await response.json();
+    assert.equal(playlist.capture_count, 1);
+    assert.equal(sqlite.prepare("SELECT capture_id FROM playlist_capture_items WHERE playlist_id = ? AND revision = ?")
+      .get("dashboard-playlist", playlist.revision).capture_id, dashboard.capture_id);
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("playlist saves schedule capture dispatch after the response through waitUntil", async () => {
   const sqlite = await freshDatabase();
   try {
