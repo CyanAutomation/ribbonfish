@@ -1,6 +1,6 @@
 import { Resvg, initWasm } from "@resvg/resvg-wasm";
 import { healthLabel, overallHealth, type DashboardSource, type Health } from "./model.ts";
-import { svgGroupSummary, svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
+import { svgEventPanel, svgGroupSummary, svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText, type SvgDashboardEvent } from "./render-components.ts";
 
 const MAX_PIXELS = 3840 * 2160;
 const MAX_PNG_BYTES = 32 * 1024 * 1024;
@@ -81,10 +81,10 @@ function buildServiceRows(source: DashboardSource): ServiceDisplayRow[] {
 function cardHeightFor(source: DashboardSource, scale: number): number {
   const rows = buildServiceRows(source);
   const hasDetails = rows.some((row) => row.kind === "summary" || row.kind === "service" || row.kind === "empty");
-  const hasEvents = source.incidents.length + source.maintenance.length > 0;
-  const footerLines = (hasDetails ? 1 : 0) + (hasEvents ? 1 : 0);
+  const eventCount = Math.min(3, source.incidents.length + source.maintenance.length);
+  const eventPanelHeight = eventCount ? 14 + eventCount * 44 : 0;
   const serviceLines = rows.length;
-  return Math.max(176 * scale, 150 * scale + serviceLines * 24 * scale + footerLines * 20 * scale);
+  return Math.max(176 * scale, 150 * scale + serviceLines * 24 * scale + (hasDetails ? 20 * scale : 0) + eventPanelHeight * scale);
 }
 
 function sourceHealth(source: DashboardSource): Health {
@@ -111,9 +111,17 @@ function card(source: DashboardSource, x: number, y: number, width: number, heig
   const lineH = s(compact ? 18 : Math.max(20, Math.min(24, height / 18)));
   const services = source.components.filter((component) => !component.isGroup);
   const serviceRows = buildServiceRows(source);
-  const events = [...source.incidents.map((item) => `Incident (${item.status}, ${item.impact}): ${item.name}${item.updatedAt ? ` · Updated ${formatClock(item.updatedAt)}` : ""}`), ...source.maintenance.map((item) => `Maintenance (${item.status}): ${item.name}${item.updatedAt ? ` · Updated ${formatClock(item.updatedAt)}` : ""}`)];
-  const footerRows = (serviceRows.some((row) => row.kind === "service" || row.kind === "empty" || row.kind === "summary") ? 1 : 0) + (events.length ? 1 : 0);
-  const maxLines = Math.max(0, Math.floor((height - s(compact ? 58 : source.error ? 170 : 150) - s(footerRows * 20)) / lineH));
+  const events: SvgDashboardEvent[] = [
+    ...source.incidents.map((item) => ({ kind: "Incident" as const, name: item.name, status: item.status, impact: item.impact,
+      color: item.impact === "critical" || item.impact === "major" ? colors.down : colors.degraded, updatedAt: item.updatedAt })),
+    ...source.maintenance.map((item) => ({ kind: "Maintenance" as const, name: item.name, status: item.status, impact: item.impact,
+      color: colors.maintenance, updatedAt: item.updatedAt, scheduledFor: item.scheduledFor })),
+  ];
+  const visibleEvents = events.slice(0, 3);
+  const eventAreaHeight = visibleEvents.length ? s(14 + visibleEvents.length * 44) : 0;
+  const hasDetails = serviceRows.some((row) => row.kind === "service" || row.kind === "empty" || row.kind === "summary");
+  const contentOffset = compact ? 60 : source.error ? 120 : 100;
+  const maxLines = Math.max(0, Math.floor((height - s(contentOffset) - eventAreaHeight - s(hasDetails ? 20 : 8)) / lineH));
   const showRows = serviceRows.slice(0, maxLines);
   while (showRows.at(-1)?.kind === "group") showRows.pop();
   const visibleServices = showRows.reduce((count, row) => count + (row.kind === "service" ? 1 : row.kind === "summary" ? row.count : 0), 0);
@@ -160,12 +168,10 @@ function card(source: DashboardSource, x: number, y: number, width: number, heig
   });
   if (hiddenServices || hiddenGroups) {
     const message = [hiddenGroups ? `${hiddenGroups} more groups` : "", hiddenServices ? `${hiddenServices} more services` : ""].filter(Boolean).join(" · ");
-    svg += `<text x="${left}" y="${y + height - s(events.length ? 36 : 18)}" fill="#b7c8da" font-size="${s(compact ? 10 : 13)}">+ ${svgText(message)}</text>`;
+    svg += `<text x="${left}" y="${y + height - eventAreaHeight - s(10)}" fill="#b7c8da" font-size="${s(compact ? 10 : 13)}">+ ${svgText(message)}</text>`;
   }
-  if (events.length) {
-    const suffix = events.length > 1 ? ` · +${events.length - 1} more active events` : "";
-    const first = truncateText(events[0], Math.max(8, Math.floor(width / s(compact ? 7 : 8)) - suffix.length));
-    svg += `<text x="${left}" y="${y + height - s(compact ? 8 : 18)}" fill="#ffd082" font-size="${s(compact ? 10 : 13)}">${svgText(first + suffix)}</text>`;
+  if (visibleEvents.length) {
+    svg += svgEventPanel({ x: x + s(12), y: y + height - eventAreaHeight, width: width - s(24), height: eventAreaHeight, scale, events: visibleEvents, hiddenCount: events.length - visibleEvents.length });
   }
   svg += "</g>";
   return svg;

@@ -124,7 +124,11 @@ Group summaries can show a 24-hour check strip from available Kuma heartbeats;
 missing two-hour buckets are shown as unknown, and the strip does not claim an
 uptime percentage. Shared SVG components in
 `src/api-dashboard/render-components.ts` provide escaped status dots, badges,
-panels, service rows, group summaries, and check-history strips.
+panels, service rows, group summaries, event panels, and check-history strips.
+Incident and maintenance events have a dedicated high-contrast area on each
+source card. Scheduled maintenance keeps its start time separate from its last
+update and shows both when available. Major incidents use a stronger severity
+color, while event labels preserve meaning without color.
 
 `npm test` runs a `wrangler dev --local` integration test against Wrangler’s
 Cloudflare Workers runtime. It initializes the bundled Wasm module and font,

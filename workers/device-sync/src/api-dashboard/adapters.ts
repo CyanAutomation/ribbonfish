@@ -135,7 +135,7 @@ function incidentList(values: unknown): DashboardIncident[] {
     const row = record(value);
     return { id: safeText(row.id, `incident-${index}`, 100), name: safeText(row.name ?? row.title, "Untitled event"),
       status: safeText(row.status, "unknown", 40), impact: safeText(row.impact, "unknown", 40),
-      updatedAt: parseTimestamp(row.updated_at ?? row.updatedAt ?? row.scheduled_for) };
+      updatedAt: parseTimestamp(row.updated_at ?? row.updatedAt), scheduledFor: parseTimestamp(row.scheduled_for) };
   });
 }
 
