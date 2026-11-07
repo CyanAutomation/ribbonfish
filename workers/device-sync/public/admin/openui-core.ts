@@ -193,7 +193,7 @@ function countDeviceHealth(devices: Array<{ enabled?: boolean | number; health?:
   return counts;
 }
 
-export const openUILibrary = createLibrary({
+const openUILibrary = createLibrary({
   id: "ribbonfish-fleet-readonly",
   root: "Dashboard",
   components: [Dashboard, Metric, Notice],
@@ -221,7 +221,7 @@ const functionPrompt = Object.values(librarySpec.functions ?? {})
   .map(({ signature, description }) => `@${signature} — ${description}`)
   .join("\n");
 
-export const OPENUI_SYSTEM_PROMPT = [
+const OPENUI_SYSTEM_PROMPT = [
   "Create compact, read-only summaries for the Ribbonfish device fleet in OpenUI Lang.",
   "Return only a valid program. Put one statement on each line, use positional arguments, and define a Dashboard root.",
   `Use only the ${READ_ONLY_TOOL} read-only query. Call it once: overview = Query("${READ_ONLY_TOOL}", {}, {}). Its result contains device health, devices, playlists, active_playlist, and asset_health.missing.`,

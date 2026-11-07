@@ -36,9 +36,9 @@ class ApiDashboardCaptureError extends Error {
   }
 }
 
-export const MAX_CAPTURE_ATTEMPTS = 3;
-export const MAX_CAPTURE_HISTORY = 10;
-export const CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_CAPTURE_ATTEMPTS = 3;
+const MAX_CAPTURE_HISTORY = 10;
+const CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const RUNNING_LEASE_MS = 3 * 60 * 1000;
 const RETRY_DELAYS_SECONDS = [60, 180];
 const DEFAULT_DAILY_BUDGET_MS = 600_000;
@@ -475,7 +475,7 @@ async function processApiDashboardCapture(message: CaptureMessage, job: CaptureJ
   }
 }
 
-export async function probeCaptureValidator(target: ValidatorTarget, env: CaptureEnv, fetcher = globalThis.fetch): Promise<ValidatorResult> {
+async function probeCaptureValidator(target: ValidatorTarget, env: CaptureEnv, fetcher = globalThis.fetch): Promise<ValidatorResult> {
   let url;
   try { url = new URL(validateCaptureTargetURL(target.url, env.CAPTURE_ALLOWED_HOSTS)); } catch {
     return { unchanged: false, outcome: "disabled", etag: target.validator_etag, lastModified: target.validator_last_modified };

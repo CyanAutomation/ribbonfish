@@ -73,13 +73,6 @@ export interface DashboardSource {
   retryableError?: boolean;
 }
 
-export interface DashboardData {
-  sources: DashboardSource[];
-  generatedAt: string;
-  width: number;
-  height: number;
-}
-
 export const healthLabel: Record<Health, string> = {
   operational: "Operational", degraded: "Degraded", down: "Down", maintenance: "Maintenance",
   pending: "Pending", unknown: "Unknown", stale: "Unavailable / stale",

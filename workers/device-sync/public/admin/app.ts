@@ -30,6 +30,8 @@ import {
   playlistDeleteActionStates,
   formatScreenshotStatus,
   formatTimestamp,
+  describeJevAnswer,
+  formatJevAnswerLabel,
   buildFleetInsights,
   prioritizeCaptureTargets,
   summarizeCaptureErrors,
@@ -1465,59 +1467,49 @@ function renderJevDecision(
   const answers = node("div", undefined, "jev-result__answers");
   for (const [key, answer] of Object.entries(result.answers ?? {})) {
     const item = node("section", undefined, "jev-result__answer");
-    const label = key.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-    item.append(node("h4", label));
-    if (key === "duration_review") {
-      const advice = result.duration_review === "review_overestimate"
-        ? "Measured p90 is at most half the configured reserve. Review the accounting reserve for possible overestimation; no setting was changed."
-        : result.duration_review === "review_underestimate"
-          ? "Measured p90 exceeds the configured reserve. Review the accounting reserve for possible underestimation; no setting was changed."
-        : result.duration_review === "insufficient_data"
-          ? "There is not enough measured timing evidence to recommend a reserve review."
-          : "Keep the current accounting reserve based on the available timing evidence.";
-      item.append(node("p", advice));
-    }
-    else if (answer.type === "choice" && typeof answer.choice === "string") item.append(node("p", `Recommendation: ${answer.choice.replaceAll("_", " ")}`));
-    else if (answer.type === "score") {
-      const level = answer.legend?.[String(Math.round(answer.score))];
-      if (typeof level === "string") item.append(node("p", `${label}: ${level}`));
-    }
+    item.append(node("h4", formatJevAnswerLabel(key)));
+    const description = describeJevAnswer(key, answer, result.duration_review);
+    if (description) item.append(node("p", description));
     answers.append(item);
   }
   card.append(answers, node("p", "Advisory only", "jev-advisory"));
-  if (captureID && result.answers?.recommendation?.choice === "skip_once") {
-    const eligibility = result.skip_eligibility;
-    if (eligibility?.eligible && Number.isSafeInteger(eligibility.due_at)) {
-      const confirmSkip = button("Confirm skip this screenshot once", "secondary");
-      confirmSkip.addEventListener("click", async () => {
-        const dueAt = eligibility.due_at;
-        const confirmed = await showConfirmDialog({
-          title: "Skip one scheduled screenshot?",
-          description: `This skips the screenshot due ${formatTimestamp(dueAt)} once. The current image stays in use, and the next scheduled screenshot remains due as normal.`,
-          confirmLabel: "Skip once",
-        });
-        if (!confirmed) return;
-        confirmSkip.disabled = true;
-        try {
-          await api(`/admin/api/captures/${encodeURIComponent(captureID)}/skip-once`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ due_at: dueAt }),
-          });
-          confirmSkip.textContent = "Skip confirmed";
-          showMessage("One scheduled screenshot skip is confirmed.", false, "playlist");
-          await refresh();
-        } catch (error) {
-          confirmSkip.disabled = false;
-          showMessage(error.message, true, "playlist");
-        }
-      });
-      card.append(confirmSkip);
-    } else {
-      card.append(node("p", `This suggestion cannot be confirmed safely: ${eligibility?.reason || "the screenshot schedule changed"}`, "muted"));
-    }
-  }
+  appendSkipOnceRecommendation(card, result, captureID);
   return card;
+}
+
+function appendSkipOnceRecommendation(card, result, captureID) {
+  if (!captureID || result.answers?.recommendation?.choice !== "skip_once") return;
+  const eligibility = result.skip_eligibility;
+  if (!eligibility?.eligible || !Number.isSafeInteger(eligibility.due_at)) {
+    card.append(node("p", `This suggestion cannot be confirmed safely: ${eligibility?.reason || "the screenshot schedule changed"}`, "muted"));
+    return;
+  }
+  const confirmSkip = button("Confirm skip this screenshot once", "secondary");
+  confirmSkip.addEventListener("click", () => confirmSkipOnce(confirmSkip, eligibility.due_at, captureID));
+  card.append(confirmSkip);
+}
+
+async function confirmSkipOnce(confirmSkip, dueAt, captureID) {
+  const confirmed = await showConfirmDialog({
+    title: "Skip one scheduled screenshot?",
+    description: `This skips the screenshot due ${formatTimestamp(dueAt)} once. The current image stays in use, and the next scheduled screenshot remains due as normal.`,
+    confirmLabel: "Skip once",
+  });
+  if (!confirmed) return;
+  confirmSkip.disabled = true;
+  try {
+    await api(`/admin/api/captures/${encodeURIComponent(captureID)}/skip-once`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ due_at: dueAt }),
+    });
+    confirmSkip.textContent = "Skip confirmed";
+    showMessage("One scheduled screenshot skip is confirmed.", false, "playlist");
+    await refresh();
+  } catch (error) {
+    confirmSkip.disabled = false;
+    showMessage(error.message, true, "playlist");
+  }
 }
 
 function showConfirmDialog({ title, description, confirmLabel, destructive = false }) {

@@ -34,3 +34,28 @@ test('uncertain, stale, missing or failed captures always retain their schedule'
 test('a repeated deferral cannot exceed two configured intervals of image age', () => {
   assert.equal(decideCapturePolicy({ ...target, last_success_at: now - 120_000 }, decision, now).action, 'capture');
 });
+
+test('malformed schedules and recent failures always keep the normal capture schedule', () => {
+  for (const changed of [
+    { capture_interval_seconds: 0 },
+    { capture_interval_seconds: 60.5 },
+    { next_due_at: now - 1 },
+    { last_success_at: now + 1 },
+    { last_error: 'Browser Run timed out' },
+    { current_sha256: null },
+  ]) {
+    assert.equal(decideCapturePolicy({ ...target, ...changed }, decision, now).action, 'capture');
+  }
+});
+
+test('the documented confidence and risk boundaries are inclusive', () => {
+  const boundaryDecision = { answers: {
+    recommendation: { type: 'choice' as const, choice: 'skip_once', confidence: 0.8 },
+    risk: { type: 'score' as const, score: 0.5, confidence: 0.8 },
+  } };
+  assert.equal(decideCapturePolicy(target, boundaryDecision, now).action, 'defer_once');
+  assert.equal(decideCapturePolicy(target, { answers: {
+    recommendation: boundaryDecision.answers.recommendation,
+    risk: { ...boundaryDecision.answers.risk, score: 0.5001 },
+  } }, now).action, 'capture');
+});

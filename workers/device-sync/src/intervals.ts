@@ -22,7 +22,7 @@ export function isSupportedCaptureInterval(value: unknown): value is number {
   return Number.isSafeInteger(value) && CAPTURE_INTERVALS.some(({ value: allowed }) => allowed === value);
 }
 
-export function isSupportedRotationInterval(value: unknown) {
+export function isSupportedRotationInterval(value: unknown): value is string {
   return ROTATION_INTERVALS.some(({ value: allowed }) => allowed === value);
 }
 

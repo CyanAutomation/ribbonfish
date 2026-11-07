@@ -430,6 +430,21 @@ test("static management assets only accept GET requests", async () => {
   assert.equal(response.headers.get("allow"), "GET");
 });
 
+test("admin routing preserves API and asset not-found responses", async () => {
+  const env = testEnvironment();
+  const apiMissing = await handleAdminRequest(request("/admin/api/not-a-route"), env);
+  assert.equal(apiMissing.status, 404);
+  assert.deepEqual(await apiMissing.json(), { error: "not found" });
+
+  const assetMissing = await handleAdminRequest(request("/admin/not-a-file"), env);
+  assert.equal(assetMissing.status, 404);
+  assert.equal(await assetMissing.text(), "not found");
+
+  const wrongMethod = await handleAdminRequest(request("/admin/api/overview", { method: "POST", body: {} }), env);
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get("allow"), "GET");
+});
+
 test("R2 failures while serving management assets become an admin error response", async () => {
   const env = testEnvironment();
   env.ASSETS.get = async () => { throw new Error("R2 unavailable"); };
@@ -1102,6 +1117,18 @@ test("device status changes are recorded and token rotation returns the token on
   assert.equal(JSON.stringify(env.DB.auditEvents).includes(device_token), false);
   assert.equal(env.DB.auditEvents.some((event) => event.event_type === "device.credential_rotated"), true);
   assert.equal(env.DB.auditEvents.at(-1).actor_id, "anonymous");
+});
+
+test("device health history returns its resolved history payload", async () => {
+  const response = await handleAdminRequest(request("/admin/api/devices/pi-office/health-history"), testEnvironment());
+
+  assert.equal(response.status, 200);
+  const history = await response.json();
+  assert.equal(history.device_id, "pi-office");
+  assert.equal(history.enabled, true);
+  assert.equal(Number.isSafeInteger(history.since), true);
+  assert.deepEqual(history.samples, []);
+  assert.deepEqual(history.events, []);
 });
 
 test("a device can be permanently removed through the admin API", async () => {

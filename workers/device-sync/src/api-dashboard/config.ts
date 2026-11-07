@@ -14,8 +14,7 @@ export type ApiDashboardConfig = { sources: SourceConfig[]; width: number; heigh
 export type SourceFieldName = "id" | "provider" | "display_name" | "enabled" | "hostname" | "slug";
 export type SourceFieldErrors = Partial<Record<SourceFieldName, string>>;
 
-export const DEFAULT_API_DASHBOARD_INTERVAL = 300;
-export const MAX_API_DASHBOARD_SOURCES = 30;
+const MAX_API_DASHBOARD_SOURCES = 30;
 
 /** Shared source validation used by the management editor and Worker API. */
 export function sourceConfigErrors(value: unknown): SourceFieldErrors {
