@@ -14,7 +14,7 @@ export class AssetDeletionInProgressError extends Error {
   }
 }
 
-export async function hasAssetReference(db: D1Database, sha256: string) {
+async function hasAssetReference(db: D1Database, sha256: string) {
   return Boolean(await db.prepare(HAS_ASSET_REFERENCE_SQL).bind(sha256, sha256, sha256, sha256).first());
 }
 

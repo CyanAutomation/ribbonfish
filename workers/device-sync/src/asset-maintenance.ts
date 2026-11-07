@@ -7,7 +7,7 @@ type AssetSnapshot = { state: string | null; expires_at: number | null; write_le
 type SnapshotRow = { sha256: string; state: string | null; expires_at: number | null; write_lease_until: number | null; kind: "playlist" | "placeholder" | "current" | "history" | null; size: number | null };
 
 export const ASSET_RECONCILIATION_PAGE_SIZE = 40;
-export const LEGACY_ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
+const LEGACY_ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
 const RECONCILIATION_LEASE_MS = 55_000;
 const DEFAULT_RECONCILIATION_INTERVAL_MS = 15 * 60 * 1000;
 const ASSET_KEY_PATTERN = /^assets\/([a-f0-9]{64})$/;
@@ -22,10 +22,6 @@ const NOT_REFERENCED_SQL = `
   NOT EXISTS (SELECT 1 FROM playlist_assets WHERE sha256 = ?)
   AND NOT EXISTS (SELECT 1 FROM capture_targets WHERE placeholder_sha256 = ? OR current_sha256 = ?)
   AND NOT EXISTS (SELECT 1 FROM capture_history WHERE sha256 = ?)`;
-
-export async function deleteIfUnreferenced(env: AssetEnv, sha256: string, now = Date.now()) {
-  return (await deleteUnreferencedAssets(env, [sha256], now)) === 1;
-}
 
 export async function deleteUnreferencedAssets(env: AssetEnv, sha256s: string[], now = Date.now()) {
   const candidates = [...new Set(sha256s.filter((sha256) => /^[a-f0-9]{64}$/.test(sha256)))];
