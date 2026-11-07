@@ -15,6 +15,7 @@ These focused instructions describe current repository workflows and implementat
 | [cloudflare-worker-operations](cloudflare-worker-operations/SKILL.md) | Wrangler environments, D1 migrations, secrets, and Worker rollout |
 | [cloudflare-asset-lifecycle](cloudflare-asset-lifecycle/SKILL.md) | Private R2 assets, D1 references, retention, and reconciliation |
 | [cloudflare-capture-design](cloudflare-capture-design/SKILL.md) | Capture scheduling, publication constraints, implementation review, and future design |
+| [fallow](fallow/SKILL.md) | Fallow audits, TypeScript cleanup, duplication, and complexity health in the Worker project |
 | [device-contract-changes](device-contract-changes/SKILL.md) | Changes crossing the Go agent and Worker API/data boundary |
 | [device-fleet-operations](device-fleet-operations/SKILL.md) | Enrollment approval, health triage, credential lifecycle, and device recovery |
 | [github-actions-release](github-actions-release/SKILL.md) | CI workflows, protected deployment, and multi-architecture image publishing |

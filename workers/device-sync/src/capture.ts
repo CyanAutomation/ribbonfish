@@ -2,8 +2,8 @@ import { MAX_ASSET_BYTES, isPNG, storePngAsset } from "./asset-store.ts";
 import { ASSET_WRITE_LEASE_MS } from "./asset-registry.ts";
 import { isSupportedCaptureInterval } from "./intervals.ts";
 
-export const MAX_CAPTURE_TIMEOUT_MS = 45_000;
-export const MAX_CAPTURE_PIXELS = 3840 * 2160;
+const MAX_CAPTURE_TIMEOUT_MS = 45_000;
+const MAX_CAPTURE_PIXELS = 3840 * 2160;
 
 const MAX_URL_LENGTH = 2048;
 const BLOCKED_SUFFIXES = [".localhost", ".local", ".internal", ".test", ".invalid", ".onion", ".arpa"];
@@ -24,7 +24,7 @@ export interface CaptureTarget {
   wait_for_selector?: string | null;
 }
 
-export class CaptureError extends Error {
+class CaptureError extends Error {
   retryable: boolean;
   status: number | null;
   browserMs: number;

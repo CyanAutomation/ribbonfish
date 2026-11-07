@@ -20,26 +20,48 @@ type Decision = Pick<JevDecisionResult, 'answers'>;
 const MIN_JEV_CONFIDENCE = 0.8;
 const DURATION_REVIEW_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
-// The model supplies a suggestion; deterministic rules bound any prospective deferral.
-export function decideCapturePolicy(target: PolicyTarget, decision: Decision | null, now: number) {
-  const interval = target.capture_interval_seconds * 1000;
+function safeSchedule(target: PolicyTarget, now: number) {
+  const intervalSeconds = target.capture_interval_seconds;
   const due = target.next_due_at;
+  const lastSuccessAt = target.last_success_at;
+  if (!Number.isSafeInteger(intervalSeconds) || intervalSeconds <= 0 || !Number.isSafeInteger(due) ||
+      typeof lastSuccessAt !== "number" || !Number.isSafeInteger(lastSuccessAt)) return null;
+
+  const intervalMs = intervalSeconds * 1000;
+  if (!Number.isSafeInteger(intervalMs) || lastSuccessAt > now || due < now ||
+      due + intervalMs - lastSuccessAt > 2 * intervalMs) return null;
+  return { due, intervalMs };
+}
+
+function hasStableRecentScreenshot(target: PolicyTarget) {
   const recent = (target.history ?? []).slice(0, 3);
-  const stable = target.current_sha256 && recent.length === 3 && recent.every((item) => item.sha256 === target.current_sha256);
-  const safe = Number.isSafeInteger(interval) && interval > 0 && Number.isSafeInteger(due) &&
-    typeof target.last_success_at === "number" && Number.isSafeInteger(target.last_success_at) && target.last_success_at <= now &&
-    due >= now && due + interval - target.last_success_at <= 2 * interval &&
-    target.current_asset_present && !target.failure_count && !target.last_error && !target.job_status && stable;
+  return Boolean(target.current_sha256) && recent.length === 3 &&
+    recent.every((item) => item.sha256 === target.current_sha256);
+}
+
+function hasNoCaptureFault(target: PolicyTarget) {
+  return Boolean(target.current_asset_present) && !target.failure_count && !target.last_error && !target.job_status;
+}
+
+function isConfident(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= MIN_JEV_CONFIDENCE;
+}
+
+function hasConfidentLowRiskRecommendation(decision: Decision | null) {
   const recommendation = decision?.answers?.recommendation;
   const risk = decision?.answers?.risk;
-  if (safe && recommendation?.choice === 'skip_once' &&
-      typeof recommendation.confidence === "number" && Number.isFinite(recommendation.confidence) && recommendation.confidence >= MIN_JEV_CONFIDENCE &&
-      typeof risk?.confidence === "number" && Number.isFinite(risk.confidence) && risk.confidence >= MIN_JEV_CONFIDENCE &&
-      typeof risk.score === "number" && Number.isFinite(risk.score) && risk.score <= 0.5) {
-    return { action: 'defer_once', next_due_at: due + interval,
+  return recommendation?.choice === "skip_once" && isConfident(recommendation.confidence) &&
+    isConfident(risk?.confidence) && typeof risk?.score === "number" && Number.isFinite(risk.score) && risk.score <= 0.5;
+}
+
+// The model supplies a suggestion; deterministic rules bound any prospective deferral.
+export function decideCapturePolicy(target: PolicyTarget, decision: Decision | null, now: number) {
+  const schedule = safeSchedule(target, now);
+  if (schedule && hasNoCaptureFault(target) && hasStableRecentScreenshot(target) && hasConfidentLowRiskRecommendation(decision)) {
+    return { action: 'defer_once', next_due_at: schedule.due + schedule.intervalMs,
       reason: 'Three recent screenshots are identical and the current image is available.' };
   }
-  return { action: 'capture', next_due_at: due, reason: 'Keep the scheduled capture when evidence is insufficient or a safeguard applies.' };
+  return { action: 'capture', next_due_at: target.next_due_at, reason: 'Keep the scheduled capture when evidence is insufficient or a safeguard applies.' };
 }
 
 // Shadow decisions are recorded ahead of time and never modify capture schedules.

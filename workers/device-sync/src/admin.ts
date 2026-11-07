@@ -80,252 +80,282 @@ const ADMIN_FILES = new Map([
 
 // Production management deployments require a Cloudflare Access identity and an
 // explicit email allowlist, so the admin API fails closed if either is missing.
-export async function handleAdminRequest(request: Request, env: WorkerEnvironment, ctx?: AdminRequestContext) {
-  if (env.ADMIN_ENABLED !== "true") return new Response("not found", { status: 404 });
+type AdminRouteContext = {
+  request: Request;
+  url: URL;
+  env: WorkerEnvironment;
+  actorID: string;
+  ctx?: AdminRequestContext;
+};
+type AdminApiRoute = (context: AdminRouteContext) => Promise<Response | null>;
 
-  let actorID = "anonymous";
-  if (env.ADMIN_ACCESS_REQUIRED === "true") {
-    try {
-      const identity = await ctx?.access?.getIdentity();
-      if (typeof identity?.email !== "string" || !identity.email.trim()) {
-        return new Response("access required", { status: 401 });
-      }
-      if (!isAllowedAdminEmail(identity.email, env.ADMIN_ALLOWED_EMAILS)) {
-        return new Response("admin access required", { status: 403 });
-      }
-      actorID = identity.email.trim();
-    } catch {
+async function adminActorID(env: WorkerEnvironment, ctx?: AdminRequestContext): Promise<string | Response> {
+  if (env.ADMIN_ENABLED !== "true") return new Response("not found", { status: 404 });
+  if (env.ADMIN_ACCESS_REQUIRED !== "true") return "anonymous";
+
+  try {
+    const identity = await ctx?.access?.getIdentity();
+    if (typeof identity?.email !== "string" || !identity.email.trim()) {
       return new Response("access required", { status: 401 });
     }
+    if (!isAllowedAdminEmail(identity.email, env.ADMIN_ALLOWED_EMAILS)) {
+      return new Response("admin access required", { status: 403 });
+    }
+    return identity.email.trim();
+  } catch {
+    return new Response("access required", { status: 401 });
   }
+}
 
-  const url = new URL(request.url);
+function withAdminMethod(
+  request: Request,
+  expected: string,
+  run: () => Response | Promise<Response>,
+): Response | Promise<Response> {
+  return request.method === expected ? run() : methodNotAllowed(expected);
+}
+
+// Production management deployments require a Cloudflare Access identity and an
+// explicit email allowlist, so the admin API fails closed if either is missing.
+export async function handleAdminRequest(request: Request, env: WorkerEnvironment, ctx?: AdminRequestContext) {
+  const actorID = await adminActorID(env, ctx);
+  if (actorID instanceof Response) return actorID;
+
+  const context: AdminRouteContext = { request, url: new URL(request.url), env, actorID, ctx };
   try {
-    if (url.pathname === "/admin" || url.pathname === "/admin/") {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      return await fetchAdminAsset(request, env, "/admin/index.html");
-    }
+    const staticResponse = await handleAdminStaticRoute(context);
+    return staticResponse ?? await dispatchAdminApiRoute(context);
+  } catch (error) {
+    if (error instanceof JEVRequestError) return jsonResponse({ error: "Analysis is temporarily unavailable. Try again shortly." }, error.status);
+    if (error instanceof HTTPError) return jsonResponse({ error: error.message }, error.status);
+    return jsonResponse({ error: "internal error" }, 500);
+  }
+}
 
-    if (!url.pathname.startsWith("/admin/api/")) {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      return await fetchAdminAsset(request, env, url.pathname);
-    }
+async function handleAdminStaticRoute({ request, url, env }: AdminRouteContext): Promise<Response | null> {
+  if (url.pathname === "/admin" || url.pathname === "/admin/") {
+    return await withAdminMethod(request, "GET", () => fetchAdminAsset(request, env, "/admin/index.html"));
+  }
+  if (url.pathname.startsWith("/admin/api/")) return null;
+  return await withAdminMethod(request, "GET", () => fetchAdminAsset(request, env, url.pathname));
+}
 
-    if (url.pathname === "/admin/api/overview") {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      return jsonResponse(await readOverview(env));
-    }
+async function dispatchAdminApiRoute(context: AdminRouteContext): Promise<Response> {
+  const routes: AdminApiRoute[] = [
+    handleAdminReadRoutes,
+    handleAdminEnrollmentRoutes,
+    handleAdminDashboardRoutes,
+    handleAdminCaptureRoutes,
+    handleAdminAssetRoutes,
+    handleAdminPlaylistRoutes,
+    handleAdminDeviceRoutes,
+  ];
+  for (const route of routes) {
+    const response = await route(context);
+    if (response) return response;
+  }
+  return jsonResponse({ error: "not found" }, 404);
+}
 
-    if (url.pathname === "/admin/api/capture-forecast") {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      return jsonResponse(await readCaptureForecast(env));
-    }
-
-    if (url.pathname === "/admin/api/intervals") {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      return jsonResponse(intervalCatalog());
-    }
-
-    if (url.pathname === "/admin/api/capture-decisions") {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      const rows = await env.DB.prepare(
-        "SELECT d.capture_id, d.due_at, d.assessed_at, d.action, d.reason, d.observed_at, d.observed_result, d.observed_delay_ms, d.state_json, d.decision_json FROM capture_decisions d " +
-        "JOIN capture_targets t ON t.capture_id = d.capture_id " +
-        "WHERE t.enabled = 1 AND d.action != 'pending' AND d.due_at = (SELECT MAX(d2.due_at) FROM capture_decisions d2 WHERE d2.capture_id = d.capture_id AND d2.action != 'pending') " +
-        "LIMIT 1000",
-      ).all();
-      return jsonResponse((rows.results ?? []).map((row) => {
-        const { state_json: stateJSON, decision_json: decisionJSON, ...summary } = row;
-        const state = parseMetadata(stateJSON);
-        const decision = parseMetadata(decisionJSON);
-        return {
-          ...summary,
-          duration_review: durationReviewRecommendation(decision?.answers, state?.capture_duration),
-        };
-      }));
-    }
-
-    if (url.pathname === "/admin/api/jev/capture-assessment") {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      const data = await readJSON(request);
-      if (!hasExactKeys(data, ["capture_id"]) || typeof data.capture_id !== "string" || !UUID_PATTERN.test(data.capture_id)) {
-        throw new HTTPError(400, "request body must contain a valid capture_id");
-      }
-      const target = await readCaptureAssessmentTarget(data.capture_id, env);
-      if (!target) throw new HTTPError(404, "that page screenshot is not available for assessment");
-      await enforceJevRateLimit(env, actorID);
-      const decision = await callJevDecision(env, {
-        state: buildCaptureAssessmentState(target),
-        questions: captureAssessmentQuestions,
+async function handleAdminReadRoutes({ request, url, env, actorID }: AdminRouteContext): Promise<Response | null> {
+  switch (url.pathname) {
+    case "/admin/api/overview":
+      return await withAdminMethod(request, "GET", async () => jsonResponse(await readOverview(env)));
+    case "/admin/api/capture-forecast":
+      return await withAdminMethod(request, "GET", async () => jsonResponse(await readCaptureForecast(env)));
+    case "/admin/api/intervals":
+      return await withAdminMethod(request, "GET", () => jsonResponse(intervalCatalog()));
+    case "/admin/api/capture-decisions":
+      return await withAdminMethod(request, "GET", async () => {
+        const rows = await env.DB.prepare(
+          "SELECT d.capture_id, d.due_at, d.assessed_at, d.action, d.reason, d.observed_at, d.observed_result, d.observed_delay_ms, d.state_json, d.decision_json FROM capture_decisions d " +
+          "JOIN capture_targets t ON t.capture_id = d.capture_id " +
+          "WHERE t.enabled = 1 AND d.action != 'pending' AND d.due_at = (SELECT MAX(d2.due_at) FROM capture_decisions d2 WHERE d2.capture_id = d.capture_id AND d2.action != 'pending') " +
+          "LIMIT 1000",
+        ).all();
+        return jsonResponse((rows.results ?? []).map((row) => {
+          const { state_json: stateJSON, decision_json: decisionJSON, ...summary } = row;
+          const state = parseMetadata(stateJSON);
+          const decision = parseMetadata(decisionJSON);
+          return { ...summary, duration_review: durationReviewRecommendation(decision?.answers, state?.capture_duration) };
+        }));
       });
-      return jsonResponse({
-        ...decision,
-        duration_review: durationReviewRecommendation(decision.answers, target.duration_summary),
-        skip_eligibility: captureSkipEligibility(target, Date.now()),
+    case "/admin/api/jev/capture-assessment":
+      return await withAdminMethod(request, "POST", async () => {
+        const data = await readJSON(request);
+        if (!hasExactKeys(data, ["capture_id"]) || typeof data.capture_id !== "string" || !UUID_PATTERN.test(data.capture_id)) {
+          throw new HTTPError(400, "request body must contain a valid capture_id");
+        }
+        const target = await readCaptureAssessmentTarget(data.capture_id, env);
+        if (!target) throw new HTTPError(404, "that page screenshot is not available for assessment");
+        await enforceJevRateLimit(env, actorID);
+        const decision = await callJevDecision(env, {
+          state: buildCaptureAssessmentState(target),
+          questions: captureAssessmentQuestions,
+        });
+        return jsonResponse({
+          ...decision,
+          duration_review: durationReviewRecommendation(decision.answers, target.duration_summary),
+          skip_eligibility: captureSkipEligibility(target, Date.now()),
+        });
       });
-    }
+    default:
+      return null;
+  }
+}
 
-    const deviceHistory = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/health-history$/);
-    if (deviceHistory) {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      return jsonResponse(await readDeviceHealthHistory(decodeURIComponent(deviceHistory[1]), url.searchParams, env));
-    }
-
-    const deviceHealth = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/health$/);
-    if (deviceHealth) {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      return jsonResponse(await readDeviceHealth(decodeURIComponent(deviceHealth[1]), env));
-    }
-
-    if (url.pathname === "/admin/api/enrollment-requests") {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      return jsonResponse(await readEnrollmentRequests(env));
-    }
-
-    const enrollmentDecisionMatch = url.pathname.match(/^\/admin\/api\/enrollment-requests\/([a-f0-9]{64})\/(approve|reject)$/);
-    if (enrollmentDecisionMatch) {
-      if (request.method !== "POST") return methodNotAllowed("POST");
+async function handleAdminEnrollmentRoutes({ request, url, env, actorID }: AdminRouteContext): Promise<Response | null> {
+  if (url.pathname === "/admin/api/enrollment-requests") {
+    return await withAdminMethod(request, "GET", async () => jsonResponse(await readEnrollmentRequests(env)));
+  }
+  const decisionMatch = url.pathname.match(/^\/admin\/api\/enrollment-requests\/([a-f0-9]{64})\/(approve|reject)$/);
+  if (decisionMatch) {
+    return await withAdminMethod(request, "POST", async () => {
       const data = await readJSON(request);
       if (!hasExactKeys(data, [])) throw new HTTPError(400, "request body must be an empty JSON object");
-      return enrollmentDecisionMatch[2] === "approve"
-        ? await approveEnrollmentRequest(enrollmentDecisionMatch[1], env, actorID)
-        : await rejectEnrollmentRequest(enrollmentDecisionMatch[1], env, actorID);
-    }
+      return decisionMatch[2] === "approve"
+        ? await approveEnrollmentRequest(decisionMatch[1], env, actorID)
+        : await rejectEnrollmentRequest(decisionMatch[1], env, actorID);
+    });
+  }
+  if (url.pathname === "/admin/api/enrollment-codes") {
+    return await withAdminMethod(request, "POST", () => createEnrollmentCode(request, env, actorID));
+  }
+  return null;
+}
 
-    if (url.pathname === "/admin/api/enrollment-codes") {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      return await createEnrollmentCode(request, env, actorID);
-    }
+async function handleAdminDashboardRoutes({ request, url, env, actorID }: AdminRouteContext): Promise<Response | null> {
+  if (url.pathname === "/admin/api/api-dashboards") {
+    if (request.method === "GET") return jsonResponse(await readApiDashboards(env));
+    if (request.method !== "POST") return methodNotAllowed("GET, POST");
+    return await createApiDashboard(request, env, actorID);
+  }
+  const dashboardMatch = url.pathname.match(/^\/admin\/api\/api-dashboards\/([0-9a-f-]{36})$/i);
+  if (dashboardMatch) {
+    return await withAdminMethod(request, "PATCH", () =>
+      updateApiDashboard(request, dashboardMatch[1].toLowerCase(), env, actorID));
+  }
+  return null;
+}
 
-    if (url.pathname === "/admin/api/assets") {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      return await uploadAsset(request, env, actorID);
-    }
-
-    if (url.pathname === "/admin/api/capture-sites") {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      return await createCaptureSite(request, env, actorID);
-    }
-
-    if (url.pathname === "/admin/api/api-dashboards") {
-      if (request.method === "GET") return jsonResponse(await readApiDashboards(env));
-      if (request.method !== "POST") return methodNotAllowed("GET, POST");
-      return await createApiDashboard(request, env, actorID);
-    }
-
-    const apiDashboardMatch = url.pathname.match(/^\/admin\/api\/api-dashboards\/([0-9a-f-]{36})$/i);
-    if (apiDashboardMatch) {
-      if (request.method !== "PATCH") return methodNotAllowed("PATCH");
-      return await updateApiDashboard(request, apiDashboardMatch[1].toLowerCase(), env, actorID);
-    }
-
-    const captureDurationSamplesMatch = url.pathname.match(/^\/admin\/api\/captures\/([^/]+)\/duration-samples$/);
-    if (captureDurationSamplesMatch) {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      const captureID = captureDurationSamplesMatch[1];
+async function handleAdminCaptureRoutes({ request, url, env, actorID }: AdminRouteContext): Promise<Response | null> {
+  if (url.pathname === "/admin/api/capture-sites") {
+    return await withAdminMethod(request, "POST", () => createCaptureSite(request, env, actorID));
+  }
+  const durationMatch = url.pathname.match(/^\/admin\/api\/captures\/([^/]+)\/duration-samples$/);
+  if (durationMatch) {
+    return await withAdminMethod(request, "GET", async () => {
+      const captureID = durationMatch[1];
       if (!UUID_PATTERN.test(captureID)) throw new HTTPError(400, "capture_id must be a UUID");
       return jsonResponse(await readCaptureDurationSamples(captureID.toLowerCase(), url.searchParams, env));
-    }
-
-    const captureSkipMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/skip-once$/i);
-    if (captureSkipMatch) {
-      if (request.method !== "POST") return methodNotAllowed("POST");
+    });
+  }
+  const skipMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/skip-once$/i);
+  if (skipMatch) {
+    return await withAdminMethod(request, "POST", async () => {
       const data = await readJSON(request);
       if (!hasExactKeys(data, ["due_at"]) || typeof data.due_at !== "number" || !Number.isSafeInteger(data.due_at) || data.due_at < 0) {
         throw new HTTPError(400, "request body must contain a valid due_at timestamp");
       }
-      await confirmCaptureSkip(captureSkipMatch[1].toLowerCase(), data.due_at, env, actorID);
+      await confirmCaptureSkip(skipMatch[1].toLowerCase(), data.due_at, env, actorID);
       return jsonResponse({ confirmed: true, due_at: data.due_at }, 202);
+    });
+  }
+  const nameMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/name$/i);
+  if (nameMatch) {
+    return await withAdminMethod(request, "PATCH", () =>
+      updateCaptureName(request, nameMatch[1].toLowerCase(), env, actorID));
+  }
+  const readinessMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/readiness$/i);
+  if (readinessMatch) {
+    return await withAdminMethod(request, "PATCH", () =>
+      updateCaptureReadiness(request, readinessMatch[1].toLowerCase(), env, actorID));
+  }
+  const captureMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})$/i);
+  if (captureMatch) {
+    if (request.method === "PATCH") {
+      return await updateCaptureInterval(request, captureMatch[1].toLowerCase(), env, actorID);
     }
-
-    const captureNameMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/name$/i);
-    if (captureNameMatch) {
-      if (request.method !== "PATCH") return methodNotAllowed("PATCH");
-      return await updateCaptureName(request, captureNameMatch[1].toLowerCase(), env, actorID);
+    if (request.method === "DELETE") {
+      return await removeCaptureSite(captureMatch[1].toLowerCase(), env, actorID);
     }
-
-    const captureReadinessMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/readiness$/i);
-    if (captureReadinessMatch) {
-      if (request.method !== "PATCH") return methodNotAllowed("PATCH");
-      return await updateCaptureReadiness(request, captureReadinessMatch[1].toLowerCase(), env, actorID);
-    }
-
-    const captureIntervalMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})$/i);
-    if (captureIntervalMatch) {
-      if (request.method === "PATCH") {
-        return await updateCaptureInterval(request, captureIntervalMatch[1].toLowerCase(), env, actorID);
-      }
-      if (request.method === "DELETE") {
-        return await removeCaptureSite(captureIntervalMatch[1].toLowerCase(), env, actorID);
-      }
-      return methodNotAllowed("PATCH, DELETE");
-    }
-
-    const captureRunMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/run$/i);
-    if (captureRunMatch) {
-      if (request.method !== "POST") return methodNotAllowed("POST");
+    return methodNotAllowed("PATCH, DELETE");
+  }
+  const runMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/run$/i);
+  if (runMatch) {
+    return await withAdminMethod(request, "POST", async () => {
       let result;
       try {
-        result = await enqueueCapture(captureRunMatch[1].toLowerCase(), env);
+        result = await enqueueCapture(runMatch[1].toLowerCase(), env);
       } catch (error) {
         if (error instanceof CaptureTargetNotAllowedError) throw new HTTPError(409, error.message);
         throw new HTTPError(503, "Capture could not be queued. Check the capture queue configuration and try again.");
       }
       if (!result) throw new HTTPError(404, "That webpage capture is no longer available.");
       return jsonResponse({ job_id: result.job_id, status: result.status }, 202);
-    }
-
-    const assetMatch = url.pathname.match(/^\/admin\/api\/assets\/([a-f0-9]{64})$/);
-    if (assetMatch) {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      return await readPlaylistAsset(assetMatch[1], env);
-    }
-
-    if (url.pathname === "/admin/api/playlists") {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      return await createPlaylist(request, env, actorID, ctx);
-    }
-
-    const revisionMatch = url.pathname.match(/^\/admin\/api\/playlists\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/);
-    if (revisionMatch) {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      return await readPlaylistRevision(decodeURIComponent(revisionMatch[1]), decodeURIComponent(revisionMatch[2]), env);
-    }
-
-    const playlistMatch = url.pathname.match(/^\/admin\/api\/playlists\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/);
-    if (playlistMatch) {
-      if (request.method !== "DELETE") return methodNotAllowed("DELETE");
-      return await deletePlaylist(decodeURIComponent(playlistMatch[1]), env, actorID);
-    }
-
-    if (url.pathname === "/admin/api/active-playlist") {
-      if (request.method !== "PUT") return methodNotAllowed("PUT");
-      return await activatePlaylist(request, env, actorID);
-    }
-
-    const rotateMatch = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/rotate$/);
-    if (rotateMatch) {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      return await rotateDeviceCredential(request, decodeURIComponent(rotateMatch[1]), env, actorID);
-    }
-
-    const deviceMatch = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/);
-    if (deviceMatch) {
-      if (request.method === "PATCH") {
-        return await setDeviceEnabled(request, decodeURIComponent(deviceMatch[1]), env, actorID);
-      }
-      if (request.method === "DELETE") {
-        return await deleteDevice(decodeURIComponent(deviceMatch[1]), env, actorID);
-      }
-      return methodNotAllowed("PATCH, DELETE");
-    }
-
-    return jsonResponse({ error: "not found" }, 404);
-  } catch (error) {
-    if (error instanceof JEVRequestError) return jsonResponse({ error: "Analysis is temporarily unavailable. Try again shortly." }, error.status);
-    if (error instanceof HTTPError) return jsonResponse({ error: error.message }, error.status);
-    return jsonResponse({ error: "internal error" }, 500);
+    });
   }
+  return null;
+}
+
+async function handleAdminAssetRoutes({ request, url, env, actorID }: AdminRouteContext): Promise<Response | null> {
+  if (url.pathname === "/admin/api/assets") {
+    return await withAdminMethod(request, "POST", () => uploadAsset(request, env, actorID));
+  }
+  const assetMatch = url.pathname.match(/^\/admin\/api\/assets\/([a-f0-9]{64})$/);
+  if (assetMatch) {
+    return await withAdminMethod(request, "GET", () => readPlaylistAsset(assetMatch[1], env));
+  }
+  return null;
+}
+
+async function handleAdminPlaylistRoutes({ request, url, env, actorID, ctx }: AdminRouteContext): Promise<Response | null> {
+  if (url.pathname === "/admin/api/playlists") {
+    return await withAdminMethod(request, "POST", () => createPlaylist(request, env, actorID, ctx));
+  }
+  const revisionMatch = url.pathname.match(/^\/admin\/api\/playlists\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/);
+  if (revisionMatch) {
+    return await withAdminMethod(request, "GET", () =>
+      readPlaylistRevision(decodeURIComponent(revisionMatch[1]), decodeURIComponent(revisionMatch[2]), env));
+  }
+  const playlistMatch = url.pathname.match(/^\/admin\/api\/playlists\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/);
+  if (playlistMatch) {
+    return await withAdminMethod(request, "DELETE", () =>
+      deletePlaylist(decodeURIComponent(playlistMatch[1]), env, actorID));
+  }
+  if (url.pathname === "/admin/api/active-playlist") {
+    return await withAdminMethod(request, "PUT", () => activatePlaylist(request, env, actorID));
+  }
+  return null;
+}
+
+async function handleAdminDeviceRoutes({ request, url, env, actorID }: AdminRouteContext): Promise<Response | null> {
+  const historyMatch = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/health-history$/);
+  if (historyMatch) {
+    return await withAdminMethod(request, "GET", async () =>
+      jsonResponse(await readDeviceHealthHistory(decodeURIComponent(historyMatch[1]), url.searchParams, env)));
+  }
+  const healthMatch = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/health$/);
+  if (healthMatch) {
+    return await withAdminMethod(request, "GET", async () =>
+      jsonResponse(await readDeviceHealth(decodeURIComponent(healthMatch[1]), env)));
+  }
+  const rotateMatch = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/rotate$/);
+  if (rotateMatch) {
+    return await withAdminMethod(request, "POST", () =>
+      rotateDeviceCredential(request, decodeURIComponent(rotateMatch[1]), env, actorID));
+  }
+  const deviceMatch = url.pathname.match(/^\/admin\/api\/devices\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/);
+  if (deviceMatch) {
+    if (request.method === "PATCH") {
+      return await setDeviceEnabled(request, decodeURIComponent(deviceMatch[1]), env, actorID);
+    }
+    if (request.method === "DELETE") {
+      return await deleteDevice(decodeURIComponent(deviceMatch[1]), env, actorID);
+    }
+    return methodNotAllowed("PATCH, DELETE");
+  }
+  return null;
 }
 
 async function readCaptureAssessmentTarget(captureID: string, env: WorkerEnvironment): Promise<CaptureSkipTarget | null> {
@@ -667,33 +697,60 @@ async function readOverview(env: WorkerEnvironment) {
     ).bind(windowStart).first(),
   ]);
 
-  type MissingAsset = { sha256: string; expected_size: number; actual_size: number | null };
-  let missing: Array<MissingAsset | null> = [];
-  if (active) {
-    const [assets, captures] = await Promise.all([
-      env.DB.prepare(
-        "SELECT sha256, size FROM playlist_assets WHERE playlist_id = ? AND revision = ? ORDER BY position",
-      ).bind(active.playlist_id, active.revision).all(),
-      env.DB.prepare(
-        "SELECT CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
-        "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size " +
-        "FROM playlist_capture_items p JOIN capture_targets t ON t.capture_id = p.capture_id " +
-        "WHERE p.playlist_id = ? AND p.revision = ? ORDER BY p.position",
-      ).bind(windowStart, windowStart, active.playlist_id, active.revision).all(),
-    ]);
-    missing = await Promise.all([...(assets.results ?? []), ...(captures.results ?? [])].map(async (asset): Promise<MissingAsset | null> => {
-      const object = await env.ASSETS.head("assets/" + asset.sha256);
-      if (object && object.size === asset.size) return null;
-      return { sha256: asset.sha256, expected_size: asset.size, actual_size: object?.size ?? null };
-    }));
-    missing = missing.filter((item): item is MissingAsset => item !== null);
-  }
+  const missing = await readMissingActiveAssets(env, active, windowStart);
   const budgetValue = Number(env.DAILY_BROWSER_BUDGET_MS);
   const budgetMs = Number.isSafeInteger(budgetValue) && budgetValue >= 0 ? budgetValue : 600_000;
-  const runtimeAverageByCapture = new Map((captureRuntimeAverages.results ?? []).map((row) => [row.capture_id, row]));
-  const durationSummaryByCapture = new Map((captureDurationSummaries.results ?? []).map((row) => [row.capture_id, row]));
   const reserveMs = configuredCaptureReserveMs(env);
-  const captureTargetSummaries = (captureTargets.results ?? []).map((target) => {
+  const captureTargetSummaries = summarizeOverviewCaptureTargets(
+    captureTargets.results ?? [], captureRuntimeAverages.results ?? [], captureDurationSummaries.results ?? [], reserveMs,
+  );
+  const captureUsageSummary = buildCaptureUsageSummary(captureTargetSummaries.filter((target) => target.capture_type !== "api-dashboard"), captureUsage, budgetMs, now);
+
+  return {
+    generated_at: now,
+    environment: env.ADMIN_ACCESS_REQUIRED === "true" ? "production" : "development",
+    devices: (devices.results ?? []).map((device) => summarizeDeviceHealth(device, now)),
+    playlists: playlists.results ?? [],
+    active_playlist: active,
+    capture_targets: captureTargetSummaries,
+    capture_efficiency: summarizeOverviewCaptureEfficiency(
+      captureTargetSummaries, captureUsage, budgetMs, now, captureJobs, captureHistory, captureDecisions,
+    ),
+    asset_health: {
+      missing,
+      integrity_issues: integrityIssues.results ?? [],
+    },
+    audit: (audit.results ?? []).map(formatOverviewAuditEvent),
+  };
+}
+
+type MissingAsset = { sha256: string; expected_size: number; actual_size: number | null };
+
+async function readMissingActiveAssets(env: WorkerEnvironment, active: SqlRow | null, windowStart: number): Promise<MissingAsset[]> {
+  if (!active) return [];
+  const [assets, captures] = await Promise.all([
+    env.DB.prepare(
+      "SELECT sha256, size FROM playlist_assets WHERE playlist_id = ? AND revision = ? ORDER BY position",
+    ).bind(active.playlist_id, active.revision).all(),
+    env.DB.prepare(
+      "SELECT CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
+      "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size " +
+      "FROM playlist_capture_items p JOIN capture_targets t ON t.capture_id = p.capture_id " +
+      "WHERE p.playlist_id = ? AND p.revision = ? ORDER BY p.position",
+    ).bind(windowStart, windowStart, active.playlist_id, active.revision).all(),
+  ]);
+  const missing = await Promise.all([...(assets.results ?? []), ...(captures.results ?? [])].map(async (asset): Promise<MissingAsset | null> => {
+    const object = await env.ASSETS.head("assets/" + asset.sha256);
+    if (object && object.size === asset.size) return null;
+    return { sha256: asset.sha256, expected_size: asset.size, actual_size: object?.size ?? null };
+  }));
+  return missing.filter((item): item is MissingAsset => item !== null);
+}
+
+function summarizeOverviewCaptureTargets(targets: SqlRow[], runtimes: SqlRow[], durations: SqlRow[], reserveMs: number) {
+  const runtimeAverageByCapture = new Map(runtimes.map((row) => [row.capture_id, row]));
+  const durationSummaryByCapture = new Map(durations.map((row) => [row.capture_id, row]));
+  return targets.map((target) => {
     const source = target.capture_type === "api-dashboard" ? null : new URL(target.url);
     const runtime = runtimeAverageByCapture.get(target.capture_id);
     const duration = durationSummaryByCapture.get(target.capture_id);
@@ -723,65 +780,74 @@ async function readOverview(env: WorkerEnvironment) {
       duration_summary: target.capture_type === "api-dashboard" ? null : summarizeDurationAggregate(duration, reserveMs),
     };
   });
-  const captureUsageSummary = buildCaptureUsageSummary(captureTargetSummaries.filter((target) => target.capture_type !== "api-dashboard"), captureUsage, budgetMs, now);
+}
 
+function summarizeOverviewCaptureEfficiency(
+  captureTargets: SqlRow[],
+  captureUsage: SqlRow | null,
+  budgetMs: number,
+  now: number,
+  captureJobs: SqlRow | null,
+  captureHistory: SqlRow | null,
+  captureDecisions: SqlRow | null,
+) {
+  const summary = buildCaptureUsageSummary(captureTargets.filter((target) => target.capture_type !== "api-dashboard"), captureUsage, budgetMs, now);
   return {
-    generated_at: now,
-    environment: env.ADMIN_ACCESS_REQUIRED === "true" ? "production" : "development",
-    devices: (devices.results ?? []).map((device) => summarizeDeviceHealth(device, now)),
-    playlists: playlists.results ?? [],
-    active_playlist: active,
-    capture_targets: captureTargetSummaries,
-    capture_efficiency: {
-      daily_usage: captureUsageSummary.daily_usage,
-      forecast: captureUsageSummary.forecast,
-      last_30_days: {
-        successful_screenshots: captureJobs?.successful_screenshots ?? 0,
-        validator_unchanged: captureJobs?.validator_unchanged ?? 0,
-        successful_unclassified: captureJobs?.successful_unclassified ?? 0,
-        jev_shadow_assessments: captureDecisions?.assessments ?? 0,
-        jev_candidate_deferrals: captureDecisions?.candidate_deferrals ?? 0,
-        jev_candidate_changed: captureDecisions?.candidate_changed ?? 0,
-        jev_candidate_unchanged: captureDecisions?.candidate_unchanged ?? 0,
-        jev_candidate_validator_unchanged: captureDecisions?.candidate_validator_unchanged ?? 0,
-        jev_candidate_failed: captureDecisions?.candidate_failed ?? 0,
-        jev_candidate_budget_deferred: captureDecisions?.candidate_budget_deferred ?? 0,
-        jev_candidate_unobserved: captureDecisions?.candidate_unobserved ?? 0,
-        jev_candidate_unverified: captureDecisions?.candidate_unverified ?? 0,
-        jev_errors: captureDecisions?.errors ?? 0,
-        validator_outcomes: {
-          disabled: captureJobs?.validator_disabled ?? 0,
-          changed: captureJobs?.validator_changed ?? 0,
-          no_stored_validator: captureJobs?.validator_no_stored_validator ?? 0,
-          unavailable: captureJobs?.validator_unavailable ?? 0,
-          cached_asset_missing: captureJobs?.validator_cached_asset_missing ?? 0,
-          unknown: captureJobs?.validator_unknown ?? 0,
-        },
-        browser_run_ms: {
-          response_header: captureJobs?.browser_ms_response_header ?? 0,
-          reserve: captureJobs?.browser_ms_reserve ?? 0,
-          unclassified_jobs: captureJobs?.browser_ms_unclassified_jobs ?? 0,
-        },
-        browser_ms_sources: {
-          response_header: captureHistory?.response_header ?? 0,
-          reserve: captureHistory?.reserve ?? 0,
-          unknown: captureHistory?.unknown ?? 0,
-        },
-      },
+    daily_usage: summary.daily_usage,
+    forecast: summary.forecast,
+    last_30_days: summarizeOverviewLast30Days(captureJobs, captureHistory, captureDecisions),
+  };
+}
+
+function overviewCount(row: SqlRow | null, key: string) {
+  return row?.[key] ?? 0;
+}
+
+function summarizeOverviewLast30Days(captureJobs: SqlRow | null, captureHistory: SqlRow | null, captureDecisions: SqlRow | null) {
+  return {
+    successful_screenshots: overviewCount(captureJobs, "successful_screenshots"),
+    validator_unchanged: overviewCount(captureJobs, "validator_unchanged"),
+    successful_unclassified: overviewCount(captureJobs, "successful_unclassified"),
+    jev_shadow_assessments: overviewCount(captureDecisions, "assessments"),
+    jev_candidate_deferrals: overviewCount(captureDecisions, "candidate_deferrals"),
+    jev_candidate_changed: overviewCount(captureDecisions, "candidate_changed"),
+    jev_candidate_unchanged: overviewCount(captureDecisions, "candidate_unchanged"),
+    jev_candidate_validator_unchanged: overviewCount(captureDecisions, "candidate_validator_unchanged"),
+    jev_candidate_failed: overviewCount(captureDecisions, "candidate_failed"),
+    jev_candidate_budget_deferred: overviewCount(captureDecisions, "candidate_budget_deferred"),
+    jev_candidate_unobserved: overviewCount(captureDecisions, "candidate_unobserved"),
+    jev_candidate_unverified: overviewCount(captureDecisions, "candidate_unverified"),
+    jev_errors: overviewCount(captureDecisions, "errors"),
+    validator_outcomes: {
+      disabled: overviewCount(captureJobs, "validator_disabled"),
+      changed: overviewCount(captureJobs, "validator_changed"),
+      no_stored_validator: overviewCount(captureJobs, "validator_no_stored_validator"),
+      unavailable: overviewCount(captureJobs, "validator_unavailable"),
+      cached_asset_missing: overviewCount(captureJobs, "validator_cached_asset_missing"),
+      unknown: overviewCount(captureJobs, "validator_unknown"),
     },
-    asset_health: {
-      missing,
-      integrity_issues: integrityIssues.results ?? [],
+    browser_run_ms: {
+      response_header: overviewCount(captureJobs, "browser_ms_response_header"),
+      reserve: overviewCount(captureJobs, "browser_ms_reserve"),
+      unclassified_jobs: overviewCount(captureJobs, "browser_ms_unclassified_jobs"),
     },
-    audit: (audit.results ?? []).map((event) => ({
-      event_id: event.event_id,
-      actor_id: event.actor_id,
-      event_type: event.event_type,
-      subject_type: event.subject_type,
-      subject_id: event.subject_id,
-      occurred_at: event.occurred_at,
-      metadata: parseMetadata(event.metadata_json),
-    })),
+    browser_ms_sources: {
+      response_header: overviewCount(captureHistory, "response_header"),
+      reserve: overviewCount(captureHistory, "reserve"),
+      unknown: overviewCount(captureHistory, "unknown"),
+    },
+  };
+}
+
+function formatOverviewAuditEvent(event: SqlRow) {
+  return {
+    event_id: event.event_id,
+    actor_id: event.actor_id,
+    event_type: event.event_type,
+    subject_type: event.subject_type,
+    subject_id: event.subject_id,
+    occurred_at: event.occurred_at,
+    metadata: parseMetadata(event.metadata_json),
   };
 }
 
@@ -1083,6 +1149,30 @@ async function readPlaylistAsset(sha256: string, env: WorkerEnvironment) {
 }
 
 async function createPlaylist(request: Request, env: WorkerEnvironment, actorID: string, ctx?: AdminRequestContext) {
+  const input = await readPlaylistInput(request);
+  await verifyPlaylistAssets(input.assets, env);
+  const captureTargets = await resolvePlaylistCaptures(input.captures, env, actorID);
+  const revision = "r-" + crypto.randomUUID().replaceAll("-", "");
+  await savePlaylistRevision(input, revision, captureTargets, env, actorID);
+  await dispatchPlaylistCaptures(captureTargets, env, ctx);
+  return jsonResponse({
+    id: input.id,
+    revision,
+    rotation_interval: input.rotationInterval,
+    asset_count: input.assets.length,
+    capture_count: captureTargets.length,
+    ...(captureTargets.length ? { captures: captureTargets } : {}),
+  }, 201);
+}
+
+type PlaylistInput = {
+  id: string;
+  rotationInterval: string;
+  assets: PlaylistAssetInput[];
+  captures: PlaylistCaptureInput[];
+};
+
+async function readPlaylistInput(request: Request): Promise<PlaylistInput> {
   const data = await readJSON(request);
   if (!hasOnlyKeys(data, ["id", "rotation_interval", "assets", "captures"]) ||
       !Object.hasOwn(data, "id") ||
@@ -1098,6 +1188,15 @@ async function createPlaylist(request: Request, env: WorkerEnvironment, actorID:
     throw new HTTPError(400, "Add a playlist ID, a valid rotation interval and at least one image or webpage (up to 256 items).");
   }
 
+  return {
+    id: data.id,
+    rotationInterval,
+    assets: normalizePlaylistAssets(rawAssets),
+    captures: normalizePlaylistCaptures(rawCaptures),
+  };
+}
+
+function normalizePlaylistAssets(rawAssets: unknown[]): PlaylistAssetInput[] {
   const assets: PlaylistAssetInput[] = [];
   for (const asset of rawAssets) {
     if (!hasExactKeys(asset, ["sha256", "size"]) || !isString(asset.sha256) || !DIGEST_PATTERN.test(asset.sha256) ||
@@ -1106,7 +1205,10 @@ async function createPlaylist(request: Request, env: WorkerEnvironment, actorID:
     }
     assets.push({ sha256: asset.sha256, size: asset.size });
   }
+  return assets;
+}
 
+function normalizePlaylistCaptures(rawCaptures: unknown[]): PlaylistCaptureInput[] {
   const captures: PlaylistCaptureInput[] = [];
   for (const capture of rawCaptures) {
     if (!hasExactKeys(capture, ["capture_id"]) || !isString(capture.capture_id)) {
@@ -1114,37 +1216,50 @@ async function createPlaylist(request: Request, env: WorkerEnvironment, actorID:
     }
     captures.push({ capture_id: capture.capture_id });
   }
+  return captures;
+}
 
+async function verifyPlaylistAssets(assets: PlaylistAssetInput[], env: WorkerEnvironment): Promise<void> {
   for (const asset of assets) {
     const object = await env.ASSETS.head("assets/" + asset.sha256);
     if (!object || object.size !== asset.size) {
       throw new HTTPError(409, "One of these images is no longer available. Upload it again before saving the playlist.");
     }
   }
+}
 
-  const captureTargets: SqlRow[] = [];
+async function resolvePlaylistCaptures(captures: PlaylistCaptureInput[], env: WorkerEnvironment, actorID: string): Promise<SqlRow[]> {
+  const targets: SqlRow[] = [];
   for (const capture of captures) {
-    captureTargets.push(await resolveCaptureTarget(capture, env, actorID));
+    targets.push(await resolveCaptureTarget(capture, env, actorID));
   }
+  return targets;
+}
 
-  const revision = "r-" + crypto.randomUUID().replaceAll("-", "");
+async function savePlaylistRevision(
+  input: PlaylistInput,
+  revision: string,
+  captureTargets: SqlRow[],
+  env: WorkerEnvironment,
+  actorID: string,
+): Promise<void> {
   const statements = [env.DB.prepare(
     "INSERT INTO playlists (playlist_id, revision, rotation_interval, created_at) VALUES (?, ?, ?, ?)",
-  ).bind(data.id, revision, rotationInterval, Date.now())];
-  for (const [position, asset] of assets.entries()) {
+  ).bind(input.id, revision, input.rotationInterval, Date.now())];
+  for (const [position, asset] of input.assets.entries()) {
     statements.push(markAssetLiveStatement(env.DB, asset.sha256, asset.size, Date.now()));
     statements.push(env.DB.prepare(
       "INSERT INTO playlist_assets (playlist_id, revision, position, sha256, size) VALUES (?, ?, ?, ?, ?)",
-    ).bind(data.id, revision, position, asset.sha256, asset.size));
+    ).bind(input.id, revision, position, asset.sha256, asset.size));
   }
   for (const [index, target] of captureTargets.entries()) {
     statements.push(env.DB.prepare(
       "INSERT INTO playlist_capture_items (playlist_id, revision, position, capture_id) VALUES (?, ?, ?, ?)",
-    ).bind(data.id, revision, assets.length + index, target.capture_id));
+    ).bind(input.id, revision, input.assets.length + index, target.capture_id));
   }
-  statements.push(auditStatement(env, actorID, "playlist.revision_created", "playlist", data.id, {
+  statements.push(auditStatement(env, actorID, "playlist.revision_created", "playlist", input.id, {
     revision,
-    asset_count: assets.length,
+    asset_count: input.assets.length,
     capture_count: captureTargets.length,
   }));
   try {
@@ -1155,6 +1270,9 @@ async function createPlaylist(request: Request, env: WorkerEnvironment, actorID:
     }
     throw error;
   }
+}
+
+async function dispatchPlaylistCaptures(captureTargets: SqlRow[], env: WorkerEnvironment, ctx?: AdminRequestContext): Promise<void> {
   if (captureTargets.length) {
     const dispatch = dispatchDueCaptures(env, Date.now()).catch((error) => {
       console.error(JSON.stringify({
@@ -1165,14 +1283,6 @@ async function createPlaylist(request: Request, env: WorkerEnvironment, actorID:
     if (typeof ctx?.waitUntil === "function") ctx.waitUntil(dispatch);
     else await dispatch;
   }
-  return jsonResponse({
-    id: data.id,
-    revision,
-    rotation_interval: rotationInterval,
-    asset_count: assets.length,
-    capture_count: captureTargets.length,
-    ...(captureTargets.length ? { captures: captureTargets } : {}),
-  }, 201);
 }
 
 async function updateCaptureInterval(request: Request, captureID: string, env: WorkerEnvironment, actorID: string) {
