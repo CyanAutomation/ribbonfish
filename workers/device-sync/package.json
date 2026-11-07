@@ -7,14 +7,17 @@
   },
   "scripts": {
     "test": "node --test",
+    "fallow:audit": "fallow audit",
     "build:admin": "node scripts/build-admin.ts",
     "check:config": "wrangler deploy --dry-run --config wrangler.toml && wrangler deploy --dry-run --config wrangler.management.toml",
     "dev": "npm run publish:admin:local && wrangler dev --config wrangler.management.toml --local --var \"ADMIN_ENABLED:true\" \"ADMIN_ACCESS_REQUIRED:false\"",
     "deploy:production": "wrangler deploy --config wrangler.toml",
     "deploy:management": "npm run publish:admin:production && wrangler deploy --config wrangler.management.toml",
     "init:local": "node scripts/bootstrap-database.ts --local --config wrangler.management.toml --database ribbonfish-devices",
+    "make:enrollment-code": "node scripts/make-enrollment-code.ts",
     "publish:admin:production": "node scripts/publish-admin-assets.ts --config wrangler.management.toml --bucket ribbonfish-assets --remote",
     "publish:admin:local": "node scripts/publish-admin-assets.ts --config wrangler.management.toml --bucket ribbonfish-assets --local",
+    "publish:playlist": "node scripts/publish-playlist.ts",
     "migrate:management": "wrangler d1 migrations apply ribbonfish-devices --remote --config wrangler.management.toml",
     "typecheck:bindings": "wrangler types src/management-bindings.d.ts --config wrangler.management.toml --env-interface ManagementBindings --include-runtime=false --strict-vars=false --check",
     "typecheck": "npm run typecheck:bindings && tsc -p tsconfig.worker.json && tsc -p tsconfig.admin.json && tsc -p tsconfig.admin-entry.json && tsc -p tsconfig.scripts.json && tsc -p tsconfig.tdd-tests.json && node scripts/typecheck-tests.ts"
@@ -25,12 +28,14 @@
     "@types/jsdom": "^30.0.0",
     "@types/node": "^24.19.2",
     "esbuild": "^0.28.2",
+    "fallow": "^3.41.0",
     "jsdom": "^30.1.3",
     "parse5": "^8.0.1",
     "postcss": "^8.5.32",
     "typescript": "^7.0.2",
     "wrangler": "4.154.0",
-    "yaml": "^2.9.1"
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
   },
   "dependencies": {
     "@resvg/resvg-wasm": "^2.6.2"

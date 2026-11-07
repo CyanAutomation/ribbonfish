@@ -8,6 +8,7 @@ import { renderCaptureUsageForecast } from "../public/admin/capture-forecast-vie
 import {
   createFleetOpenUI,
   OPENUI_STARTER_SOURCE,
+  renderOpenUIElement,
 } from "../public/admin/openui-core.ts";
 import {
   confirmAction,
@@ -27,6 +28,8 @@ import {
   playlistDeleteActionStates,
   formatScreenshotStatus,
   formatTimestamp,
+  describeJevAnswer,
+  formatJevAnswerLabel,
   buildFleetInsights,
   prioritizeCaptureTargets,
   summarizeCaptureErrors,
@@ -177,6 +180,17 @@ test("pending enrollment details start collapsed in a native disclosure", async 
   assert.equal(pending.tagName, "details");
   assert.equal(attribute(pending, "open"), undefined);
   assert.ok(descendants(pending).some((node) => node.tagName === "summary"));
+});
+
+test("JEV answer descriptions keep advisory and recommendation wording readable", () => {
+  assert.equal(formatJevAnswerLabel("duration_review"), "Duration Review");
+  assert.match(describeJevAnswer("duration_review", { type: "choice" }, "review_overestimate"), /possible overestimation/);
+  assert.match(describeJevAnswer("duration_review", { type: "choice" }, "review_underestimate"), /possible underestimation/);
+  assert.match(describeJevAnswer("duration_review", { type: "choice" }, "insufficient_data"), /not enough measured timing evidence/);
+  assert.match(describeJevAnswer("duration_review", { type: "choice" }, "keep_current"), /Keep the current accounting reserve/);
+  assert.equal(describeJevAnswer("recommendation", { type: "choice", choice: "skip_once" }), "Recommendation: skip once");
+  assert.equal(describeJevAnswer("risk", { type: "score", score: 2, legend: { "2": "Moderate" } }), "Risk: Moderate");
+  assert.equal(describeJevAnswer("risk", { type: "score", score: 2, legend: {} }), null);
 });
 
 test("fleet insights explain prioritized current issues with evidence and next actions", () => {
@@ -490,6 +504,24 @@ test("OpenUI Core parses and evaluates a read-only fleet view", async () => {
   assert.equal(health.props.detail, "All images in the active playlist are available");
   assert.equal(overviewReads, 1);
   runtime.dispose();
+});
+
+test("OpenUI renderer handles text, supported elements, nested children, and unsupported types", () => {
+  const priorDocument = globalThis.document;
+  const dom = new JSDOM();
+  globalThis.document = dom.window.document;
+  try {
+    assert.equal(renderOpenUIElement(null).textContent, "");
+    assert.equal(renderOpenUIElement("plain text").textContent, "plain text");
+    const metric = { type: "element", typeName: "Metric", statementId: "metric", props: { label: "Devices", value: "2 enrolled", detail: "1 enabled" } };
+    const dashboard = renderOpenUIElement({ type: "element", typeName: "Dashboard", statementId: "dashboard", props: { children: [metric] } });
+    assert.equal(dashboard.textContent, "Devices2 enrolledMore about devices1 enabled");
+    assert.throws(() => renderOpenUIElement({ type: "element", typeName: "Unknown", statementId: "unknown", props: {} }), /Unsupported OpenUI component/);
+  } finally {
+    if (priorDocument === undefined) delete globalThis.document;
+    else globalThis.document = priorDocument;
+    dom.window.close();
+  }
 });
 
 test("OpenUI fleet health keeps degraded, stale, offline, unknown, and disabled counts distinct", async () => {

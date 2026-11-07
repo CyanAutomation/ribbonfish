@@ -117,6 +117,26 @@ test("a configured host allowlist restricts hosts and redirects are not followed
   assert.match(redirected.error ?? "", /redirect/);
 });
 
+test("Status API response failures retain safe messages and request health metrics", async () => {
+  const config = { id: "status-errors", provider: "atlassian-statuspage" as const, display_name: "Status errors", enabled: true, hostname: "status-page.example.net" };
+  const cases = [
+    { response: new Response(null, { status: 503 }), message: /HTTP 503/, retryable: true },
+    { response: new Response("html", { headers: { "Content-Type": "text/html" } }), message: /non-JSON/, retryable: false },
+    { response: new Response("{", { headers: { "Content-Type": "application/json" } }), message: /malformed JSON/, retryable: false },
+    { response: new Response(null, { headers: { "Content-Type": "application/json" } }), message: /empty response/, retryable: false },
+    { response: new Response("", { headers: { "Content-Type": "application/json", "Content-Length": "1000001" } }), message: /too large/, retryable: false },
+  ];
+
+  for (const item of cases) {
+    const source = await fetchSource(config, allowed, async () => item.response.clone());
+    assert.equal(source.freshness, "unavailable");
+    assert.match(source.error ?? "", item.message);
+    assert.equal(source.retryableError ?? false, item.retryable);
+    assert.equal(source.requestStats?.requestCount, 1);
+    assert.equal(source.requestStats?.failedRequestCount, 1);
+  }
+});
+
 test("Statuspage uses ETag validators and reuses cached normalized data on 304", async () => {
   const summary = await fixture("statuspage-summary.json");
   const config = { id: "status-c", provider: "atlassian-statuspage" as const, display_name: "Sample status", enabled: true, hostname: "status-page.example.net" };

@@ -1,5 +1,3 @@
-export type CaptureDurationSource = "response_header" | "reserve" | "unknown";
-
 export interface CaptureDurationSampleSummaryInput {
   browser_ms: number;
   browser_ms_source: string;
