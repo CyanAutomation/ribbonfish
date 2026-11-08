@@ -1,6 +1,61 @@
 import { formatTimestamp } from "./ui-utils.ts";
 import { linkButton, node, statusBadge } from "./ui-primitives.ts";
 
+export interface SidebarControllerOptions {
+  shell: HTMLElement;
+  sidebar: HTMLElement;
+  toggleButton: HTMLButtonElement;
+  initialExpanded?: boolean;
+}
+
+export interface SidebarController {
+  expand(): void;
+  collapse(): void;
+  toggle(): void;
+  dispose(): void;
+}
+
+/** Add optional collapse/reveal behavior while leaving native navigation links intact. */
+export function createSidebarController(options: SidebarControllerOptions): SidebarController {
+  const { shell, sidebar, toggleButton } = options;
+  const ownerDocument = sidebar.ownerDocument;
+  if (!sidebar.id) throw new Error("Sidebar navigation must have an id.");
+  if (toggleButton.getAttribute("aria-controls") !== sidebar.id) {
+    throw new Error("Sidebar toggle must reference the navigation id with aria-controls.");
+  }
+
+  let disposed = false;
+  const setExpanded = (expanded: boolean) => {
+    if (disposed) throw new Error("Sidebar controller has been disposed.");
+    if (!expanded && sidebar.contains(ownerDocument.activeElement)) toggleButton.focus();
+    sidebar.hidden = !expanded;
+    toggleButton.setAttribute("aria-expanded", String(expanded));
+    shell.classList.toggle("management-shell--nav-collapsed", !expanded);
+  };
+  const isHidden = () => Boolean(sidebar.hidden);
+  const onToggle = () => setExpanded(isHidden());
+
+  toggleButton.type = "button";
+  toggleButton.addEventListener("click", onToggle);
+  toggleButton.hidden = false;
+  setExpanded(options.initialExpanded ?? !isHidden());
+
+  return {
+    expand: () => setExpanded(true),
+    collapse: () => setExpanded(false),
+    toggle: () => setExpanded(isHidden()),
+    dispose() {
+      if (disposed) return;
+      toggleButton.removeEventListener("click", onToggle);
+      disposed = true;
+      sidebar.hidden = false;
+      shell.classList.remove("management-shell--nav-collapsed");
+      toggleButton.setAttribute("aria-expanded", "true");
+      toggleButton.hidden = true;
+    },
+  };
+}
+
 export type FindingCardModel = {
   key: string;
   title: string;

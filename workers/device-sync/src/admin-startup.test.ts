@@ -131,6 +131,19 @@ test("management navigation shows the selected section and moves focus", { timeo
     assert.equal(window.document.activeElement.id, "sites-title");
     assert.equal(window.document.querySelector('#module-navigation a[href="#sites-section"]').getAttribute("aria-current"), "page");
     assert.equal(window.document.querySelector("#capture-site-editor").open, false);
+
+    const navigation = window.document.querySelector("#module-navigation");
+    const toggle = window.document.querySelector("#module-navigation-toggle");
+    const activeLink = window.document.querySelector('#module-navigation a[href="#sites-section"]');
+    activeLink.focus();
+    toggle.click();
+    assert.equal(navigation.hidden, true, "the navigation can be collapsed");
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(window.document.activeElement, toggle, "focus returns to the visible toggle before hiding the sidebar");
+    assert.equal(window.document.querySelector("#management-shell").classList.contains("management-shell--nav-collapsed"), true);
+    toggle.click();
+    assert.equal(navigation.hidden, false, "the navigation can be revealed again");
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
   } finally {
     dom.window.close();
   }
@@ -206,6 +219,16 @@ test("API dashboard editor adds provider-aware sources and preserves existing ID
     await navigate(window, () => window.document.querySelector('#module-navigation a[href="#dashboards-section"]').click());
     const create = window.document.querySelector("#api-dashboard-form");
     assert.equal(create.querySelectorAll("[data-dashboard-source]").length, 1);
+    const sourceHostname = create.querySelector('[data-source-field="hostname"]');
+    assert.equal(sourceHostname.labels[0].htmlFor, sourceHostname.id);
+    assert.match(sourceHostname.getAttribute("aria-describedby"), /hostname-help/);
+    sourceHostname.value = "localhost";
+    sourceHostname.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.equal(sourceHostname.getAttribute("aria-invalid"), "true");
+    assert.match(sourceHostname.getAttribute("aria-describedby"), /hostname-error/);
+    sourceHostname.value = "status.example.org";
+    sourceHostname.dispatchEvent(new window.Event("input", { bubbles: true }));
+    assert.equal(sourceHostname.hasAttribute("aria-invalid"), false, "valid input clears its associated error state");
     create.querySelector("[data-add-dashboard-source]").click();
     assert.equal(create.querySelectorAll("[data-dashboard-source]").length, 2);
     const createProvider = create.querySelector("[data-dashboard-source] select[name=provider]");
@@ -279,7 +302,8 @@ test("site search, naming, and schedule review send the selected site data", asy
 
     const nameInput = window.document.querySelector("#capture-target-list input[data-site-name]");
     nameInput.value = "fbo QA status";
-    nameInput.parentElement.parentElement.querySelector("button").click();
+    assert.equal(nameInput.labels[0].textContent.includes("Name (optional)"), true);
+    nameInput.closest(".settings-group").querySelector("button").click();
     await settle();
     const nameRequest = requests.find(({ path }) => path.endsWith("/name"));
     assert.equal(JSON.parse(nameRequest.options.body).name, "fbo QA status");
@@ -303,7 +327,13 @@ test("operators can register a site and stage a playlist with an existing captur
     const siteForm = window.document.querySelector("#capture-site-form");
     siteForm.elements.namedItem("url").value = "https://added.example/";
     siteForm.dispatchEvent(new window.SubmitEvent("submit", { bubbles: true, cancelable: true }));
+    const siteSubmit = siteForm.querySelector("button[type=submit]");
+    assert.equal(siteSubmit.disabled, true);
+    assert.equal(siteSubmit.textContent, "Adding site…");
+    assert.equal(window.document.querySelector("#capture-site-feedback").textContent, "Adding site…");
     await settle();
+    assert.equal(siteSubmit.disabled, false);
+    assert.equal(siteSubmit.textContent, "Add site");
     const siteRequest = requests.find(({ path }) => path === "/admin/api/capture-sites");
     assert.deepEqual(JSON.parse(siteRequest.options.body), {
       url: "https://added.example/", viewport: { width: 1920, height: 1080 },
@@ -312,7 +342,12 @@ test("operators can register a site and stage a playlist with an existing captur
     window.document.querySelector('[name="id"]').value = "operations";
     window.document.querySelector("#available-sites input[data-capture-id]").checked = true;
     window.document.querySelector("#playlist-form").dispatchEvent(new window.SubmitEvent("submit", { bubbles: true, cancelable: true }));
+    const playlistSubmit = window.document.querySelector("#playlist-submit");
+    assert.equal(playlistSubmit.disabled, true);
+    assert.equal(playlistSubmit.textContent, "Saving playlist version…");
     await settle();
+    assert.equal(playlistSubmit.disabled, false);
+    assert.equal(playlistSubmit.textContent, "Save playlist version");
     const playlistRequest = requests.find(({ path }) => path === "/admin/api/playlists");
     assert.deepEqual(JSON.parse(playlistRequest.options.body).captures, [
       { capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },

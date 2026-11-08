@@ -820,16 +820,25 @@ test('management UI does not display model confidence or probability percentages
   assert.doesNotMatch(script, /answer\.probabilities|answer\.confidence|result\.model|result\.usage/);
 });
 
-test("module shell provides persistent navigation and an on-demand site form", async () => {
+test("management shell provides grouped persistent navigation and an on-demand site form", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../public/admin/styles.css", import.meta.url), "utf8");
   const nodes = parseHTML(html);
+  const shell = byID(nodes, "management-shell");
+  assert.ok(shell, "the console content uses a shared application shell");
   const nav = byID(nodes, "module-navigation");
   assert.ok(nav);
   assert.equal(attribute(nav, "aria-label"), "Management modules");
+  assert.equal(attribute(nav, "class")?.includes("management-sidebar"), true);
+  assert.equal(attribute(nav, "id"), attribute(byID(nodes, "module-navigation-toggle"), "aria-controls"));
+  assert.equal(attribute(byID(nodes, "module-navigation-toggle"), "aria-expanded"), "true");
+  assert.equal(attribute(byID(nodes, "module-navigation-toggle"), "hidden"), "");
   const links = descendants(nav).filter((item) => item.tagName === "a");
   for (const id of ["dashboard", "overview-section", "sites-section", "capture-efficiency-section", "playlist-section", "device-section", "activity-section", "fleet-insights"]) {
     assert.ok(links.some((link) => attribute(link, "href") === `#${id}`), `${id} is reachable`);
   }
+  assert.deepEqual(descendants(nav).filter((item) => item.tagName === "h2").map((item) => item.childNodes[0]?.value),
+    ["Overview", "Capture", "Fleet"]);
   const efficiencyTile = descendants(byID(nodes, "dashboard-tiles")).find((item) =>
     item.tagName === "a" && attribute(item, "href") === "#capture-efficiency-section");
   assert.ok(efficiencyTile, "capture efficiency has its own dashboard tile");
@@ -837,6 +846,36 @@ test("module shell provides persistent navigation and an on-demand site form", a
   const siteEditor = byID(nodes, "capture-site-editor");
   assert.equal(siteEditor.tagName, "details");
   assert.ok(descendants(siteEditor).some((item) => attribute(item, "id") === "capture-site-form"));
+  const stylesheet = postcss.parse(styles);
+  let desktopShell = false;
+  let narrowShell = false;
+  stylesheet.walkRules(".management-shell", (rule) => {
+    desktopShell ||= rule.nodes.some((node) => node.type === "decl" && node.prop === "display" && node.value === "grid");
+  });
+  stylesheet.walkAtRules("media", (media) => {
+    if (!/max-width:\s*56rem/.test(media.params)) return;
+    media.walkRules(".management-shell", (rule) => {
+      narrowShell ||= rule.nodes.some((node) => node.type === "decl" && node.prop === "grid-template-columns");
+    });
+  });
+  assert.equal(desktopShell, true);
+  assert.equal(narrowShell, true);
+});
+
+test("configuration forms separate dashboard details, sources, and playlist content into named groups", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const nodes = parseHTML(html);
+  for (const [formID, legend] of [
+    ["api-dashboard-form", "Dashboard details"],
+    ["playlist-form", "Playlist settings"],
+  ]) {
+    const form = byID(nodes, formID);
+    assert.ok(descendants(form).some((item) => item.tagName === "legend" && item.childNodes[0]?.value === legend));
+  }
+  assert.ok(descendants(byID(nodes, "api-dashboard-form")).some((item) =>
+    item.tagName === "details" && attribute(item, "id") === "api-dashboard-advanced-json"));
+  assert.ok(descendants(byID(nodes, "playlist-form")).some((item) =>
+    item.tagName === "fieldset" && attribute(item, "id") === "available-sites"));
 });
 
 test("capture sites and API dashboards are separate modules with their own home tiles", async () => {
