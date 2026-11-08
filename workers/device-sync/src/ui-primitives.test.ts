@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
-import { metricCard, scaleMeter } from "../public/admin/ui-primitives.ts";
+import {
+  beginButtonBusy,
+  createFormField,
+  createSettingsGroup,
+  metricCard,
+  scaleMeter,
+} from "../public/admin/ui-primitives.ts";
 import { requiredElement, requiredElements, requiredFormControl } from "../public/admin/dom.ts";
 
 function requiredMatch<T extends Element>(root: ParentNode, selector: string): T {
@@ -82,5 +88,73 @@ test("requiredElement returns a typed match and explains missing required markup
   assert.equal(input.value, "Ada");
   assert.throws(() => requiredFormControl<HTMLInputElement>(form, "missing"), /Required form control not found: missing/);
   assert.throws(() => requiredFormControl<HTMLInputElement>(form, "choice"), /Required form control not found: choice/);
+  dom.window.close();
+});
+
+test("form field components connect labels, help text, and recoverable errors", () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const { document } = dom.window;
+  const input = document.createElement("input");
+  input.type = "text";
+  const field = createFormField("Hostname", input, {
+    id: "source-hostname",
+    description: "Enter the public hostname for this status source.",
+    ownerDocument: document,
+  });
+  document.body.append(field.element);
+
+  assert.equal(field.element.tagName, "DIV");
+  assert.equal(field.element.classList.contains("form-field"), true);
+  assert.equal(field.element.querySelector("label")?.htmlFor, "source-hostname");
+  assert.equal(field.control, input);
+  assert.equal(input.getAttribute("aria-describedby"), "source-hostname-help");
+  assert.equal(field.element.querySelector("#source-hostname-help")?.textContent,
+    "Enter the public hostname for this status source.");
+
+  field.setError("Enter a valid public hostname.");
+  assert.equal(input.getAttribute("aria-invalid"), "true");
+  assert.equal(input.getAttribute("aria-describedby"), "source-hostname-help source-hostname-error");
+  assert.equal(field.element.querySelector("#source-hostname-error")?.textContent,
+    "Enter a valid public hostname.");
+
+  field.setError();
+  assert.equal(input.hasAttribute("aria-invalid"), false);
+  assert.equal(input.getAttribute("aria-describedby"), "source-hostname-help");
+  dom.window.close();
+});
+
+test("settings groups provide a labelled section and a reusable content slot", () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const group = createSettingsGroup("Schedule and settings", {
+    description: "Controls shared by playlists that use this site.",
+    headingLevel: "h4",
+    id: "site-schedule",
+    ownerDocument: dom.window.document,
+  });
+  group.content.append(dom.window.document.createElement("select"));
+  dom.window.document.body.append(group.element);
+
+  assert.equal(group.element.tagName, "SECTION");
+  assert.equal(group.element.getAttribute("aria-labelledby"), "site-schedule-title");
+  assert.equal(group.element.querySelector("h4")?.textContent, "Schedule and settings");
+  assert.equal(group.element.querySelector("#site-schedule-description")?.textContent,
+    "Controls shared by playlists that use this site.");
+  assert.equal(group.content.children.length, 1);
+  dom.window.close();
+});
+
+test("busy button state disables duplicate actions and restores the original label", () => {
+  const dom = new JSDOM("<!doctype html><html><body><button>Save changes</button><p role='status'></p></body></html>");
+  const button = requiredMatch<HTMLButtonElement>(dom.window.document, "button");
+  const status = requiredMatch<HTMLElement>(dom.window.document, "[role=status]");
+  const finish = beginButtonBusy(button, "Saving changes…", status);
+
+  assert.equal(button.disabled, true);
+  assert.equal(button.textContent, "Saving changes…");
+  assert.equal(status.textContent, "Saving changes…");
+  finish();
+  assert.equal(button.disabled, false);
+  assert.equal(button.textContent, "Save changes");
+  assert.equal(status.textContent, "");
   dom.window.close();
 });

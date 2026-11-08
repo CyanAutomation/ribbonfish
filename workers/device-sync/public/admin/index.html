@@ -10,18 +10,49 @@
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to content</a>
-    <header class="app-header">
-      <div class="header-inner">
-        <div class="brand-line">
-          <p class="wordmark">Ribbonfish</p>
-          <span id="environment-tag" class="environment-tag">Management</span>
+    <div id="management-shell" class="management-shell">
+      <header class="app-header">
+        <div class="header-inner">
+          <div class="brand-line">
+            <p class="wordmark">Ribbonfish</p>
+            <span id="environment-tag" class="environment-tag">Management</span>
+          </div>
+          <h1>Fleet management</h1>
         </div>
-        <h1>Fleet management</h1>
-      </div>
-      <button id="reload" class="button button--secondary" type="button">Refresh data</button>
-    </header>
+        <div class="app-header__actions">
+          <button id="module-navigation-toggle" class="button button--secondary sidebar-toggle" type="button" aria-controls="module-navigation" aria-expanded="true" hidden>Toggle navigation</button>
+          <button id="reload" class="button button--secondary" type="button">Refresh data</button>
+        </div>
+      </header>
 
-    <main id="main-content">
+      <nav id="module-navigation" class="module-navigation management-sidebar" aria-label="Management modules">
+        <section class="management-sidebar__section" aria-labelledby="module-overview-title">
+          <h2 class="management-sidebar__heading" id="module-overview-title">Overview</h2>
+          <ul class="management-sidebar__list">
+            <li><a href="#dashboard">All modules</a></li>
+            <li><a href="#overview-section">Fleet overview</a></li>
+            <li><a href="#fleet-insights">Fleet insights</a></li>
+          </ul>
+        </section>
+        <section class="management-sidebar__section" aria-labelledby="module-capture-title">
+          <h2 class="management-sidebar__heading" id="module-capture-title">Capture</h2>
+          <ul class="management-sidebar__list">
+            <li><a href="#sites-section">Capture sites</a></li>
+            <li><a href="#dashboards-section">Capture dashboards</a></li>
+            <li><a href="#capture-efficiency-section">Capture efficiency</a></li>
+            <li><a href="#playlist-section">Playlists</a></li>
+          </ul>
+        </section>
+        <section class="management-sidebar__section" aria-labelledby="module-fleet-title">
+          <h2 class="management-sidebar__heading" id="module-fleet-title">Fleet</h2>
+          <ul class="management-sidebar__list">
+            <li><a href="#device-section">Devices</a></li>
+            <li><a href="#activity-section">Recent activity</a></li>
+          </ul>
+        </section>
+      </nav>
+
+      <main id="main-content">
       <p id="environment-notice" class="alert alert--warning" hidden></p>
       <div id="message" class="alert alert--success status-banner" data-feedback-slot="global" hidden role="status" aria-live="polite" aria-atomic="true">
         <span data-feedback-text></span>
@@ -29,17 +60,6 @@
       </div>
       <section id="asset-health" class="panel panel--alert" hidden role="alert" aria-live="assertive"></section>
 
-      <nav id="module-navigation" class="module-navigation" aria-label="Management modules">
-        <a href="#dashboard">All modules</a>
-        <a href="#overview-section">Overview</a>
-        <a href="#sites-section">Capture sites</a>
-        <a href="#dashboards-section">Capture dashboards</a>
-        <a href="#capture-efficiency-section">Capture efficiency</a>
-        <a href="#playlist-section">Playlists</a>
-        <a href="#device-section">Devices</a>
-        <a href="#activity-section">Recent activity</a>
-        <a href="#fleet-insights">Fleet insights</a>
-      </nav>
       <nav id="dashboard-tiles" class="tile-grid" aria-label="Management modules">
         <a class="module-tile" href="#overview-section"><strong>Overview</strong><span>Fleet snapshot and items needing attention</span></a>
         <a class="module-tile" href="#sites-section"><strong>Capture sites</strong><span id="sites-tile-status">Sites, schedules and screenshots</span></a>
@@ -72,8 +92,17 @@
         <div class="alert alert--success status-banner" data-feedback-slot="sites" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss site message">Dismiss</button></div>
         <details id="capture-site-editor" class="editor-disclosure"><summary>Add a site</summary>
         <form id="capture-site-form" class="form-grid">
-          <label class="field--wide">Public HTTPS URL <input class="field-control" name="url" type="url" placeholder="https://status.example.com" required></label>
-          <label>Screenshot size <span class="viewport-inputs"><input class="field-control" name="viewport_width" type="number" value="1920" min="320" max="3840" step="1" aria-label="Screenshot width in pixels" required><span aria-hidden="true">×</span><input class="field-control" name="viewport_height" type="number" value="1080" min="240" max="2160" step="1" aria-label="Screenshot height in pixels" required></span></label>
+          <fieldset class="settings-group settings-group--form field--wide">
+            <legend>Site details</legend>
+            <div class="settings-group__fields">
+              <label class="field--wide">Public HTTPS URL <input class="field-control" name="url" type="url" placeholder="https://status.example.com" required></label>
+              <fieldset class="screenshot-size-fieldset">
+                <legend>Screenshot size</legend>
+                <label>Width (pixels) <input class="field-control" name="viewport_width" type="number" value="1920" min="320" max="3840" step="1" required></label>
+                <label>Height (pixels) <input class="field-control" name="viewport_height" type="number" value="1080" min="240" max="2160" step="1" required></label>
+              </fieldset>
+            </div>
+          </fieldset>
           <div class="field--wide form-actions"><button class="button button--primary" type="submit">Add site</button></div>
           <p id="capture-site-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
         </form>
@@ -92,12 +121,21 @@
         <div class="alert alert--success status-banner" data-feedback-slot="dashboards" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss dashboard message">Dismiss</button></div>
         <details id="api-dashboard-editor" class="editor-disclosure"><summary>Add an API status dashboard</summary>
         <form id="api-dashboard-form" class="form-grid">
-          <label>Name <input class="field-control" name="name" value="Operations status" maxlength="120" required></label>
-          <label>Refresh interval <select class="field-control" name="capture_interval_seconds"><option value="300">5 minutes</option><option value="60">1 minute</option></select></label>
-          <label>Output resolution <span class="viewport-inputs"><input class="field-control" name="width" type="number" value="1920" min="640" max="3840" step="1" aria-label="Dashboard width" required><span aria-hidden="true">×</span><input class="field-control" name="height" type="number" value="1080" min="360" max="2160" step="1" aria-label="Dashboard height" required></span></label>
+          <fieldset class="settings-group settings-group--form field--wide">
+            <legend>Dashboard details</legend>
+            <div class="settings-group__fields">
+              <label>Name <input class="field-control" name="name" value="Operations status" maxlength="120" required></label>
+              <label>Refresh interval <select class="field-control" name="capture_interval_seconds"><option value="300">5 minutes</option><option value="60">1 minute</option></select></label>
+              <fieldset class="screenshot-size-fieldset">
+                <legend>Output resolution</legend>
+                <label>Width (pixels) <input class="field-control" name="width" type="number" value="1920" min="640" max="3840" step="1" required></label>
+                <label>Height (pixels) <input class="field-control" name="height" type="number" value="1080" min="360" max="2160" step="1" required></label>
+              </fieldset>
+            </div>
+          </fieldset>
           <div id="api-dashboard-source-list" class="field--wide source-editor-list" aria-label="Dashboard sources">
             <div class="source-editor-toolbar" data-source-editor-toolbar>
-              <h3>Sources</h3>
+              <div><h3>Status sources</h3><p class="field-hint">Add the public status pages shown in this dashboard.</p></div>
               <button class="button button--secondary" type="button" data-add-dashboard-source>Add source</button>
             </div>
             <div class="source-editor-rows" data-source-rows></div>
@@ -133,8 +171,13 @@
           <summary id="playlist-editor-summary">Create playlist version</summary>
           <form id="playlist-form" class="form-grid">
           <p id="playlist-form-help" class="field--wide muted">Add PNG images and select reviewed sites from the library. Saved versions stay available until you delete the playlist.</p>
-          <label>Playlist ID <input class="field-control" name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" placeholder="e.g. operations"></label>
-          <label>Show each item for <select class="field-control" name="rotation_interval" required><option value="90s">90 seconds</option></select><span class="field-hint">Choose a supported display interval.</span></label>
+          <fieldset class="settings-group settings-group--form field--wide">
+            <legend>Playlist settings</legend>
+            <div class="settings-group__fields">
+              <label>Playlist ID <input class="field-control" name="id" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" placeholder="e.g. operations"></label>
+              <label>Show each item for <select class="field-control" name="rotation_interval" required><option value="90s">90 seconds</option></select><span class="field-hint">Choose a supported display interval.</span></label>
+            </div>
+          </fieldset>
           <fieldset id="playlist-current-assets" class="field--wide asset-selection" hidden>
             <legend>Images in this version</legend>
             <p class="muted">Clear an image to remove it from the new version.</p>
@@ -189,7 +232,8 @@
           <button id="hide-secret" class="button button--secondary" type="button">Hide</button>
         </div>
       </section>
-    </main>
+      </main>
+    </div>
 
     <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-description">
       <form method="dialog">

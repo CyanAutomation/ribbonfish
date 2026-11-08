@@ -1,9 +1,14 @@
+import { createSidebarController } from "./ui-components.ts";
+
 /** Keep module URLs shareable and reveal the parent view for deep links. */
 export function initModuleNavigation(): void {
   const ids = ["overview-section", "sites-section", "dashboards-section", "capture-efficiency-section", "playlist-section", "device-section", "activity-section"];
   const sections = ids.map((id) => document.getElementById(id) as HTMLElement);
   const tiles = document.getElementById("dashboard-tiles") as HTMLElement;
   const navigation = document.getElementById("module-navigation") as HTMLElement;
+  const shell = document.getElementById("management-shell") as HTMLElement;
+  const navigationToggle = document.getElementById("module-navigation-toggle") as HTMLButtonElement;
+  createSidebarController({ shell, sidebar: navigation, toggleButton: navigationToggle });
 
   function render(): void {
     const id = decodeURIComponent(location.hash.slice(1));

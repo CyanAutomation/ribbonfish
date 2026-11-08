@@ -1,6 +1,8 @@
 import { parseApiDashboardConfig, sourceConfigErrors, type SourceConfig, type SourceFieldName } from "../../src/api-dashboard/config.ts";
+import { createFormField, type FormFieldComponent } from "./ui-primitives.ts";
 
 let generatedID = 0;
+const formFields = new WeakMap<Element, FormFieldComponent>();
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] {
   const item = document.createElement(tag);
@@ -19,16 +21,14 @@ function newSource(existing: SourceConfig[]): SourceConfig {
 function setFieldError(row: HTMLElement, field: SourceFieldName, message?: string): void {
   const control = row.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-source-field="${field}"]`);
   const error = row.querySelector<HTMLElement>(`[data-source-error="${field}"]`);
-  if (!control || !error) return;
+  if (!error) return;
+  const component = control ? formFields.get(control) : undefined;
+  if (component) {
+    component.setError(message);
+    return;
+  }
   error.textContent = message ?? "";
   error.hidden = !message;
-  if (message) {
-    control.setAttribute("aria-invalid", "true");
-    control.setAttribute("aria-describedby", error.id);
-  } else {
-    control.removeAttribute("aria-invalid");
-    control.removeAttribute("aria-describedby");
-  }
 }
 
 export interface ApiDashboardSourceEditor {
@@ -40,6 +40,7 @@ export interface ApiDashboardSourceEditor {
 
 /** Structured source controls and an optional JSON editor share one validated source model. */
 export function createApiDashboardSourceEditor(container: HTMLElement, initialSources: SourceConfig[], advancedJSON?: HTMLTextAreaElement): ApiDashboardSourceEditor {
+  const editorID = ++generatedID;
   const rowsContainer = container.querySelector<HTMLElement>("[data-source-rows]") ?? container;
   const error = container.querySelector<HTMLElement>("[data-source-editor-error]");
   let sources = initialSources.length ? initialSources.map((source) => ({ ...source })) : [newSource([])];
@@ -87,25 +88,26 @@ export function createApiDashboardSourceEditor(container: HTMLElement, initialSo
       id.name = "id";
       row.append(id);
 
-      const providerLabel = element("label", "Provider");
       const provider = element("select", undefined, "field-control");
       provider.dataset.sourceField = "provider";
       provider.name = "provider";
-      provider.setAttribute("aria-label", `Provider for source ${index + 1}`);
       for (const [value, label] of [["uptime-kuma", "Uptime Kuma"], ["atlassian-statuspage", "Atlassian Statuspage"]]) {
         const option = element("option", label) as HTMLOptionElement;
         option.value = value;
         option.selected = source.provider === value;
         provider.append(option);
       }
-      providerLabel.append(provider);
-      row.append(providerLabel);
+      const providerField = createFormField("Provider", provider, {
+        id: `api-source-editor-${editorID}-${index}-provider`, ownerDocument: document,
+      });
+      providerField.element.querySelector<HTMLElement>(".form-field__error")!.dataset.sourceError = "provider";
+      formFields.set(provider, providerField);
+      row.append(providerField.element);
 
       for (const [field, label, value, maxLength] of [
         ["display_name", "Display name", source.display_name, 100],
         ["hostname", "Hostname", source.hostname, 253],
       ] as const) {
-        const labelElement = element("label", label);
         const input = element("input", undefined, "field-control");
         input.type = "text";
         input.value = value;
@@ -114,13 +116,16 @@ export function createApiDashboardSourceEditor(container: HTMLElement, initialSo
         input.autocomplete = "off";
         input.dataset.sourceField = field;
         input.name = field;
-        input.setAttribute("aria-label", `${label} for source ${index + 1}`);
-        labelElement.append(input);
-        row.append(labelElement);
+        const fieldComponent = createFormField(label, input, {
+          id: `api-source-editor-${editorID}-${index}-${field}`,
+          description: field === "hostname" ? "Use the public hostname without a path." : undefined,
+          ownerDocument: document,
+        });
+        fieldComponent.element.querySelector<HTMLElement>(".form-field__error")!.dataset.sourceError = field;
+        formFields.set(input, fieldComponent);
+        row.append(fieldComponent.element);
       }
 
-      const slugLabel = element("label", "Status-page slug");
-      slugLabel.dataset.slugField = "true";
       const slug = element("input", undefined, "field-control");
       slug.type = "text";
       slug.value = source.slug ?? "";
@@ -128,29 +133,35 @@ export function createApiDashboardSourceEditor(container: HTMLElement, initialSo
       slug.autocomplete = "off";
       slug.dataset.sourceField = "slug";
       slug.name = "slug";
-      slug.setAttribute("aria-label", `Status-page slug for source ${index + 1}`);
-      slugLabel.append(slug);
-      row.append(slugLabel);
+      const slugField = createFormField("Status-page slug", slug, {
+        id: `api-source-editor-${editorID}-${index}-slug`,
+        description: "Required for Uptime Kuma sources.",
+        ownerDocument: document,
+      });
+      slugField.element.dataset.slugField = "true";
+      slugField.element.querySelector<HTMLElement>(".form-field__error")!.dataset.sourceError = "slug";
+      formFields.set(slug, slugField);
+      row.append(slugField.element);
 
-      const enabledLabel = element("label", undefined, "source-editor-enabled");
       const enabled = element("input");
       enabled.type = "checkbox";
       enabled.checked = source.enabled;
       enabled.dataset.sourceField = "enabled";
       enabled.name = "enabled";
-      enabled.setAttribute("aria-label", `Enable source ${index + 1}`);
-      enabledLabel.append(enabled, element("span", "Enabled"));
-      row.append(enabledLabel);
+      const enabledField = createFormField("Enabled", enabled, {
+        id: `api-source-editor-${editorID}-${index}-enabled`,
+        controlFirst: true,
+        className: "form-field--choice source-editor-enabled",
+        ownerDocument: document,
+      });
+      row.append(enabledField.element);
 
-      for (const field of ["id", "provider", "display_name", "hostname", "slug"] as SourceFieldName[]) {
-        const fieldError = element("span", undefined, "field-error");
-        fieldError.id = `source-${index}-${field}-error`;
-        fieldError.dataset.sourceError = field;
-        fieldError.hidden = true;
-        fieldError.setAttribute("role", "alert");
-        if (field === "id") fieldError.hidden = true;
-        else row.querySelector(`[data-source-field="${field}"]`)?.insertAdjacentElement("afterend", fieldError);
-      }
+      const idError = element("p", undefined, "field-error form-field__error");
+      idError.id = `api-source-editor-${editorID}-${index}-id-error`;
+      idError.dataset.sourceError = "id";
+      idError.hidden = true;
+      idError.setAttribute("role", "alert");
+      row.append(idError);
 
       const actions = element("div", undefined, "source-editor-row__actions");
       for (const [key, label, disabled] of [
