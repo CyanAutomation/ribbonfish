@@ -65,6 +65,44 @@ test("production deployment validates relevant Worker changes before protected-m
   assert.doesNotMatch(JSON.stringify(deploy), /migrate:management/);
 });
 
+test("Node runtime pins and setup instructions consistently target Node 26", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("workers/device-sync/package.json", root), "utf8"));
+  const lockfile = JSON.parse(await readFile(new URL("workers/device-sync/package-lock.json", root), "utf8"));
+  const nodeVersion = (await readFile(new URL("workers/device-sync/.nvmrc", root), "utf8")).trim();
+
+  assert.equal(nodeVersion, "26");
+  assert.equal(packageJson.engines.node, "26.x");
+  assert.match(packageJson.devDependencies["@types/node"], /^\^26\./);
+  assert.equal(lockfile.packages[""].engines.node, packageJson.engines.node);
+  assert.equal(lockfile.packages[""].devDependencies["@types/node"], packageJson.devDependencies["@types/node"]);
+
+  const explicitlyPinnedWorkflows = [
+    ["workflow-lint.yml", "actionlint"],
+    ["skill-validation.yml", "validate"],
+    ["publish-agent.yml", "publish"],
+    ["docker-publish.yml", "publish"],
+  ] as const;
+
+  for (const [file, jobName] of explicitlyPinnedWorkflows) {
+    const workflow = await readYaml(`.github/workflows/${file}`);
+    const nodeSetup = workflow.jobs[jobName].steps.find((step) => step.uses?.startsWith("actions/setup-node@"));
+    assert.ok(nodeSetup, `${file} must set up Node`);
+    assert.equal(nodeSetup.with["node-version"], 26, `${file} must use Node 26`);
+  }
+
+  for (const file of ["device-sync.yml", "deploy-device-sync.yml"]) {
+    const workflow = await readYaml(`.github/workflows/${file}`);
+    const setupSteps = Object.values(workflow.jobs).flatMap((job) =>
+      job.steps.filter((step) => step.uses?.startsWith("actions/setup-node@")));
+    assert.ok(setupSteps.length > 0, `${file} must set up Node`);
+    assert.ok(setupSteps.every((step) => step.with["node-version-file"] === "workers/device-sync/.nvmrc"),
+      `${file} must use the repository Node version file`);
+  }
+
+  const fallowSkill = await readFile(new URL(".github/skills/fallow/SKILL.md", root), "utf8");
+  assert.match(fallowSkill, /The Worker requires Node 26\./);
+});
+
 test("container publishers wait for shared validation and avoid promoting stale builds", async () => {
   const workflows = [
     ["docker-publish.yml", "Docker Hub"],

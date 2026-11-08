@@ -14,7 +14,7 @@ Use this skill when reviewing changed JavaScript or TypeScript, finding unused c
 - Fallow is installed as a dev dependency in `workers/device-sync/`; run it from that directory so it reads the package manifest, TypeScript projects, and installed dependencies.
 - Fallow analyzes JavaScript and TypeScript. It does not analyze the Go agent or Python deployment tools. Use the Go and Raspberry Pi skills for those areas.
 - The repository root has no `package.json`. A broader scan can use `npx fallow --root ../..`, but package resolution may be incomplete there. Treat the Worker package scan as authoritative for Worker dependencies.
-- The Worker requires Node 24. Use the repository's Node 24 runtime for npm commands and tests.
+- The Worker requires Node 26. Use the repository's Node 26 runtime for npm commands and tests.
 
 ## Choose the right analysis
 
