@@ -8,6 +8,7 @@ import {
   metricCard,
   scaleMeter,
 } from "../public/admin/ui-primitives.ts";
+import { createPageHeader, createToolbar, setPageHeaderMetadata } from "../public/admin/ui-components.ts";
 import { requiredElement, requiredElements, requiredFormControl } from "../public/admin/dom.ts";
 
 function requiredMatch<T extends Element>(root: ParentNode, selector: string): T {
@@ -140,6 +141,91 @@ test("settings groups provide a labelled section and a reusable content slot", (
   assert.equal(group.element.querySelector("#site-schedule-description")?.textContent,
     "Controls shared by playlists that use this site.");
   assert.equal(group.content.children.length, 1);
+  dom.window.close();
+});
+
+test("page headers render a named title, associated description, metadata, and actions", () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const { document } = dom.window;
+  const action = document.createElement("a");
+  action.href = "#capture-site-editor";
+  action.textContent = "Add site";
+  const header = createPageHeader({
+    eyebrow: "Sites",
+    title: "Capture sites",
+    titleLevel: "h2",
+    titleId: "sites-title",
+    description: "Register pages and review their screenshot schedules.",
+    metadata: ["12 sites", "Updated just now"],
+    actions: [action],
+    actionsLabel: "Capture site actions",
+    ownerDocument: document,
+  });
+  document.body.append(header);
+
+  const title = requiredMatch<HTMLHeadingElement>(header, "h2");
+  const description = requiredMatch<HTMLElement>(header, ".page-header__description");
+  const actions = requiredMatch<HTMLElement>(header, ".page-header__actions");
+  assert.equal(header.tagName, "HEADER");
+  assert.equal(title.textContent, "Capture sites");
+  assert.equal(title.id, "sites-title");
+  assert.equal(title.getAttribute("aria-describedby"), description.id);
+  assert.match(description.textContent, /review their screenshot schedules/);
+  assert.deepEqual([...header.querySelectorAll(".page-header__meta span")].map((item) => item.textContent), ["12 sites", "Updated just now"]);
+  assert.equal(actions.getAttribute("role"), "group");
+  assert.equal(actions.getAttribute("aria-label"), "Capture site actions");
+  assert.equal(actions.querySelector("a"), action, "the caller's native action remains intact");
+  dom.window.close();
+});
+
+test("toolbars group labeled native controls without imposing composite toolbar keyboard behavior", () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const { document } = dom.window;
+  const search = document.createElement("label");
+  search.textContent = "Search sites";
+  const searchInput = document.createElement("input");
+  searchInput.type = "search";
+  search.append(searchInput);
+  const status = document.createElement("label");
+  status.textContent = "Status";
+  const statusSelect = document.createElement("select");
+  status.append(statusSelect);
+  const toolbar = createToolbar({
+    label: "Capture site filters",
+    groups: [
+      { label: "Site search", items: [search] },
+      { label: "Site status", items: [status] },
+    ],
+    className: "capture-filters",
+    ownerDocument: document,
+  });
+
+  assert.equal(toolbar.getAttribute("role"), "group");
+  assert.equal(toolbar.getAttribute("aria-label"), "Capture site filters");
+  assert.notEqual(toolbar.getAttribute("role"), "toolbar", "ordinary controls do not claim composite toolbar behavior");
+  assert.deepEqual([...toolbar.querySelectorAll(".toolbar__group")].map((group) => group.getAttribute("aria-label")), ["Site search", "Site status"]);
+  assert.deepEqual([...toolbar.querySelectorAll("input, select")], [searchInput, statusSelect]);
+  assert.equal(toolbar.classList.contains("toolbar"), true);
+  assert.equal(toolbar.classList.contains("capture-filters"), true);
+  dom.window.close();
+});
+
+test("page header status can be updated and cleared without rebuilding its title", () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const header = createPageHeader({ title: "Devices", ownerDocument: dom.window.document });
+  const metadata = requiredMatch<HTMLElement>(header, ".page-header__meta");
+  assert.equal(metadata.hidden, true);
+  assert.equal(metadata.getAttribute("role"), "status");
+  assert.equal(metadata.getAttribute("aria-live"), "polite");
+
+  setPageHeaderMetadata(header, ["10 devices", "2 awaiting approval"]);
+  assert.equal(metadata.hidden, false);
+  assert.deepEqual([...metadata.querySelectorAll("span")].map((item) => item.textContent), ["10 devices", "2 awaiting approval"]);
+  assert.equal(header.querySelector("h1")?.textContent, "Devices");
+
+  setPageHeaderMetadata(header, []);
+  assert.equal(metadata.hidden, true);
+  assert.equal(metadata.children.length, 0);
   dom.window.close();
 });
 

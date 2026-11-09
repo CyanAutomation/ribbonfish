@@ -82,6 +82,32 @@ test("management page exposes accessible fleet and playlist sections", async () 
   }
 });
 
+test("shared page headers and toolbars wrap without hiding page controls", async () => {
+  const styles = await readFile(new URL("../public/admin/styles.css", import.meta.url), "utf8");
+  const stylesheet = postcss.parse(styles);
+  const declarations = (selector: string) => {
+    const values: Array<[string, string]> = [];
+    stylesheet.walkRules(selector, (rule) => rule.nodes.forEach((node) => {
+      if (node.type === "decl") values.push([node.prop, node.value]);
+    }));
+    return values;
+  };
+
+  assert.ok(declarations(".page-header").some(([property, value]) => property === "display" && value === "flex"));
+  assert.ok(declarations(".page-header__actions").some(([property, value]) => property === "flex-wrap" && value === "wrap"));
+  assert.ok(declarations(".toolbar").some(([property, value]) => property === "flex-wrap" && value === "wrap"));
+  assert.ok(declarations(".toolbar__group--end").some(([property, value]) => property === "margin-inline-start" && value === "auto"));
+
+  let narrowHeaderStacks = false;
+  stylesheet.walkAtRules("media", (media) => {
+    if (!/max-width:\s*700px/.test(media.params)) return;
+    media.walkRules(".page-header", (rule) => {
+      narrowHeaderStacks ||= rule.nodes.some((node) => node.type === "decl" && node.prop === "flex-direction" && node.value === "column");
+    });
+  });
+  assert.ok(narrowHeaderStacks, "page actions move below the heading on narrow screens");
+});
+
 test("transient notices replace, pause, resume, and clear their expiry", () => {
   let nextID = 0;
   const timers = new Map();
@@ -251,9 +277,8 @@ test("fleet insights detect a missing active playlist and stay clear for a healt
 });
 
 test("reusable finding components render accessible evidence, actions and responsive card styles", async () => {
-  const priorDocument = globalThis.document;
   const dom = new JSDOM();
-  globalThis.document = dom.window.document;
+  const ownerDocument = dom.window.document;
   try {
     const finding = {
       key: "devices",
@@ -263,19 +288,23 @@ test("reusable finding components render accessible evidence, actions and respon
       updatedAt: 1_700_000_000_000,
       action: { label: "Review devices", href: "#device-section" },
     };
-    const card = renderFindingCard(finding);
+    const card = renderFindingCard(finding, { ownerDocument });
     assert.equal(card.tagName, "ARTICLE");
+    assert.equal(card.ownerDocument, ownerDocument);
     assert.match(card.className, /finding-card--action/);
     assert.match(card.textContent, /1 offline/);
     assert.match(card.textContent, /Updated/);
     assert.equal(card.querySelector('a[href="#device-section"]').textContent, "Review devices");
     assert.equal(card.getAttribute("aria-labelledby"), "finding-card-devices-title");
 
-    const list = renderFindingList([finding]);
+    const list = renderFindingList([finding], { ownerDocument });
     assert.equal(list.getAttribute("role"), "list");
+    assert.equal(list.ownerDocument, ownerDocument);
     assert.equal(list.querySelectorAll("article").length, 1);
-    const empty = renderFindingList([]);
-    assert.match(empty.textContent, /No current issues need attention/);
+    assert.equal(list.querySelector("article").ownerDocument, ownerDocument);
+    const empty = renderFindingList([], { emptyMessage: "Nothing needs attention.", ownerDocument });
+    assert.equal(empty.ownerDocument, ownerDocument);
+    assert.equal(empty.textContent, "Nothing needs attention.");
 
     const styles = await readFile(new URL("../public/admin/styles.css", import.meta.url), "utf8");
     const stylesheet = postcss.parse(styles);
@@ -286,8 +315,6 @@ test("reusable finding components render accessible evidence, actions and respon
     });
     assert.ok(findingListUsesResponsiveGrid, "the reusable finding list adapts to available width");
   } finally {
-    if (priorDocument === undefined) delete globalThis.document;
-    else globalThis.document = priorDocument;
     dom.window.close();
   }
 });

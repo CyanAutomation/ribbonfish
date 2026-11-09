@@ -14,7 +14,7 @@ import {
 import { createApiDashboardSourceEditor } from "./api-dashboard-editor.ts";
 import { parseApiDashboardConfig } from "../../src/api-dashboard/config.ts";
 import { renderCaptureEfficiencyModule } from "./capture-efficiency-module.ts";
-import { renderFindingList } from "./ui-components.ts";
+import { createToolbar, renderFindingList, setPageHeaderMetadata } from "./ui-components.ts";
 import { initModuleNavigation } from "./module-navigation.ts";
 import {
   createFleetOpenUI,
@@ -768,13 +768,19 @@ function renderCaptureTargets(targets, decisions = []) {
 
 function buildDashboardSourceEditor(container, sources) {
   const host = node("div", undefined, "source-editor-list");
-  const toolbar = node("div", undefined, "source-editor-toolbar");
   const heading = node("div");
   heading.append(node("h4", "Status sources"), node("p", "Add the public status pages shown in this dashboard.", "field-hint"));
-  toolbar.append(heading);
   const add = button("Add source", "secondary");
   add.dataset.addDashboardSource = "true";
-  toolbar.append(add);
+  const toolbar = createToolbar({
+    label: "Dashboard source controls",
+    className: "source-editor-toolbar",
+    groups: [
+      { label: "Status sources", items: [heading] },
+      { label: "Source actions", items: [add], alignEnd: true },
+    ],
+    ownerDocument: document,
+  });
   const rows = node("div", undefined, "source-editor-rows");
   rows.dataset.sourceRows = "true";
   const error = node("p", undefined, "field-error");
@@ -1325,7 +1331,7 @@ function renderPendingEnrollments(requests) {
 
 function renderFleetAttention(overview, enrollmentRequests) {
   const items = buildFleetInsights(overview, enrollmentRequests);
-  fleetAttention.replaceChildren(renderFindingList(items));
+  fleetAttention.replaceChildren(renderFindingList(items, { ownerDocument: fleetAttention.ownerDocument }));
   fleetDataAsOf.textContent = `Data as of ${formatTimestamp(overview.generated_at ?? Date.now())}`;
 }
 
@@ -1405,6 +1411,28 @@ async function refresh() {
     intervals.rotation.default, (option) => option.value);
   latestOverview = overview;
   const browserTargets = (overview.capture_targets ?? []).filter((target) => target.capture_type !== "api-dashboard");
+  const sitesNeedingAttention = browserTargets.filter((target) =>
+    target.last_error || !target.schedule_reviewed || !target.last_success_at).length;
+  setPageHeaderMetadata(requiredElement(document, "#sites-section > .page-header"), [
+    `${browserTargets.length} screenshot sites`,
+    `${sitesNeedingAttention} need attention`,
+  ]);
+  const dashboardErrors = apiDashboards.filter((dashboard) => dashboard.last_error).length;
+  setPageHeaderMetadata(requiredElement(document, "#dashboards-section > .page-header"), [
+    `${apiDashboards.length} API dashboards`,
+    `${dashboardErrors} with errors`,
+  ]);
+  setPageHeaderMetadata(requiredElement(document, "#playlist-section > .page-header"), [
+    `${overview.playlists.length} saved versions`,
+    overview.active_playlist ? `Active playlist: ${overview.active_playlist.playlist_id}` : "No active playlist",
+  ]);
+  setPageHeaderMetadata(requiredElement(document, "#device-section > .page-header"), [
+    `${overview.devices.length} devices`,
+    `${enrollmentRequests.length} awaiting approval`,
+  ]);
+  setPageHeaderMetadata(requiredElement(document, "#activity-section > .page-header"), [
+    `${overview.audit.length} recent events`,
+  ]);
   requiredElement(document, "#sites-tile-status").textContent = `${browserTargets.length} screenshot sites`;
   requiredElement(document, "#dashboards-tile-status").textContent = `${apiDashboards.length} API dashboards`;
   requiredElement(document, "#playlists-tile-status").textContent = `${overview.playlists.length} playlist versions`;
