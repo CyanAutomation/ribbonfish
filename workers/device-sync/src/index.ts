@@ -51,8 +51,8 @@ const worker = {
   queue(batch, env) {
     return queueHandler(batch, env);
   },
-  scheduled(controller, env) {
-    void scheduledHandler(controller, env);
+  async scheduled(controller, env) {
+    await scheduledHandler(controller, env);
   },
 } satisfies ExportedHandler<WorkerEnvironment, { job_id?: unknown }>;
 

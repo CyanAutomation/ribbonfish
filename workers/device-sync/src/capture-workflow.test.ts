@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { dispatchDueCaptures, enqueueCapture, handleCaptureQueue } from "./capture-workflow.ts";
-import { fetchHandler, queueHandler, scheduledHandler } from "./index.ts";
+import worker, { fetchHandler, queueHandler, scheduledHandler } from "./index.ts";
 import { handleAdminRequest } from "./admin.ts";
 
 const placeholder = new Uint8Array(await readFile(new URL("../public/admin/capture-pending.png", import.meta.url)));
@@ -273,6 +273,50 @@ test("reviewed sites do not schedule captures until a playlist uses them", async
     assert.equal(result.enqueued, 0);
     assert.equal(messages.length, 0);
   } finally {
+    sqlite.close();
+  }
+});
+
+test("scheduled Worker event waits for a due capture to enter the queue", async () => {
+  const sqlite = await freshDatabase();
+  let releaseQueue;
+  const dispatchGate = new Promise((resolve) => { releaseQueue = resolve; });
+  let signalQueueStarted;
+  const queueStarted = new Promise((resolve) => { signalQueueStarted = resolve; });
+  try {
+    const { env, messages } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const captureID = created.body.captures[0].capture_id;
+    await handleAdminRequest(await request("/admin/api/active-playlist", {
+      method: "PUT", body: { playlist_id: "operations", revision: created.body.revision },
+    }), env);
+    messages.length = 0;
+    sqlite.prepare("UPDATE capture_jobs SET status = 'succeeded', finished_at = ? WHERE capture_id = ?")
+      .run(Date.now(), captureID);
+    sqlite.prepare("UPDATE capture_targets SET next_due_at = ? WHERE capture_id = ?")
+      .run(Date.now() - 1, captureID);
+    env.CAPTURE_QUEUE = { async send(body) {
+      signalQueueStarted();
+      await dispatchGate;
+      messages.push(body);
+    } };
+
+    const scheduledTask = worker.scheduled({ scheduledTime: Date.now() }, env);
+    await queueStarted;
+    assert.equal(typeof scheduledTask?.then, "function", "the scheduled entry point must return its work promise");
+    let scheduledTaskSettled = false;
+    scheduledTask.then(() => { scheduledTaskSettled = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(scheduledTaskSettled, false, "scheduled work must remain pending until queue dispatch completes");
+
+    releaseQueue();
+    await scheduledTask;
+    assert.equal(messages.length, 1);
+    assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE capture_id = ? ORDER BY created_at DESC LIMIT 1")
+      .get(captureID).status, "queued");
+  } finally {
+    releaseQueue?.();
+    await new Promise((resolve) => setImmediate(resolve));
     sqlite.close();
   }
 });
