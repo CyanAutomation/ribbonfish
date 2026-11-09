@@ -17,14 +17,19 @@ export function button(text: string, variant = "primary"): HTMLButtonElement {
   return element;
 }
 
-export function linkButton(href: string, text: string, variant = "secondary"): HTMLAnchorElement {
-  const element = node("a", text, `button button--${variant}`);
+export function linkButton(
+  href: string,
+  text: string,
+  variant = "secondary",
+  ownerDocument: Document = document,
+): HTMLAnchorElement {
+  const element = node("a", text, `button button--${variant}`, ownerDocument);
   element.href = href;
   return element;
 }
 
-export function statusBadge(text: string, tone = "success"): HTMLElement {
-  return node("span", text, tone === "success" ? "badge" : "badge badge--" + tone);
+export function statusBadge(text: string, tone = "success", ownerDocument: Document = document): HTMLElement {
+  return node("span", text, tone === "success" ? "badge" : "badge badge--" + tone, ownerDocument);
 }
 
 export interface FormFieldOptions {

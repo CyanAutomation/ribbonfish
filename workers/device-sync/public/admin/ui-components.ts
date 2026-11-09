@@ -15,6 +15,98 @@ export interface SidebarController {
   dispose(): void;
 }
 
+export interface PageHeaderOptions {
+  eyebrow?: string;
+  title: string;
+  titleId?: string;
+  titleLevel?: "h1" | "h2" | "h3";
+  description?: string;
+  metadata?: string[];
+  actions?: HTMLElement[];
+  actionsLabel?: string;
+  ownerDocument?: Document;
+}
+
+let generatedPageHeaderDescriptionID = 0;
+
+/** Render a reusable page heading with optional context and native actions. */
+export function createPageHeader(options: PageHeaderOptions): HTMLElement {
+  const ownerDocument = options.ownerDocument ?? document;
+  const header = node("header", undefined, "page-header", ownerDocument);
+  const content = node("div", undefined, "page-header__content", ownerDocument);
+
+  if (options.eyebrow) content.append(node("p", options.eyebrow, "eyebrow", ownerDocument));
+
+  const title = node(options.titleLevel ?? "h1", options.title, "page-header__title", ownerDocument);
+  if (options.titleId) title.id = options.titleId;
+  content.append(title);
+
+  if (options.description) {
+    const description = node("p", options.description, "page-header__description", ownerDocument);
+    description.id = `page-header-description-${++generatedPageHeaderDescriptionID}`;
+    title.setAttribute("aria-describedby", description.id);
+    content.append(description);
+  }
+
+  const metadata = node("div", undefined, "page-header__meta", ownerDocument);
+  metadata.setAttribute("role", "status");
+  metadata.setAttribute("aria-live", "polite");
+  options.metadata?.forEach((item) => metadata.append(node("span", item, undefined, ownerDocument)));
+  metadata.hidden = !options.metadata?.length;
+  content.append(metadata);
+
+  header.append(content);
+  if (options.actions?.length) {
+    const actions = node("div", undefined, "page-header__actions", ownerDocument);
+    actions.setAttribute("role", "group");
+    actions.setAttribute("aria-label", options.actionsLabel ?? "Page actions");
+    actions.append(...options.actions);
+    header.append(actions);
+  }
+
+  return header;
+}
+
+/** Update the page's concise live status without rebuilding its heading or actions. */
+export function setPageHeaderMetadata(header: HTMLElement, items: string[]): void {
+  const metadata = header.querySelector<HTMLElement>(".page-header__meta");
+  if (!metadata) return;
+  metadata.replaceChildren(...items.map((item) => node("span", item, undefined, header.ownerDocument)));
+  metadata.hidden = items.length === 0;
+}
+
+export interface ToolbarGroupOptions {
+  label: string;
+  items: HTMLElement[];
+  alignEnd?: boolean;
+}
+
+export interface ToolbarOptions {
+  label: string;
+  groups: ToolbarGroupOptions[];
+  className?: string;
+  ownerDocument?: Document;
+}
+
+/** Group independent controls in source order without adding composite keyboard behavior. */
+export function createToolbar(options: ToolbarOptions): HTMLElement {
+  const ownerDocument = options.ownerDocument ?? document;
+  const className = ["toolbar", options.className].filter(Boolean).join(" ");
+  const toolbar = node("div", undefined, className, ownerDocument);
+  toolbar.setAttribute("role", "group");
+  toolbar.setAttribute("aria-label", options.label);
+
+  options.groups.forEach((groupOptions) => {
+    const group = node("div", undefined, `toolbar__group${groupOptions.alignEnd ? " toolbar__group--end" : ""}`, ownerDocument);
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", groupOptions.label);
+    group.append(...groupOptions.items);
+    toolbar.append(group);
+  });
+
+  return toolbar;
+}
+
 /** Add optional collapse/reveal behavior while leaving native navigation links intact. */
 export function createSidebarController(options: SidebarControllerOptions): SidebarController {
   const { shell, sidebar, toggleButton } = options;
@@ -65,34 +157,52 @@ export type FindingCardModel = {
   action: { label: string; href: string };
 };
 
+export interface FindingCardOptions {
+  ownerDocument?: Document;
+}
+
 /** Render a reusable evidence card with a clear severity and next action. */
-export function renderFindingCard(finding: FindingCardModel): HTMLElement {
-  const card = node("article", undefined, `finding-card finding-card--${finding.severity}`);
+export function renderFindingCard(finding: FindingCardModel, options: FindingCardOptions = {}): HTMLElement {
+  const ownerDocument = options.ownerDocument ?? document;
+  const card = node("article", undefined, `finding-card finding-card--${finding.severity}`, ownerDocument);
   card.dataset.findingKey = finding.key;
   card.setAttribute("role", "listitem");
   card.setAttribute("aria-labelledby", `finding-card-${finding.key}-title`);
 
-  const heading = node("div", undefined, "finding-card__heading");
-  const title = node("h4", finding.title);
+  const heading = node("div", undefined, "finding-card__heading", ownerDocument);
+  const title = node("h4", finding.title, undefined, ownerDocument);
   title.id = `finding-card-${finding.key}-title`;
-  const badge = statusBadge(finding.severity === "action" ? "Action needed" : "Review", finding.severity === "action" ? "warning" : "neutral");
+  const badge = statusBadge(
+    finding.severity === "action" ? "Action needed" : "Review",
+    finding.severity === "action" ? "warning" : "neutral",
+    ownerDocument,
+  );
   heading.append(title, badge);
 
-  const evidence = node("p", undefined, "finding-card__evidence");
-  evidence.append(node("strong", "Evidence: "), document.createTextNode(finding.evidence));
+  const evidence = node("p", undefined, "finding-card__evidence", ownerDocument);
+  evidence.append(node("strong", "Evidence: ", undefined, ownerDocument), ownerDocument.createTextNode(finding.evidence));
   card.append(heading, evidence);
   if (finding.updatedAt !== null) {
-    card.append(node("p", `Updated ${formatTimestamp(finding.updatedAt)}`, "finding-card__updated"));
+    card.append(node("p", `Updated ${formatTimestamp(finding.updatedAt)}`, "finding-card__updated", ownerDocument));
   }
-  card.append(linkButton(finding.action.href, finding.action.label));
+  card.append(linkButton(finding.action.href, finding.action.label, "secondary", ownerDocument));
   return card;
 }
 
+export interface FindingListOptions extends FindingCardOptions {
+  emptyMessage?: string;
+}
+
 /** Render findings as a reusable accessible list, including a useful clear state. */
-export function renderFindingList(findings: FindingCardModel[], emptyMessage = "No current issues need attention."): HTMLElement {
-  if (!findings.length) return node("p", emptyMessage, "finding-list__empty");
-  const list = node("div", undefined, "finding-list");
+export function renderFindingList(
+  findings: FindingCardModel[],
+  options: FindingListOptions | string = {},
+): HTMLElement {
+  const emptyMessage = typeof options === "string" ? options : options.emptyMessage ?? "No current issues need attention.";
+  const ownerDocument = typeof options === "string" ? document : options.ownerDocument ?? document;
+  if (!findings.length) return node("p", emptyMessage, "finding-list__empty", ownerDocument);
+  const list = node("div", undefined, "finding-list", ownerDocument);
   list.setAttribute("role", "list");
-  list.append(...findings.map(renderFindingCard));
+  list.append(...findings.map((finding) => renderFindingCard(finding, { ownerDocument })));
   return list;
 }
