@@ -1,7 +1,16 @@
 import { api } from "./api.ts";
 import { requiredElement, requiredElements, requiredFormControl } from "./dom.ts";
 import { formatCaptureObservation, formatRunTime } from "./capture-presentation.ts";
-import { node, button, statusBadge, actionDisclosure, metricCard } from "./ui-primitives.ts";
+import {
+  node,
+  button,
+  statusBadge,
+  actionDisclosure,
+  metricCard,
+  createFormField,
+  createSettingsGroup,
+  beginButtonBusy,
+} from "./ui-primitives.ts";
 import { createApiDashboardSourceEditor } from "./api-dashboard-editor.ts";
 import { parseApiDashboardConfig } from "../../src/api-dashboard/config.ts";
 import { renderCaptureEfficiencyModule } from "./capture-efficiency-module.ts";
@@ -579,16 +588,23 @@ function renderCaptureTargets(targets, decisions = []) {
     detail.append(node("summary", "View details"));
     const detailContent = node("div", undefined, "capture-target__panel-content");
     detailContent.append(node("p", target.display_url, "capture-target__url muted"));
-    const nameSection = node("section", undefined, "capture-detail-section");
-    nameSection.append(node("h4", "Site name"));
-    const nameLabel = node("label", "Name (optional)");
+    const nameSection = createSettingsGroup("Site name", {
+      headingLevel: "h4",
+      className: "capture-detail-section",
+      description: "Give this capture site a short label used in lists and forecasts.",
+      ownerDocument: document,
+    });
     const nameInput = node("input", undefined, "field-control");
     nameInput.type = "text"; nameInput.maxLength = 120; nameInput.value = target.name ?? "";
     nameInput.dataset.siteName = "true";
-    nameLabel.append(nameInput);
     const saveName = button("Save name", "secondary");
+    const nameFeedback = node("p", undefined, "inline-feedback");
+    nameFeedback.hidden = true;
+    nameFeedback.setAttribute("role", "status");
+    nameFeedback.setAttribute("aria-live", "polite");
+    const nameField = createFormField("Name (optional)", nameInput, { description: "Up to 120 characters.", ownerDocument: document });
     saveName.addEventListener("click", async () => {
-      saveName.disabled = true;
+      const finishBusy = beginButtonBusy(saveName, "Saving name…", nameFeedback);
       try {
         await api(`/admin/api/captures/${encodeURIComponent(target.capture_id)}/name`, {
           method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: nameInput.value }),
@@ -596,29 +612,34 @@ function renderCaptureTargets(targets, decisions = []) {
         showMessage("Site name updated.", false, "sites");
         await refresh();
       } catch (error) { showMessage(error.message, true, "sites"); }
-      finally { saveName.disabled = false; }
+      finally { finishBusy(); }
     });
-    nameSection.append(nameLabel, saveName);
-    detailContent.append(nameSection);
+    nameSection.content.append(nameField.element, saveName, nameFeedback);
+    detailContent.append(nameSection.element);
 
     const metadata = node("details", undefined, "capture-target__details");
     metadata.append(node("summary", "Schedule and settings"));
     metadata.append(node("p", `${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`, "muted"));
     metadata.append(node("p", "This schedule is shared by every playlist that uses this page at the same screenshot size.", "field-hint"));
-    const intervalLabel = node("label", "Screenshot interval ");
     const intervalSelect = node("select");
     intervalSelect.className = "field-control";
-    intervalSelect.setAttribute("aria-label", `Screenshot interval for ${target.display_url}`);
     for (const option of intervalDefinitions?.capture.options ?? []) {
       const item = node("option", option.label);
       item.value = String(option.value);
       item.selected = option.value === target.capture_interval_seconds;
       intervalSelect.append(item);
     }
-    intervalLabel.append(intervalSelect);
+    const intervalField = createFormField("Screenshot interval", intervalSelect, {
+      description: "This schedule is shared by playlists using the same site and screenshot size.",
+      ownerDocument: document,
+    });
     const saveInterval = button(target.schedule_reviewed ? "Save screenshot schedule" : "Confirm schedule", "secondary");
+    const intervalFeedback = node("p", undefined, "inline-feedback");
+    intervalFeedback.hidden = true;
+    intervalFeedback.setAttribute("role", "status");
+    intervalFeedback.setAttribute("aria-live", "polite");
     saveInterval.addEventListener("click", async () => {
-      saveInterval.disabled = true;
+      const finishBusy = beginButtonBusy(saveInterval, "Saving schedule…", intervalFeedback);
       try {
         await api(`/admin/api/captures/${encodeURIComponent(target.capture_id)}`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },
@@ -627,24 +648,27 @@ function renderCaptureTargets(targets, decisions = []) {
         showMessage(target.schedule_reviewed ? "Screenshot schedule updated." : "Screenshot schedule reviewed. This site can now be added to playlists.", false, "sites");
         await refresh();
       } catch (error) { showMessage(error.message, true, "sites"); }
-      finally { saveInterval.disabled = false; }
+      finally { finishBusy(); }
     });
-    metadata.append(intervalLabel, saveInterval);
+    metadata.append(intervalField.element, saveInterval, intervalFeedback);
     const advanced = node("details", undefined, "capture-target__details");
     advanced.append(node("summary", "Advanced readiness settings"));
-    const selectorLabel = node("label", "Wait for CSS selector ");
     const selectorInput = node("input");
     selectorInput.type = "text";
     selectorInput.maxLength = 256;
     selectorInput.className = "field-control";
     selectorInput.value = target.wait_for_selector ?? "";
-    selectorInput.setAttribute("aria-label", `Wait for CSS selector for ${target.display_url}`);
-    selectorLabel.append(selectorInput);
-    advanced.append(selectorLabel, node("p",
-      "Optional. Capture waits for this element to appear after page load. Leave blank to keep the current readiness behavior.", "field-hint"));
+    const selectorField = createFormField("Wait for CSS selector", selectorInput, {
+      description: "Optional. Capture waits for this element after page load. Leave blank to use the default readiness behavior.",
+      ownerDocument: document,
+    });
     const saveReadiness = button("Save readiness setting", "secondary");
+    const readinessFeedback = node("p", undefined, "inline-feedback");
+    readinessFeedback.hidden = true;
+    readinessFeedback.setAttribute("role", "status");
+    readinessFeedback.setAttribute("aria-live", "polite");
     saveReadiness.addEventListener("click", async () => {
-      saveReadiness.disabled = true;
+      const finishBusy = beginButtonBusy(saveReadiness, "Saving readiness…", readinessFeedback);
       try {
         await api(`/admin/api/captures/${encodeURIComponent(target.capture_id)}/readiness`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },
@@ -653,9 +677,9 @@ function renderCaptureTargets(targets, decisions = []) {
         showMessage("Capture readiness updated. The screenshot schedule is unchanged.", false, "sites");
         await refresh();
       } catch (error) { showMessage(error.message, true, "sites"); }
-      finally { saveReadiness.disabled = false; }
+      finally { finishBusy(); }
     });
-    advanced.append(saveReadiness);
+    advanced.append(selectorField.element, saveReadiness, readinessFeedback);
     if (target.last_error) detailContent.append(node("p", `Screenshot error: ${target.last_error}`, "error-title"));
     if (Number.isSafeInteger(target.next_due_at)) detailContent.append(node("p", `Next screenshot ${formatTimestamp(target.next_due_at)}`, "muted"));
     const backgroundDecision = decisionByTarget.get(target.capture_id);
@@ -745,7 +769,9 @@ function renderCaptureTargets(targets, decisions = []) {
 function buildDashboardSourceEditor(container, sources) {
   const host = node("div", undefined, "source-editor-list");
   const toolbar = node("div", undefined, "source-editor-toolbar");
-  toolbar.append(node("h4", "Sources"));
+  const heading = node("div");
+  heading.append(node("h4", "Status sources"), node("p", "Add the public status pages shown in this dashboard.", "field-hint"));
+  toolbar.append(heading);
   const add = button("Add source", "secondary");
   add.dataset.addDashboardSource = "true";
   toolbar.append(add);
@@ -760,14 +786,15 @@ function buildDashboardSourceEditor(container, sources) {
   const advanced = node("details", undefined, "advanced-json-editor");
   advanced.dataset.apiDashboardAdvanced = "true";
   advanced.append(node("summary", "Advanced source JSON"));
-  const label = node("label", "Sources JSON");
   const textarea = node("textarea", undefined, "field-control") as HTMLTextAreaElement;
   textarea.name = "sources-json";
   textarea.rows = 8;
   textarea.spellcheck = false;
-  textarea.setAttribute("aria-label", "Advanced source JSON");
-  label.append(textarea);
-  advanced.append(label);
+  const jsonField = createFormField("Sources JSON", textarea, {
+    description: "Use this editor only for source options unavailable in the standard fields.",
+    ownerDocument: document,
+  });
+  advanced.append(jsonField.element);
   container.append(advanced);
   return createApiDashboardSourceEditor(host, sources, textarea);
 }
@@ -902,34 +929,39 @@ function renderApiDashboards(dashboards) {
     const form = node("form", undefined, "capture-detail-section api-dashboard-edit") as HTMLFormElement;
     form.dataset.apiDashboardEdit = dashboard.capture_id;
     const config = dashboard.configuration ?? { sources: [], width: dashboard.viewport_width, height: dashboard.viewport_height };
-    const nameLabel = node("label", "Dashboard name");
     const nameInput = node("input", undefined, "field-control");
     nameInput.name = "name";
     nameInput.value = dashboard.name;
     nameInput.maxLength = 120;
     nameInput.required = true;
-    nameLabel.append(nameInput);
-    const intervalLabel = node("label", "Refresh interval");
+    const nameField = createFormField("Dashboard name", nameInput, { ownerDocument: document });
     const interval = node("select", undefined, "field-control");
     interval.name = "capture_interval_seconds";
     for (const [value, label] of [[300, "5 minutes"], [60, "1 minute"]]) {
       const option = node("option", label) as HTMLOptionElement;
       option.value = String(value); option.selected = Number(dashboard.capture_interval_seconds) === value; interval.append(option);
     }
-    intervalLabel.append(interval);
-    const resolutionLabel = node("label", "Output resolution");
-    const resolution = node("span", undefined, "viewport-inputs");
+    const intervalField = createFormField("Refresh interval", interval, { ownerDocument: document });
+    const resolution = node("fieldset", undefined, "screenshot-size-fieldset");
+    resolution.append(node("legend", "Output resolution"));
     const width = node("input", undefined, "field-control");
     width.name = "width"; width.type = "number"; width.min = "640"; width.max = "3840"; width.step = "1";
     width.value = String(config.width ?? dashboard.viewport_width);
-    width.setAttribute("aria-label", `Dashboard width for ${dashboard.name}`);
     const height = node("input", undefined, "field-control");
     height.name = "height"; height.type = "number"; height.min = "360"; height.max = "2160"; height.step = "1";
     height.value = String(config.height ?? dashboard.viewport_height);
-    height.setAttribute("aria-label", `Dashboard height for ${dashboard.name}`);
-    resolution.append(width, node("span", "×"), height);
-    resolutionLabel.append(resolution);
-    form.append(nameLabel, intervalLabel, resolutionLabel);
+    resolution.append(
+      createFormField("Width (pixels)", width, { ownerDocument: document }).element,
+      createFormField("Height (pixels)", height, { ownerDocument: document }).element,
+    );
+    const dashboardDetails = createSettingsGroup("Dashboard details", {
+      headingLevel: "h4",
+      description: "Set the display name, refresh schedule, and generated image size.",
+      className: "api-dashboard-edit__details",
+      ownerDocument: document,
+    });
+    dashboardDetails.content.append(nameField.element, intervalField.element, resolution);
+    form.append(dashboardDetails.element);
     const sourceEditor = buildDashboardSourceEditor(form, config.sources ?? []);
     const feedback = node("p", undefined, "form-feedback");
     feedback.dataset.editFeedback = "true";
@@ -945,8 +977,8 @@ function renderApiDashboards(dashboards) {
     form.addEventListener("change", () => { form.dataset.dirty = "true"; });
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      save.disabled = true;
       feedback.hidden = true;
+      const finishBusy = beginButtonBusy(save, "Saving dashboard…", feedback);
       try {
         if (!sourceEditor.validate()) throw new Error("Fix the highlighted source fields before saving.");
         const parsed = parseApiDashboardConfig({ sources: sourceEditor.getSources(), width: Number(width.value), height: Number(height.value) });
@@ -957,7 +989,7 @@ function renderApiDashboards(dashboards) {
       } catch (caught) {
         feedback.textContent = caught instanceof Error ? caught.message : String(caught);
         feedback.hidden = false;
-      } finally { save.disabled = false; }
+      } finally { finishBusy(); }
     });
     editor.append(form);
     content.append(editor);
@@ -1533,7 +1565,7 @@ requiredElement(document, "#capture-site-form").addEventListener("submit", async
   const form = event.currentTarget as HTMLFormElement;
   const feedback = requiredElement(document, "#capture-site-feedback");
   const submit = requiredElement(form, "button[type=submit]");
-  submit.disabled = true;
+  const finishBusy = beginButtonBusy(submit, "Adding site…", feedback);
   try {
     const result = await api("/admin/api/capture-sites", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -1553,7 +1585,7 @@ requiredElement(document, "#capture-site-form").addEventListener("submit", async
       : "Site added with the default daily schedule. Review or confirm that schedule below.");
     await refresh();
   } catch (error) { showInlineMessage(feedback, error.message, true); }
-  finally { submit.disabled = false; }
+  finally { finishBusy(); }
 });
 
 apiDashboardCreateForm.addEventListener("input", () => { apiDashboardCreateForm.dataset.dirty = "true"; });
@@ -1569,7 +1601,7 @@ apiDashboardCreateForm.addEventListener("submit", async (event) => {
   const form = event.currentTarget as HTMLFormElement;
   const feedback = requiredElement(document, "#api-dashboard-feedback");
   const submit = requiredElement(form, "button[type=submit]");
-  submit.disabled = true;
+  const finishBusy = beginButtonBusy(submit, "Creating dashboard…", feedback);
   try {
     if (!apiDashboardCreateEditor.validate()) throw new Error("Fix the highlighted source fields before creating the dashboard.");
     const config = parseApiDashboardConfig({
@@ -1589,7 +1621,7 @@ apiDashboardCreateForm.addEventListener("submit", async (event) => {
     showInlineMessage(feedback, "API dashboard created. Run it now or add it to a playlist to schedule refreshes.");
     await refresh();
   } catch (error) { showInlineMessage(feedback, error.message, true); }
-  finally { submit.disabled = false; }
+  finally { finishBusy(); }
 });
 
 function displaySecret(title, value) {
@@ -1632,7 +1664,11 @@ requiredElement(document, "#playlist-form").addEventListener("submit", async (ev
   if (!files.length && !assets.length && !selectedSites.length) {
     return showInlineMessage(feedback, "Add at least one PNG image or capture site.", true);
   }
-  submitButton.disabled = true;
+  const finishBusy = beginButtonBusy(
+    submitButton,
+    files.length ? "Uploading images…" : "Saving playlist version…",
+    feedback,
+  );
   try {
     if (files.length) showInlineMessage(feedback, "Uploading your images…");
     for (const file of files) {
@@ -1640,6 +1676,10 @@ requiredElement(document, "#playlist-form").addEventListener("submit", async (ev
       assets.push(await api("/admin/api/assets", {
         method: "POST", headers: { "Content-Type": file.type }, body: file,
       }));
+    }
+    if (files.length) {
+      submitButton.textContent = "Saving playlist version…";
+      feedback.textContent = "Saving playlist version…";
     }
     const result = await api("/admin/api/playlists", {
       method: "POST",
@@ -1659,8 +1699,10 @@ requiredElement(document, "#playlist-form").addEventListener("submit", async (ev
     resetPlaylistEditor();
     resetIntervalSelections(formElement);
     await refresh();
+    feedback.textContent = "";
+    feedback.hidden = true;
   } catch (error) { showInlineMessage(feedback, error.message, true); }
-  finally { submitButton.disabled = false; }
+  finally { finishBusy(); }
 });
 
 requiredElement(document, "#cancel-playlist-edit").addEventListener("click", () => {

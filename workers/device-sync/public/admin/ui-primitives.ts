@@ -27,6 +27,146 @@ export function statusBadge(text: string, tone = "success"): HTMLElement {
   return node("span", text, tone === "success" ? "badge" : "badge badge--" + tone);
 }
 
+export interface FormFieldOptions {
+  id?: string;
+  description?: string;
+  className?: string;
+  controlFirst?: boolean;
+  ownerDocument?: Document;
+}
+
+export interface FormFieldComponent {
+  element: HTMLElement;
+  control: HTMLElement;
+  setError(message?: string): void;
+}
+
+let generatedFieldID = 0;
+
+/** Build a labelled field with associated help and inline error text. */
+export function createFormField(
+  labelText: string,
+  control: HTMLElement,
+  options: FormFieldOptions = {},
+): FormFieldComponent {
+  const ownerDocument = options.ownerDocument ?? control.ownerDocument;
+  const id = (options.id ?? control.id) || `management-field-${++generatedFieldID}`;
+  control.id = id;
+
+  const field = node("div", undefined, "form-field" + (options.className ? ` ${options.className}` : ""), ownerDocument);
+  const label = node("label", undefined, "form-field__label", ownerDocument);
+  label.htmlFor = id;
+  const labelTextNode = node("span", labelText, "form-field__label-text", ownerDocument);
+  if (options.controlFirst) label.append(control, labelTextNode);
+  else label.append(labelTextNode, control);
+  field.append(label);
+
+  const helpID = `${id}-help`;
+  if (options.description) {
+    const help = node("p", options.description, "field-hint form-field__help", ownerDocument);
+    help.id = helpID;
+    field.append(help);
+  }
+
+  const error = node("p", undefined, "field-error form-field__error", ownerDocument);
+  error.id = `${id}-error`;
+  error.hidden = true;
+  error.setAttribute("role", "alert");
+  field.append(error);
+
+  const setDescribedBy = (includeError: boolean) => {
+    const descriptions = [options.description ? helpID : "", includeError ? error.id : ""].filter(Boolean);
+    if (descriptions.length) control.setAttribute("aria-describedby", descriptions.join(" "));
+    else control.removeAttribute("aria-describedby");
+  };
+  setDescribedBy(false);
+
+  return {
+    element: field,
+    control,
+    setError(message?: string) {
+      const hasError = Boolean(message);
+      error.textContent = message ?? "";
+      error.hidden = !hasError;
+      if (hasError) control.setAttribute("aria-invalid", "true");
+      else control.removeAttribute("aria-invalid");
+      setDescribedBy(hasError);
+    },
+  };
+}
+
+export interface SettingsGroupOptions {
+  description?: string;
+  headingLevel?: "h2" | "h3" | "h4";
+  id?: string;
+  className?: string;
+  ownerDocument?: Document;
+}
+
+export interface SettingsGroupComponent {
+  element: HTMLElement;
+  content: HTMLElement;
+  heading: HTMLHeadingElement;
+}
+
+let generatedGroupID = 0;
+
+/** Create a named settings section whose controls can be composed by each view. */
+export function createSettingsGroup(
+  title: string,
+  options: SettingsGroupOptions = {},
+): SettingsGroupComponent {
+  const ownerDocument = options.ownerDocument ?? document;
+  const id = options.id ?? `management-settings-${++generatedGroupID}`;
+  const group = node("section", undefined, "settings-group" + (options.className ? ` ${options.className}` : ""), ownerDocument);
+  const heading = node(options.headingLevel ?? "h3", title, "settings-group__heading", ownerDocument);
+  heading.id = `${id}-title`;
+  group.setAttribute("aria-labelledby", heading.id);
+  group.append(heading);
+
+  if (options.description) {
+    const description = node("p", options.description, "settings-group__description", ownerDocument);
+    description.id = `${id}-description`;
+    group.setAttribute("aria-describedby", description.id);
+    group.append(description);
+  }
+
+  const content = node("div", undefined, "settings-group__content", ownerDocument);
+  group.append(content);
+  return { element: group, content, heading };
+}
+
+/** Disable a submitted action, announce progress, and restore it after the operation. */
+export function beginButtonBusy(
+  buttonElement: HTMLButtonElement,
+  busyLabel: string,
+  status?: HTMLElement,
+): () => void {
+  const originalLabel = buttonElement.textContent ?? "";
+  const wasDisabled = buttonElement.disabled;
+  const originalStatus = status?.textContent ?? "";
+  const wasStatusHidden = status?.hidden ?? false;
+  let finished = false;
+
+  buttonElement.disabled = true;
+  buttonElement.textContent = busyLabel;
+  if (status) {
+    status.textContent = busyLabel;
+    status.hidden = false;
+  }
+
+  return () => {
+    if (finished) return;
+    finished = true;
+    buttonElement.disabled = wasDisabled;
+    buttonElement.textContent = originalLabel;
+    if (status?.textContent === busyLabel) {
+      status.textContent = originalStatus;
+      status.hidden = wasStatusHidden;
+    }
+  };
+}
+
 /** Group infrequent actions behind a native keyboard-accessible disclosure. */
 export function actionDisclosure(label: string, actions: HTMLElement[]): HTMLDetailsElement {
   const details = node("details", undefined, "action-disclosure");
