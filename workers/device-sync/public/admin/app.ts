@@ -1331,7 +1331,7 @@ function renderPendingEnrollments(requests) {
 
 function renderFleetAttention(overview, enrollmentRequests) {
   const items = buildFleetInsights(overview, enrollmentRequests);
-  fleetAttention.replaceChildren(renderFindingList(items));
+  fleetAttention.replaceChildren(renderFindingList(items, { ownerDocument: fleetAttention.ownerDocument }));
   fleetDataAsOf.textContent = `Data as of ${formatTimestamp(overview.generated_at ?? Date.now())}`;
 }
 
