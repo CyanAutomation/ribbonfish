@@ -82,6 +82,32 @@ test("management page exposes accessible fleet and playlist sections", async () 
   }
 });
 
+test("shared page headers and toolbars wrap without hiding page controls", async () => {
+  const styles = await readFile(new URL("../public/admin/styles.css", import.meta.url), "utf8");
+  const stylesheet = postcss.parse(styles);
+  const declarations = (selector: string) => {
+    const values: Array<[string, string]> = [];
+    stylesheet.walkRules(selector, (rule) => rule.nodes.forEach((node) => {
+      if (node.type === "decl") values.push([node.prop, node.value]);
+    }));
+    return values;
+  };
+
+  assert.ok(declarations(".page-header").some(([property, value]) => property === "display" && value === "flex"));
+  assert.ok(declarations(".page-header__actions").some(([property, value]) => property === "flex-wrap" && value === "wrap"));
+  assert.ok(declarations(".toolbar").some(([property, value]) => property === "flex-wrap" && value === "wrap"));
+  assert.ok(declarations(".toolbar__group--end").some(([property, value]) => property === "margin-inline-start" && value === "auto"));
+
+  let narrowHeaderStacks = false;
+  stylesheet.walkAtRules("media", (media) => {
+    if (!/max-width:\s*700px/.test(media.params)) return;
+    media.walkRules(".page-header", (rule) => {
+      narrowHeaderStacks ||= rule.nodes.some((node) => node.type === "decl" && node.prop === "flex-direction" && node.value === "column");
+    });
+  });
+  assert.ok(narrowHeaderStacks, "page actions move below the heading on narrow screens");
+});
+
 test("transient notices replace, pause, resume, and clear their expiry", () => {
   let nextID = 0;
   const timers = new Map();

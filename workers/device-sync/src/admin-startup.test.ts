@@ -149,6 +149,72 @@ test("management navigation shows the selected section and moves focus", { timeo
   }
 });
 
+test("management modules share page headers and labeled control toolbars", { timeout: 5000 }, async () => {
+  const { dom, window } = openConsole();
+  try {
+    await settle();
+    for (const [sectionID, titleID, title] of [
+      ["overview-section", "overview-title", "Fleet snapshot"],
+      ["sites-section", "sites-title", "Capture sites"],
+      ["dashboards-section", "dashboards-title", "Capture dashboards"],
+      ["capture-efficiency-section", "capture-efficiency-title", "Capture efficiency and Browser Run usage"],
+      ["playlist-section", "playlist-title", "Playlist versions"],
+      ["device-section", "device-title", "Device fleet"],
+      ["activity-section", "activity-title", "Recent activity"],
+    ]) {
+      const section = window.document.getElementById(sectionID);
+      const header = section.querySelector(":scope > .page-header");
+      assert.ok(header, `${sectionID} has a shared page header`);
+      assert.equal(header.tagName, "HEADER");
+      assert.equal(header.querySelector("h2")?.id, titleID);
+      assert.equal(header.querySelector("h2")?.textContent, title);
+      assert.equal(section.querySelector(":scope > .section-heading"), null);
+    }
+
+    const sitesHeader = window.document.querySelector("#sites-section > .page-header");
+    const sitesDescription = sitesHeader.querySelector(".page-header__description");
+    assert.match(sitesDescription.textContent, /review their screenshot schedules/);
+    assert.equal(sitesHeader.querySelector("h2").getAttribute("aria-describedby"), sitesDescription.id);
+    assert.deepEqual([...sitesHeader.querySelectorAll(".page-header__meta span")].map((item) => item.textContent), [
+      "2 screenshot sites", "2 need attention",
+    ]);
+    const deviceHeader = window.document.querySelector("#device-section > .page-header");
+    assert.deepEqual([...deviceHeader.querySelectorAll(".page-header__meta span")].map((item) => item.textContent), [
+      "0 devices", "0 awaiting approval",
+    ]);
+
+    const playlistAction = window.document.querySelector('#playlist-section .page-header__actions a[href="#playlist-editor"]');
+    assert.equal(playlistAction.textContent, "Create playlist version");
+    const siteAction = window.document.querySelector('#sites-section .page-header__actions a[href="#capture-site-editor"]');
+    assert.equal(siteAction.textContent, "Add site");
+    const dashboardAction = window.document.querySelector('#dashboards-section .page-header__actions a[href="#api-dashboard-editor"]');
+    assert.equal(dashboardAction.textContent, "Add API dashboard");
+
+    const filters = window.document.querySelector(".capture-filters");
+    assert.equal(filters.getAttribute("role"), "group");
+    assert.equal(filters.getAttribute("aria-label"), "Capture site filters");
+    assert.deepEqual([...filters.querySelectorAll(".toolbar__group")].map((group) => group.getAttribute("aria-label")), ["Site search", "Site status"]);
+    assert.equal(filters.querySelector("input[type=search]"), window.document.getElementById("capture-search"));
+    assert.equal(filters.querySelector("select"), window.document.getElementById("capture-filter"));
+
+    const sourceToolbar = window.document.querySelector("#api-dashboard-source-list > .source-editor-toolbar");
+    assert.equal(sourceToolbar.getAttribute("role"), "group");
+    assert.equal(sourceToolbar.getAttribute("aria-label"), "Dashboard source controls");
+    assert.equal(sourceToolbar.querySelector("[data-add-dashboard-source]").textContent, "Add source");
+
+    await navigate(window, () => siteAction.click());
+    const siteEditor = window.document.getElementById("capture-site-editor");
+    assert.equal(siteEditor.open, true, "the page action opens its existing native editor disclosure");
+    assert.equal(window.document.activeElement, siteEditor.querySelector("summary"), "focus moves to the editor disclosure trigger");
+    await navigate(window, () => dashboardAction.click());
+    const dashboardEditor = window.document.getElementById("api-dashboard-editor");
+    assert.equal(dashboardEditor.open, true, "the dashboard page action opens its native editor disclosure");
+    assert.equal(window.document.activeElement, dashboardEditor.querySelector("summary"));
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("dashboard navigation renders capture efficiency and fleet findings", { timeout: 5000 }, async () => {
   const { dom, window } = openConsole();
   try {
@@ -251,8 +317,14 @@ test("API dashboard editor adds provider-aware sources and preserves existing ID
     assert.match(card.textContent, /Kuma: Disabled/);
     assert.match(card.textContent, /Status: Fresh/);
     assert.match(card.textContent, /Last-Modified|ETag/);
+    assert.deepEqual([...window.document.querySelectorAll("#dashboards-section > .page-header .page-header__meta span")].map((item) => item.textContent), [
+      "1 API dashboards", "0 with errors",
+    ]);
     const edit = card.querySelector("[data-api-dashboard-edit]");
     assert.ok(edit);
+    const editSourceToolbar = edit.querySelector(".source-editor-toolbar");
+    assert.equal(editSourceToolbar.getAttribute("role"), "group");
+    assert.equal(editSourceToolbar.getAttribute("aria-label"), "Dashboard source controls");
     const sourceRows = edit.querySelectorAll("[data-dashboard-source]");
     assert.equal(sourceRows.length, 2);
     assert.deepEqual([...sourceRows].map((row) => row.querySelector("[name=id]").value), ["keep-kuma", "keep-status"]);
