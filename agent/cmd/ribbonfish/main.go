@@ -28,6 +28,11 @@ import (
 	"github.com/CyanAutomation/ribbonfish/agent/internal/syncer"
 )
 
+const (
+	defaultSyncInterval  = 5 * time.Minute
+	healthReportInterval = 5 * time.Minute
+)
+
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "path to the agent JSON configuration")
 	listDisplays := flag.Bool("list-displays", false, "list DRM/KMS connectors from Linux sysfs and exit")
@@ -416,7 +421,11 @@ func runHealthReporterLoop(ctx context.Context, ready <-chan struct{}, client *s
 		}
 	}
 	report()
-	ticker := time.NewTicker(time.Minute)
+	runPeriodicHealthReports(ctx, tracker.Changes(), healthReportInterval, report)
+}
+
+func runPeriodicHealthReports(ctx context.Context, changes <-chan struct{}, interval time.Duration, report func()) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -424,7 +433,7 @@ func runHealthReporterLoop(ctx context.Context, ready <-chan struct{}, client *s
 			return
 		case <-ticker.C:
 			report()
-		case <-tracker.Changes():
+		case <-changes:
 			report()
 		}
 	}
@@ -500,9 +509,9 @@ func configuredSyncInterval(logger interface{ Warn(string, ...any) }) time.Durat
 		if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
 			return parsed
 		}
-		logger.Warn("invalid RIBBONFISH_SYNC_INTERVAL; using one minute", "value", value)
+		logger.Warn("invalid RIBBONFISH_SYNC_INTERVAL; using five minutes", "value", value)
 	}
-	return time.Minute
+	return defaultSyncInterval
 }
 
 func syncErrorCode(err error) string {
