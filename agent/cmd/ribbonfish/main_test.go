@@ -35,6 +35,58 @@ import (
 
 // Test suite contract sources: agent/README.md and README.md#device-software.
 
+func TestConfiguredSyncIntervalDefaultsToFiveMinutes(t *testing.T) {
+	t.Setenv("RIBBONFISH_SYNC_INTERVAL", "")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	if got := configuredSyncInterval(logger); got != 5*time.Minute {
+		t.Fatalf("configuredSyncInterval() = %s, want 5m", got)
+	}
+}
+
+func TestConfiguredSyncIntervalInvalidValueFallsBackToFiveMinutes(t *testing.T) {
+	t.Setenv("RIBBONFISH_SYNC_INTERVAL", "not-a-duration")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	if got := configuredSyncInterval(logger); got != 5*time.Minute {
+		t.Fatalf("configuredSyncInterval() = %s, want 5m", got)
+	}
+}
+
+func TestHealthReportIntervalIsFiveMinutes(t *testing.T) {
+	if healthReportInterval != 5*time.Minute {
+		t.Fatalf("healthReportInterval = %s, want 5m", healthReportInterval)
+	}
+}
+
+func TestRunPeriodicHealthReportsUsesRequestedInterval(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	reports := make(chan struct{}, 1)
+	done := make(chan struct{})
+	go func() {
+		runPeriodicHealthReports(ctx, nil, 20*time.Millisecond, func() {
+			select {
+			case reports <- struct{}{}:
+			default:
+			}
+		})
+		close(done)
+	}()
+
+	select {
+	case <-reports:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("periodic health report did not run on the configured interval")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("periodic health reporter did not stop after cancellation")
+	}
+}
+
 func TestRunLogsShutdownWithoutOpeningRuntimeResourcesForCanceledContext(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")

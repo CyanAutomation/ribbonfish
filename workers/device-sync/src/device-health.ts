@@ -24,8 +24,8 @@ const ERROR_CODES = new Set([
   "connector_mode_unsupported", "display_start_failed", "drm_open_failed", "frame_present_failed",
   "no_playable_assets", "sync_rejected", "sync_unavailable", "unknown",
 ]);
-const STALE_AFTER_MS = 3 * 60 * 1000;
-const OFFLINE_AFTER_MS = 5 * 60 * 1000;
+const STALE_AFTER_MS = 15 * 60 * 1000;
+const OFFLINE_AFTER_MS = 25 * 60 * 1000;
 
 export function validateDeviceHealthReport(value: unknown): DeviceHealthReport | null {
   if (!isRecord(value) || !exactKeys(value,

@@ -183,7 +183,7 @@ How long an image remains visible before each output advances to the next item i
 
 ### Device Sync Interval
 
-How frequently the agent checks for an updated active playlist snapshot. The Go agent defaults to one minute; Compose can override this with `RIBBONFISH_SYNC_INTERVAL`.
+How frequently the agent checks for an updated active playlist snapshot. The Go agent defaults to five minutes; Compose can override this with `RIBBONFISH_SYNC_INTERVAL`.
 
 These are separate settings. A display can rotate between cached screenshots every 30 seconds while screenshots are captured daily.
 

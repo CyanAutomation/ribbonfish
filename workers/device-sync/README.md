@@ -406,12 +406,12 @@ Device sync and health reporting use the following device API:
 - `GET /v2/assets/{sha256}` returns an asset only when it is in the active playlist.
 - `POST /v1/telemetry` accepts an authenticated, schema-versioned health report up to 8 KiB. Reports include agent lifecycle/version, sync status and applied revision, per-display connector and last-frame status, and optional host uptime, one-minute load, available memory, state-volume free space, and CPU temperature. Error fields use a fixed code list; reports never include logs, credentials, or raw error text.
 
-Agents send a report at startup, after a health transition, once per minute, and
+Agents send a report at startup, after a health transition, once every five minutes, and
 at shutdown when they can reach the Worker. The management Worker timestamps
 receipt, keeps the latest report, records at most one sample per five-minute
 bucket, and stores transition/restart events. Samples and events older than 30
 days are removed by the hourly scheduled cleanup. Dashboard health is derived
-from server receipt time: a report is stale after 3 minutes and offline after 5
+from server receipt time: a report is stale after 15 minutes and offline after 25
 minutes; reported output or sync failures show as degraded. Disabled devices
 show as disabled, and devices that have never reported show as unknown.
 The one-minute scheduled pass records stale/offline transitions and the next

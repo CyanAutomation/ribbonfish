@@ -4,13 +4,14 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 temp_dir=$(mktemp -d)
 trap 'rm -rf "$temp_dir"' EXIT HUP INT TERM
+test_drm_gid=$(stat -L -c '%g' /dev/null 2>/dev/null || stat -L -f '%g' /dev/null)
 
 export HOME="$temp_dir/home"
 mkdir -p "$HOME"
 sh "$script_dir/prepare-deployment.sh" \
 	--profile pi3a-plus \
 	--drm-device /dev/null \
-	--drm-gid 0
+	--drm-gid "$test_drm_gid"
 
 target_dir="$HOME/containers/ribbonfish"
 test -f "$target_dir/docker-compose.yaml"
@@ -20,7 +21,7 @@ test -x "$target_dir/install.sh"
 test -f "$target_dir/.env"
 grep -Fx 'RIBBONFISH_PROFILE=pi3a-plus' "$target_dir/.env"
 grep -Fx 'RIBBONFISH_DRM_DEVICE=/dev/null' "$target_dir/.env"
-grep -Fx 'RIBBONFISH_DRM_GID=0' "$target_dir/.env"
+grep -Fx "RIBBONFISH_DRM_GID=$test_drm_gid" "$target_dir/.env"
 grep -Fx 'RIBBONFISH_NETWORK_MODE=none' "$target_dir/.env"
 if grep -q '^RIBBONFISH_IMAGE=' "$target_dir/.env"; then
 	echo 'default .env should leave the image on the documented default' >&2
@@ -33,6 +34,7 @@ fi
 grep -F 'image: ${RIBBONFISH_IMAGE:-cyanautomation/ribbonfish:latest}' "$target_dir/docker-compose.yaml"
 grep -F 'RIBBONFISH_PROFILE: ${RIBBONFISH_PROFILE:?Set RIBBONFISH_PROFILE in .env}' "$target_dir/docker-compose.yaml"
 grep -F 'RIBBONFISH_DRM_DEVICE: ${RIBBONFISH_DRM_DEVICE:?Set RIBBONFISH_DRM_DEVICE in .env}' "$target_dir/docker-compose.yaml"
+grep -F 'RIBBONFISH_SYNC_INTERVAL: ${RIBBONFISH_SYNC_INTERVAL:-5m}' "$target_dir/docker-compose.yaml"
 grep -F '${RIBBONFISH_DRM_GID:?Set RIBBONFISH_DRM_GID in .env}' "$target_dir/docker-compose.yaml"
 if grep -Eq '^(RIBBONFISH_VERSION|RIBBONFISH_CACHE_DIR|RIBBONFISH_SYNC_INTERVAL)=' "$target_dir/.env.example"; then
 	echo '.env.example contains a fixed tag or redundant defaults' >&2
@@ -44,7 +46,7 @@ grep -F 'pi4) default_device=/dev/dri/by-path/platform-gpu-card ;;' "$script_dir
 
 single_target="$HOME/containers/pi4-single"
 sh "$script_dir/prepare-deployment.sh" --target "$single_target" \
-	--profile pi4-single --drm-device /dev/null --drm-gid 0
+	--profile pi4-single --drm-device /dev/null --drm-gid "$test_drm_gid"
 grep -Fx 'RIBBONFISH_PROFILE=pi4-single' "$single_target/.env"
 
 mkdir -p "$temp_dir/bin"
@@ -187,7 +189,7 @@ mkdir -p "$owner_repair_target"
 chmod 0555 "$owner_repair_target"
 FAKE_OWNER_TARGET="$owner_repair_target" FAKE_SUDO_LOG="$temp_dir/sudo-log" \
 	PATH="$temp_dir/bin:$PATH" sh "$script_dir/prepare-deployment.sh" \
-	--target "$owner_repair_target" --profile pi3a-plus --drm-device /dev/null --drm-gid 0 \
+	--target "$owner_repair_target" --profile pi3a-plus --drm-device /dev/null --drm-gid "$test_drm_gid" \
 	--fix-target-owner
 test -w "$owner_repair_target"
 grep -Fx "chown $(id -u):$(id -g) $owner_repair_target" "$temp_dir/sudo-log"
@@ -198,7 +200,7 @@ touch "$nonempty_root_target/keep-me"
 chmod 0555 "$nonempty_root_target"
 if output=$(FAKE_OWNER_TARGET="$nonempty_root_target" FAKE_SUDO_LOG="$temp_dir/should-not-sudo" \
 	PATH="$temp_dir/bin:$PATH" sh "$script_dir/prepare-deployment.sh" \
-	--target "$nonempty_root_target" --profile pi3a-plus --drm-device /dev/null --drm-gid 0 \
+	--target "$nonempty_root_target" --profile pi3a-plus --drm-device /dev/null --drm-gid "$test_drm_gid" \
 	--fix-target-owner 2>&1); then
 	echo 'nonempty root-owned target unexpectedly received automatic ownership repair' >&2
 	exit 1
@@ -218,7 +220,7 @@ chmod 0555 "$symlink_real_target"
 ln -s "$symlink_real_target" "$symlink_target"
 if output=$(FAKE_OWNER_TARGET="$symlink_target" FAKE_SUDO_LOG="$temp_dir/symlink-should-not-sudo" \
 	PATH="$temp_dir/bin:$PATH" sh "$script_dir/prepare-deployment.sh" \
-	--target "$symlink_target" --profile pi3a-plus --drm-device /dev/null --drm-gid 0 \
+	--target "$symlink_target" --profile pi3a-plus --drm-device /dev/null --drm-gid "$test_drm_gid" \
 	--fix-target-owner 2>&1); then
 	echo 'symlink target unexpectedly received automatic ownership repair' >&2
 	exit 1
@@ -320,7 +322,7 @@ FAKE_DOCKER_IMAGE=cyanautomation/ribbonfish:latest PATH="$temp_dir/bin:$PATH" \
 	sh "$script_dir/verify-deployment.sh"
 digest_image='cyanautomation/ribbonfish@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 sh "$script_dir/prepare-deployment.sh" \
-	--profile pi3a-plus --drm-device /dev/null --drm-gid 0 --image "$digest_image"
+	--profile pi3a-plus --drm-device /dev/null --drm-gid "$test_drm_gid" --image "$digest_image"
 grep -Fx "RIBBONFISH_IMAGE=$digest_image" "$target_dir/.env"
 FAKE_DOCKER_IMAGE="$digest_image" PATH="$temp_dir/bin:$PATH" \
 	sh "$script_dir/verify-deployment.sh" --preflight
@@ -341,7 +343,7 @@ printf '%s\n' 'RIBBONFISH_SYNC_URL=https://sync.example.workers.dev' >> "$target
 sh "$script_dir/prepare-deployment.sh" \
 	--profile pi3a-plus \
 	--drm-device /dev/null \
-	--drm-gid 0
+	--drm-gid "$test_drm_gid"
 grep -Fx 'RIBBONFISH_SYNC_URL=https://sync.example.workers.dev' "$target_dir/.env"
 grep -Fx "RIBBONFISH_IMAGE=$digest_image" "$target_dir/.env"
 if PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" --preflight >/dev/null 2>&1; then
@@ -351,7 +353,7 @@ fi
 sh "$script_dir/prepare-deployment.sh" \
 	--profile pi3a-plus \
 	--drm-device /dev/null \
-	--drm-gid 0 \
+	--drm-gid "$test_drm_gid" \
 	--replace-env
 backup=$(find "$target_dir" -maxdepth 1 -name '.env.backup.*' -print | sort | tail -n 1)
 test -n "$backup"
@@ -361,7 +363,7 @@ grep -Fx 'RIBBONFISH_NETWORK_MODE=none' "$target_dir/.env"
 sh "$script_dir/prepare-deployment.sh" \
 	--profile pi3a-plus \
 	--drm-device /dev/null \
-	--drm-gid 0 \
+	--drm-gid "$test_drm_gid" \
 	--sync-url https://ribbonfish.scheimann.workers.dev \
 	--device-id ribbonfish-01 \
 	--replace-env
@@ -370,7 +372,7 @@ grep -Fx 'RIBBONFISH_DEVICE_ID=ribbonfish-01' "$target_dir/.env"
 PATH="$temp_dir/bin:$PATH" sh "$script_dir/verify-deployment.sh" --preflight
 
 if output=$(sh "$script_dir/prepare-deployment.sh" \
-	--profile pi3a-plus --drm-device /dev/null --drm-gid 0 \
+	--profile pi3a-plus --drm-device /dev/null --drm-gid "$test_drm_gid" \
 	--sync-url https://ribbonfish.scheimann.workers.dev 2>&1); then
 	echo 'sync URL without a device ID unexpectedly succeeded' >&2
 	exit 1
@@ -381,7 +383,7 @@ case "$output" in
 esac
 
 if output=$(sh "$script_dir/prepare-deployment.sh" \
-	--profile pi3a-plus --drm-device /dev/null --drm-gid 0 \
+	--profile pi3a-plus --drm-device /dev/null --drm-gid "$test_drm_gid" \
 	--device-id ribbonfish-01 2>&1); then
 	echo 'device ID without a sync URL unexpectedly succeeded' >&2
 	exit 1
@@ -392,7 +394,7 @@ case "$output" in
 esac
 
 if sh "$script_dir/prepare-deployment.sh" \
-	--profile pi3a-plus --drm-device /dev/null --drm-gid 0 \
+	--profile pi3a-plus --drm-device /dev/null --drm-gid "$test_drm_gid" \
 	--sync-url http://insecure.example --device-id ribbonfish-01 >/dev/null 2>&1; then
 	echo 'HTTP sync URL unexpectedly succeeded' >&2
 	exit 1
@@ -442,7 +444,7 @@ RIBBONFISH_GITHUB_API_URL=https://api.github.test/commits/main \
 	RIBBONFISH_RAW_BASE_URL=https://raw.github.test/CyanAutomation/ribbonfish \
 	TMPDIR="$temp_dir" \
 	PATH="$temp_dir/bin:$PATH" sh "$script_dir/install.sh" \
-	--target "$install_target" --profile pi3a-plus --drm-device /dev/null --drm-gid 0 \
+	--target "$install_target" --profile pi3a-plus --drm-device /dev/null --drm-gid "$test_drm_gid" \
 	--fix-target-owner --image "$digest_image"
 test -f "$install_target/docker-compose.yaml"
 test -f "$install_target/docker-compose.published.yaml"

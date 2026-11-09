@@ -30,6 +30,12 @@ test("fleet health uses server receive time and retains reported faults", () => 
   assert.equal(deriveDeviceHealth({ state: "ready", sync: { status: "ok", error_code: null }, outputs: [] }, receivedAt, receivedAt + 1000), "healthy");
   assert.equal(deriveDeviceHealth({ state: "ready", sync: { status: "unknown", error_code: null }, outputs: [{ status: "unknown", error_code: null }] }, receivedAt, receivedAt + 1000), "starting");
   assert.equal(deriveDeviceHealth(report, receivedAt, receivedAt + 1000), "degraded");
-  assert.equal(deriveDeviceHealth({ state: "ready", sync: { status: "ok", error_code: null }, outputs: [] }, receivedAt, receivedAt + 181_000), "stale");
-  assert.equal(deriveDeviceHealth({ state: "ready", sync: { status: "ok", error_code: null }, outputs: [] }, receivedAt, receivedAt + 301_000), "offline");
+  const healthy: Pick<DeviceHealthReport, "state" | "sync" | "outputs"> = {
+    state: "ready", sync: { status: "ok", error_code: null }, outputs: [],
+  };
+  assert.equal(deriveDeviceHealth(healthy, receivedAt, receivedAt + 14 * 60_000 + 59_000), "healthy");
+  assert.equal(deriveDeviceHealth(healthy, receivedAt, receivedAt + 15 * 60_000), "healthy");
+  assert.equal(deriveDeviceHealth(healthy, receivedAt, receivedAt + 15 * 60_000 + 1), "stale");
+  assert.equal(deriveDeviceHealth(healthy, receivedAt, receivedAt + 25 * 60_000), "stale");
+  assert.equal(deriveDeviceHealth(healthy, receivedAt, receivedAt + 25 * 60_000 + 1), "offline");
 });
