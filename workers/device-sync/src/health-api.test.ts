@@ -116,12 +116,12 @@ test("missed reports create stale and offline history, and recovery closes the o
     await persistDeviceHealth(env.DB, deviceID, healthy, firstReceivedAt);
     assert.equal(env.sqlite.prepare("SELECT health_status FROM device_health_latest WHERE device_id = ?").get(deviceID).health_status, "healthy");
 
-    assert.equal(await refreshDeviceHealthStatuses(env.DB, firstReceivedAt + 4 * 60 * 1000), 1);
+    assert.equal(await refreshDeviceHealthStatuses(env.DB, firstReceivedAt + 16 * 60 * 1000), 1);
     assert.equal(env.sqlite.prepare("SELECT health_status FROM device_health_latest WHERE device_id = ?").get(deviceID).health_status, "stale");
-    assert.equal(await refreshDeviceHealthStatuses(env.DB, firstReceivedAt + 6 * 60 * 1000), 1);
+    assert.equal(await refreshDeviceHealthStatuses(env.DB, firstReceivedAt + 26 * 60 * 1000), 1);
     assert.equal(env.sqlite.prepare("SELECT health_status FROM device_health_latest WHERE device_id = ?").get(deviceID).health_status, "offline");
 
-    await persistDeviceHealth(env.DB, deviceID, healthy, firstReceivedAt + 6 * 60 * 1000 + 1);
+    await persistDeviceHealth(env.DB, deviceID, healthy, firstReceivedAt + 26 * 60 * 1000 + 1);
     const events = env.sqlite.prepare("SELECT metadata_json FROM device_health_events ORDER BY received_at").all().map((event) => JSON.parse(event.metadata_json));
     assert.equal(events.length, 4);
     assert.deepEqual(events[1], { previous_health_status: "healthy", health_status: "stale", state: "ready", error_code: null });

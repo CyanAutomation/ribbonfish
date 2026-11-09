@@ -114,7 +114,7 @@ its process version and uptime, content-sync outcome and applied revision,
 configured display/connector status and age of the last successful frame, plus
 available host metrics: Linux uptime, one-minute load, available memory, free
 space on the state volume, and CPU temperature when the kernel exposes it.
-Reports are sent at startup, on health transitions, every minute, and best
+Reports are sent at startup, on health transitions, every five minutes, and best
 effort at shutdown. They contain stable error codes rather than logs or raw
 error messages. Reporting uses the existing bearer token or approved Ed25519
 device key and is bounded to 8 KiB per report.
