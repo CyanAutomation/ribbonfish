@@ -75,6 +75,7 @@
         <div class="section-heading">
           <div><p class="eyebrow">Overview</p><h2 id="overview-title">Fleet snapshot</h2></div>
         </div>
+        <p class="muted">Current fleet health and prioritized items that need attention.</p>
         <div id="overview-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="overview" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss overview message">Dismiss</button></div>
         <section id="fleet-insights" class="fleet-insights-section" aria-labelledby="fleet-insights-title">
           <div class="section-heading fleet-insights-section__heading">
@@ -87,7 +88,10 @@
       </section>
 
       <section id="sites-section" class="panel" aria-labelledby="sites-title">
-        <div class="section-heading"><div><p class="eyebrow">Sites</p><h2 id="sites-title">Capture sites</h2></div></div>
+        <div class="section-heading">
+          <div><p class="eyebrow">Sites</p><h2 id="sites-title">Capture sites</h2></div>
+          <a class="button button--primary" href="#capture-site-editor">Add site</a>
+        </div>
         <p class="muted">Register pages and review their screenshot schedules here. Sites are independent of playlists; only reviewed sites can be added to a playlist. Scheduled captures run when a site is included in the active playlist.</p>
         <div class="alert alert--success status-banner" data-feedback-slot="sites" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss site message">Dismiss</button></div>
         <details id="capture-site-editor" class="editor-disclosure"><summary>Add a site</summary>
@@ -116,7 +120,10 @@
       </section>
 
       <section id="dashboards-section" class="panel" aria-labelledby="dashboards-title">
-        <div class="section-heading"><div><p class="eyebrow">API status</p><h2 id="dashboards-title">Capture dashboards</h2></div></div>
+        <div class="section-heading">
+          <div><p class="eyebrow">API status</p><h2 id="dashboards-title">Capture dashboards</h2></div>
+          <a class="button button--primary" href="#api-dashboard-editor">Add API dashboard</a>
+        </div>
         <p class="muted">Configure public API status sources and inspect generated dashboard images. These captures use the Worker renderer and do not consume Browser Run minutes.</p>
         <div class="alert alert--success status-banner" data-feedback-slot="dashboards" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss dashboard message">Dismiss</button></div>
         <details id="api-dashboard-editor" class="editor-disclosure"><summary>Add an API status dashboard</summary>
@@ -164,6 +171,7 @@
           <div><p class="eyebrow">Playlists</p><h2 id="playlist-title">Playlist versions</h2></div>
           <a class="button button--primary" href="#playlist-editor">Create playlist version</a>
         </div>
+        <p class="muted">Manage versions, images, and reviewed capture content for device playlists.</p>
         <div id="playlist-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="playlist" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss playlist message">Dismiss</button></div>
         <div id="playlists" class="table-scroll desktop-data" role="region" aria-label="Playlist versions" tabindex="0"></div>
         <div id="playlists-mobile" class="mobile-card-list" role="region" aria-label="Playlist versions"></div>
@@ -202,6 +210,7 @@
         <div class="section-heading">
           <div><p class="eyebrow">Devices</p><h2 id="device-title">Device fleet</h2></div>
         </div>
+        <p class="muted">Review enrollment requests, sync status, and device health.</p>
         <div id="device-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="device" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss device message">Dismiss</button></div>
         <details id="pending-enrollments-details" class="pending-enrollments">
           <summary><h3 id="pending-enrollments-title">Devices awaiting approval</h3><span id="pending-enrollment-count" class="disclosure-hint"></span></summary>
@@ -217,6 +226,7 @@
         <div class="section-heading">
           <div><p class="eyebrow">Activity</p><h2 id="activity-title">Recent activity</h2></div>
         </div>
+        <p class="muted">Review the latest changes made in the Management console.</p>
         <div id="activity-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="activity" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss activity message">Dismiss</button></div>
         <div id="audit" class="table-scroll desktop-data" role="region" aria-label="Recent management activity" tabindex="0"></div>
         <div id="audit-mobile" class="mobile-card-list" role="region" aria-label="Recent management activity"></div>
