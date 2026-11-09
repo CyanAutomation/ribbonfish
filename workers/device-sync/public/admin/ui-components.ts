@@ -157,34 +157,52 @@ export type FindingCardModel = {
   action: { label: string; href: string };
 };
 
+export interface FindingCardOptions {
+  ownerDocument?: Document;
+}
+
 /** Render a reusable evidence card with a clear severity and next action. */
-export function renderFindingCard(finding: FindingCardModel): HTMLElement {
-  const card = node("article", undefined, `finding-card finding-card--${finding.severity}`);
+export function renderFindingCard(finding: FindingCardModel, options: FindingCardOptions = {}): HTMLElement {
+  const ownerDocument = options.ownerDocument ?? document;
+  const card = node("article", undefined, `finding-card finding-card--${finding.severity}`, ownerDocument);
   card.dataset.findingKey = finding.key;
   card.setAttribute("role", "listitem");
   card.setAttribute("aria-labelledby", `finding-card-${finding.key}-title`);
 
-  const heading = node("div", undefined, "finding-card__heading");
-  const title = node("h4", finding.title);
+  const heading = node("div", undefined, "finding-card__heading", ownerDocument);
+  const title = node("h4", finding.title, undefined, ownerDocument);
   title.id = `finding-card-${finding.key}-title`;
-  const badge = statusBadge(finding.severity === "action" ? "Action needed" : "Review", finding.severity === "action" ? "warning" : "neutral");
+  const badge = statusBadge(
+    finding.severity === "action" ? "Action needed" : "Review",
+    finding.severity === "action" ? "warning" : "neutral",
+    ownerDocument,
+  );
   heading.append(title, badge);
 
-  const evidence = node("p", undefined, "finding-card__evidence");
-  evidence.append(node("strong", "Evidence: "), document.createTextNode(finding.evidence));
+  const evidence = node("p", undefined, "finding-card__evidence", ownerDocument);
+  evidence.append(node("strong", "Evidence: ", undefined, ownerDocument), ownerDocument.createTextNode(finding.evidence));
   card.append(heading, evidence);
   if (finding.updatedAt !== null) {
-    card.append(node("p", `Updated ${formatTimestamp(finding.updatedAt)}`, "finding-card__updated"));
+    card.append(node("p", `Updated ${formatTimestamp(finding.updatedAt)}`, "finding-card__updated", ownerDocument));
   }
-  card.append(linkButton(finding.action.href, finding.action.label));
+  card.append(linkButton(finding.action.href, finding.action.label, "secondary", ownerDocument));
   return card;
 }
 
+export interface FindingListOptions extends FindingCardOptions {
+  emptyMessage?: string;
+}
+
 /** Render findings as a reusable accessible list, including a useful clear state. */
-export function renderFindingList(findings: FindingCardModel[], emptyMessage = "No current issues need attention."): HTMLElement {
-  if (!findings.length) return node("p", emptyMessage, "finding-list__empty");
-  const list = node("div", undefined, "finding-list");
+export function renderFindingList(
+  findings: FindingCardModel[],
+  options: FindingListOptions | string = {},
+): HTMLElement {
+  const emptyMessage = typeof options === "string" ? options : options.emptyMessage ?? "No current issues need attention.";
+  const ownerDocument = typeof options === "string" ? document : options.ownerDocument ?? document;
+  if (!findings.length) return node("p", emptyMessage, "finding-list__empty", ownerDocument);
+  const list = node("div", undefined, "finding-list", ownerDocument);
   list.setAttribute("role", "list");
-  list.append(...findings.map(renderFindingCard));
+  list.append(...findings.map((finding) => renderFindingCard(finding, { ownerDocument })));
   return list;
 }
