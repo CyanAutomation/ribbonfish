@@ -285,7 +285,12 @@ test("site search, naming, and schedule review send the selected site data", asy
       intervalErrors.push(event.message);
       event.preventDefault();
     });
-    const intervalSelect = window.document.querySelector('[aria-label="Screenshot interval for https://status.example/"]');
+    const intervalSelect = window.document.querySelector(".capture-target__details select");
+    assert.equal(intervalSelect.hasAttribute("aria-label"), false);
+    assert.match(window.document.querySelector(`label[for="${intervalSelect.id}"]`)?.textContent ?? "", /^Screenshot interval/);
+    const selectorInput = window.document.querySelector('.capture-target__details input[maxlength="256"]');
+    assert.equal(selectorInput.hasAttribute("aria-label"), false);
+    assert.equal(window.document.querySelector(`label[for="${selectorInput.id}"]`)?.textContent, "Wait for CSS selector");
     assert.deepEqual(Array.from(intervalSelect.options, ({ textContent }) => textContent), [
       "15 minutes", "30 minutes", "1 hour", "3 hours", "6 hours", "12 hours", "24 hours",
     ]);
@@ -352,6 +357,35 @@ test("operators can register a site and stage a playlist with an existing captur
     assert.deepEqual(JSON.parse(playlistRequest.options.body).captures, [
       { capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" },
     ]);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("uploaded playlist progress clears after a version saves", async () => {
+  const { dom, window, requests } = openConsole();
+  try {
+    await settle();
+    const file = new window.File(["png-data"], "status.png", { type: "image/png" });
+    const NativeFormData = window.FormData;
+    class TestFormData extends NativeFormData {
+      getAll(name) {
+        return name === "assets" ? [file] : super.getAll(name);
+      }
+    }
+    Object.defineProperty(window, "FormData", { configurable: true, value: TestFormData });
+
+    const form = window.document.querySelector("#playlist-form");
+    form.elements.namedItem("id").value = "operations";
+    form.dispatchEvent(new window.SubmitEvent("submit", { bubbles: true, cancelable: true }));
+    const feedback = window.document.querySelector("#playlist-feedback");
+    assert.equal(feedback.textContent, "Uploading your images…");
+    await settle();
+
+    assert.equal(requests.some(({ path }) => path === "/admin/api/assets"), true);
+    assert.equal(requests.some(({ path }) => path === "/admin/api/playlists"), true);
+    assert.equal(feedback.hidden, true, "completed progress is cleared from the inline form feedback");
+    assert.match(window.document.querySelector('[data-feedback-slot="playlist"]').textContent, /New version/);
   } finally {
     dom.window.close();
   }

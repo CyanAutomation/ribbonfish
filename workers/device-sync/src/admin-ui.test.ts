@@ -132,7 +132,7 @@ test("feedback locations have contextual announcements and dismissal controls", 
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const styles = await readFile(new URL("../public/admin/styles.css", import.meta.url), "utf8");
   const nodes = parseHTML(html);
-  for (const name of ["global", "overview", "playlist", "device", "activity", "credential"]) {
+  for (const name of ["global", "overview", "sites", "dashboards", "playlist", "device", "activity", "credential"]) {
     const slot = nodes.find((node) => attribute(node, "data-feedback-slot") === name);
     assert.ok(slot, `feedback for ${name} has a dedicated location`);
     assert.equal(attribute(slot, "role"), "status");

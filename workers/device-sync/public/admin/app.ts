@@ -623,7 +623,6 @@ function renderCaptureTargets(targets, decisions = []) {
     metadata.append(node("p", "This schedule is shared by every playlist that uses this page at the same screenshot size.", "field-hint"));
     const intervalSelect = node("select");
     intervalSelect.className = "field-control";
-    intervalSelect.setAttribute("aria-label", `Screenshot interval for ${target.display_url}`);
     for (const option of intervalDefinitions?.capture.options ?? []) {
       const item = node("option", option.label);
       item.value = String(option.value);
@@ -659,7 +658,6 @@ function renderCaptureTargets(targets, decisions = []) {
     selectorInput.maxLength = 256;
     selectorInput.className = "field-control";
     selectorInput.value = target.wait_for_selector ?? "";
-    selectorInput.setAttribute("aria-label", `Wait for CSS selector for ${target.display_url}`);
     const selectorField = createFormField("Wait for CSS selector", selectorInput, {
       description: "Optional. Capture waits for this element after page load. Leave blank to use the default readiness behavior.",
       ownerDocument: document,
@@ -1701,6 +1699,8 @@ requiredElement(document, "#playlist-form").addEventListener("submit", async (ev
     resetPlaylistEditor();
     resetIntervalSelections(formElement);
     await refresh();
+    feedback.textContent = "";
+    feedback.hidden = true;
   } catch (error) { showInlineMessage(feedback, error.message, true); }
   finally { finishBusy(); }
 });
