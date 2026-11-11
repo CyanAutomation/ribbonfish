@@ -47,8 +47,18 @@ queue = "ribbonfish-captures"
 queue = "ribbonfish-captures"
 max_batch_size = 1
 max_batch_timeout = 1
-max_retries = 3
+max_retries = 2
 dead_letter_queue = "ribbonfish-capture-dead-letter"
+max_concurrency = 1
+retry_delay = 60
+
+# This consumer only records a bounded recovery in D1. The scheduled dispatcher
+# republishes recovered jobs to ribbonfish-captures; it never executes captures.
+[[queues.consumers]]
+queue = "ribbonfish-capture-dead-letter"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 3
 max_concurrency = 1
 retry_delay = 60
 
