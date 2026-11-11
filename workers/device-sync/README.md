@@ -231,10 +231,19 @@ npx wrangler queues create ribbonfish-capture-dead-letter --config wrangler.mana
 
 Then apply migrations `0005_webpage_capture.sql`, `0006_asset_reconciliation.sql`,
 `0007_capture_validators.sql`, `0011_interval_defaults.sql`, and
-`0016_capture_intervals.sql` with
-`npm run migrate:management` before deploying the corresponding code. This implementation has not been deployed to
-production; enable capture only after the Browser Run binding and account quotas
-are available.
+`0016_capture_intervals.sql`, `0017_api_dashboards.sql`,
+`0018_api_dashboard_metrics.sql`, and `0019_capture_queue_recovery.sql` with
+`npm run migrate:management` before deploying code that depends on them. For a
+new environment, enable captures only after the Browser Run binding, queues,
+host allowlist, and account quotas are ready.
+
+Capture application retries and interrupted queue deliveries are staged in D1
+with bounded backoff, then published by the once-per-minute scheduled dispatcher
+to `ribbonfish-captures`. The dead-letter queue consumer only records recovery
+state; it never renders or captures. Keep the main consumer at batch size one
+and concurrency one so scheduled, manual, and recovered work all use the same
+serial capture path. The management dashboard marks captures stale after two
+missed intervals and shows pending recovery attempts.
 
 ## Management API
 

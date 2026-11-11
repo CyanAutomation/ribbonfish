@@ -9,7 +9,8 @@ import type { DashboardSource } from "./api-dashboard/model.ts";
 
 type CaptureEnv = ManagementBindings;
 type DueTarget = { capture_id: string; next_due_at: number; capture_type: string };
-type CaptureJob = CaptureTarget & { job_id: string; capture_id: string; status: string; attempts: number; lease_until: number; scheduled_due_at: number | null; enabled: number; capture_interval_seconds: number; current_sha256: string | null; current_size: number | null; validator_etag: string | null; validator_last_modified: string | null; capture_type: string; api_sources_json: string | null; api_status_json: string | null; api_content_hash: string | null };
+type CaptureJob = CaptureTarget & { job_id: string; capture_id: string; status: string; attempts: number; retry_cycle_attempts: number; recovery_attempts: number; retry_after_at: number | null; lease_until: number | null; scheduled_due_at: number | null; enabled: number; capture_interval_seconds: number; current_sha256: string | null; current_size: number | null; validator_etag: string | null; validator_last_modified: string | null; capture_type: string; api_sources_json: string | null; api_status_json: string | null; api_content_hash: string | null };
+type RecoveryJob = Pick<CaptureJob, "job_id" | "capture_id" | "status" | "recovery_attempts" | "retry_after_at" | "lease_until" | "scheduled_due_at" | "enabled" | "capture_interval_seconds">;
 type ValidatorTarget = Pick<CaptureJob, "url" | "current_sha256" | "current_size" | "validator_etag" | "validator_last_modified">;
 type ValidatorResult = { unchanged: boolean; outcome: string; etag: string | null; lastModified: string | null };
 type JobDecision = Pick<CaptureJob, "capture_id" | "scheduled_due_at">;
@@ -37,10 +38,13 @@ class ApiDashboardCaptureError extends Error {
 }
 
 const MAX_CAPTURE_ATTEMPTS = 3;
+const MAX_CAPTURE_RECOVERIES = 3;
 const MAX_CAPTURE_HISTORY = 10;
 const CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const RUNNING_LEASE_MS = 3 * 60 * 1000;
 const RETRY_DELAYS_SECONDS = [60, 180];
+const RECOVERY_DELAYS_SECONDS = [60, 180, 300];
+export const CAPTURE_DEAD_LETTER_QUEUE_NAME = "ribbonfish-capture-dead-letter";
 const DEFAULT_DAILY_BUDGET_MS = 600_000;
 const DEFAULT_BUDGET_RESERVE_MS = 60_000;
 const DEFAULT_REQUEST_GAP_MS = 10_000;
@@ -174,6 +178,106 @@ export async function dispatchDueCaptures(env: CaptureEnv, now = Date.now()) {
   return { enqueued, skipped: false };
 }
 
+/** Requeues captures whose worker died after claiming a D1 lease. Capture work still runs only on CAPTURE_QUEUE. */
+export async function recoverStaleCaptureJobs(env: CaptureEnv, now = Date.now()) {
+  const stale = await env.DB.prepare(
+    "SELECT j.job_id, j.capture_id, j.status, j.recovery_attempts, j.retry_after_at, j.lease_until, j.scheduled_due_at, " +
+    "t.enabled, t.capture_interval_seconds FROM capture_jobs j JOIN capture_targets t ON t.capture_id = j.capture_id " +
+    "WHERE j.status = 'running' AND (j.lease_until IS NULL OR j.lease_until <= ?) ORDER BY j.lease_until, j.created_at LIMIT 100",
+  ).bind(now).all<RecoveryJob>();
+  let recovered = 0;
+  let failed = 0;
+  for (const job of stale.results ?? []) {
+    const outcome = await stageCaptureRecovery(env, job, now, "Capture lease expired before the job finished.");
+    if (outcome === "staged") recovered += 1;
+    if (outcome === "failed") failed += 1;
+  }
+  return { recovered, failed };
+}
+
+/** Publishes durably staged retries. A failed queue send leaves the D1 retry due for the next Cron tick. */
+export async function dispatchCaptureRetries(env: CaptureEnv, now = Date.now()) {
+  if (!env.CAPTURE_QUEUE || typeof env.CAPTURE_QUEUE.send !== "function") return { enqueued: 0, skipped: true };
+  const due = await env.DB.prepare(
+    "SELECT job_id, retry_after_at FROM capture_jobs WHERE status = 'queued' AND retry_after_at <= ? " +
+    "ORDER BY retry_after_at, created_at LIMIT 100",
+  ).bind(now).all<{ job_id: string; retry_after_at: number }>();
+  let enqueued = 0;
+  for (const job of due.results ?? []) {
+    try {
+      await env.CAPTURE_QUEUE.send({ job_id: job.job_id });
+      await env.DB.prepare(
+        "UPDATE capture_jobs SET retry_after_at = NULL WHERE job_id = ? AND status = 'queued' AND retry_after_at = ?",
+      ).bind(job.job_id, job.retry_after_at).run();
+      enqueued += 1;
+    } catch (error) {
+      console.error(JSON.stringify({ event: "capture_retry_publish_failed", job_id: job.job_id,
+        message: String(error instanceof Error ? error.message : error).slice(0, 160) }));
+    }
+  }
+  return { enqueued, skipped: false };
+}
+
+export async function handleCaptureDeadLetterQueue(batch: MessageBatch<{ job_id?: unknown }>, env: CaptureEnv, now = Date.now()) {
+  for (const message of batch.messages ?? []) {
+    const jobID = message.body?.job_id;
+    if (typeof jobID !== "string" || !/^[0-9a-f-]{36}$/i.test(jobID)) {
+      message.ack();
+      continue;
+    }
+    const job = await env.DB.prepare(
+      "SELECT j.job_id, j.capture_id, j.status, j.recovery_attempts, j.retry_after_at, j.lease_until, j.scheduled_due_at, " +
+      "t.enabled, t.capture_interval_seconds FROM capture_jobs j JOIN capture_targets t ON t.capture_id = j.capture_id WHERE j.job_id = ?",
+    ).bind(jobID).first<RecoveryJob>();
+    if (!job || ["succeeded", "failed", "deferred"].includes(job.status)) {
+      message.ack();
+      continue;
+    }
+    const outcome = await stageCaptureRecovery(env, job, now, "Capture delivery reached the dead-letter queue.");
+    console.log(JSON.stringify({ event: "capture_dead_letter_handled", job_id: jobID, capture_id: job.capture_id, outcome }));
+    message.ack();
+  }
+}
+
+async function stageCaptureRecovery(env: CaptureEnv, job: RecoveryJob, now: number, reason: string): Promise<"staged" | "failed" | "ignored"> {
+  if (job.status !== "queued" && job.status !== "running") return "ignored";
+  if (job.retry_after_at !== null) return "ignored";
+  if (job.status === "running" && job.lease_until !== null && job.lease_until > now) return "ignored";
+  if (job.recovery_attempts >= MAX_CAPTURE_RECOVERIES) {
+    const error = "Capture stopped after its retry recovery limit was reached.";
+    const result = await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE capture_jobs SET status = 'failed', finished_at = ?, lease_until = NULL, retry_after_at = NULL, error = ? " +
+        "WHERE job_id = ? AND status = ? AND recovery_attempts >= ? AND (status = 'queued' OR lease_until IS NULL OR lease_until <= ?)",
+      ).bind(now, error, job.job_id, job.status, MAX_CAPTURE_RECOVERIES, now),
+      env.DB.prepare(
+        "UPDATE capture_targets SET last_attempt_at = ?, last_error = ?, failure_count = failure_count + 1, next_due_at = ? " +
+        "WHERE capture_id = ? AND changes() = 1",
+      ).bind(now, error, now + job.capture_interval_seconds * 1000, job.capture_id),
+    ]);
+    if (result[0]?.meta?.changes !== 1) return "ignored";
+    await decisionObservationStatement(env.DB, job, "failed", now).run().catch(() => undefined);
+    console.error(JSON.stringify({ event: "capture_recovery_exhausted", job_id: job.job_id, capture_id: job.capture_id,
+      recovery_attempts: job.recovery_attempts }));
+    return "failed";
+  }
+
+  const recoveryAttempts = job.recovery_attempts + 1;
+  const delaySeconds = RECOVERY_DELAYS_SECONDS[Math.min(recoveryAttempts - 1, RECOVERY_DELAYS_SECONDS.length - 1)];
+  const retryAfterAt = now + delaySeconds * 1000;
+  const result = await env.DB.prepare(
+    "UPDATE capture_jobs SET status = 'queued', retry_cycle_attempts = 0, recovery_attempts = ?, retry_after_at = ?, " +
+    "lease_until = NULL, finished_at = NULL, error = ? WHERE job_id = ? AND status = ? AND recovery_attempts = ? " +
+    "AND (status = 'queued' OR lease_until IS NULL OR lease_until <= ?)",
+  ).bind(recoveryAttempts, retryAfterAt, reason, job.job_id, job.status, job.recovery_attempts, now).run();
+  if (result.meta?.changes !== 1) return "ignored";
+  await env.DB.prepare("UPDATE capture_targets SET last_error = ? WHERE capture_id = ?")
+    .bind(reason, job.capture_id).run();
+  console.warn(JSON.stringify({ event: "capture_recovery_staged", job_id: job.job_id, capture_id: job.capture_id,
+    reason, recovery_attempts: recoveryAttempts, retry_after_at: retryAfterAt }));
+  return "staged";
+}
+
 async function consumeApprovedCaptureSkip(target: DueTarget, env: CaptureEnv, now: number) {
   const approval = await env.DB.prepare(
     "SELECT due_at, expires_at FROM capture_skip_approvals WHERE capture_id = ?",
@@ -237,7 +341,7 @@ async function processCaptureMessage(message: CaptureMessage, env: CaptureEnv, n
     return;
   }
   const job = await env.DB.prepare(
-    "SELECT j.job_id, j.capture_id, j.status, j.attempts, j.lease_until, j.scheduled_due_at, " +
+    "SELECT j.job_id, j.capture_id, j.status, j.attempts, j.retry_cycle_attempts, j.recovery_attempts, j.retry_after_at, j.lease_until, j.scheduled_due_at, " +
     "t.url, t.capture_interval_seconds, t.viewport_width, t.viewport_height, t.wait_for_selector, t.enabled, " +
     "t.current_sha256, t.current_size, t.validator_etag, t.validator_last_modified, t.capture_type, t.api_sources_json, t.api_status_json, t.api_content_hash " +
     "FROM capture_jobs j JOIN capture_targets t ON t.capture_id = j.capture_id WHERE j.job_id = ?",
@@ -246,8 +350,12 @@ async function processCaptureMessage(message: CaptureMessage, env: CaptureEnv, n
     message.ack();
     return;
   }
-  if (job.status === "running" && job.lease_until > now) {
-    message.retry({ delaySeconds: Math.ceil((job.lease_until - now) / 1000) });
+  if (job.status === "queued" && job.retry_after_at !== null && job.retry_after_at > now) {
+    message.ack();
+    return;
+  }
+  if (job.status === "running" && job.lease_until !== null && job.lease_until > now) {
+    message.ack();
     return;
   }
   if (job.enabled !== 1) {
@@ -257,11 +365,11 @@ async function processCaptureMessage(message: CaptureMessage, env: CaptureEnv, n
   }
 
   const claimed = await env.DB.prepare(
-    "UPDATE capture_jobs SET status = 'running', attempts = attempts + 1, started_at = ?, lease_until = ?, error = NULL " +
+    "UPDATE capture_jobs SET status = 'running', attempts = attempts + 1, retry_cycle_attempts = retry_cycle_attempts + 1, retry_after_at = NULL, started_at = ?, lease_until = ?, error = NULL " +
     "WHERE job_id = ? AND (status = 'queued' OR (status = 'running' AND lease_until <= ?))",
   ).bind(now, now + RUNNING_LEASE_MS, jobID, now).run();
   if (claimed.meta?.changes !== 1) {
-    message.retry({ delaySeconds: 60 });
+    message.ack();
     return;
   }
 
@@ -607,17 +715,19 @@ async function deferCapture(env: CaptureEnv, jobID: string, captureID: string, a
 }
 
 async function handleCaptureFailure(env: CaptureEnv, message: CaptureMessage, job: CaptureJob, error: CaptureFailureDetails, now: number) {
-  const attempts = job.attempts + 1;
+  const attempts = job.retry_cycle_attempts + 1;
   const errorMessage = error.message?.slice(0, 240) ?? "Browser capture failed.";
   if (error.retryable && attempts < MAX_CAPTURE_ATTEMPTS) {
+    const delaySeconds = RETRY_DELAYS_SECONDS[Math.min(attempts - 1, RETRY_DELAYS_SECONDS.length - 1)];
+    const retryAfterAt = now + delaySeconds * 1000;
     await env.DB.batch([
       env.DB.prepare(
-        "UPDATE capture_jobs SET status = 'queued', lease_until = NULL, error = ? WHERE job_id = ?",
-      ).bind(errorMessage, job.job_id),
+        "UPDATE capture_jobs SET status = 'queued', lease_until = NULL, retry_after_at = ?, error = ? WHERE job_id = ? AND status = 'running'",
+      ).bind(retryAfterAt, errorMessage, job.job_id),
       env.DB.prepare("UPDATE capture_targets SET last_attempt_at = ?, last_error = ? WHERE capture_id = ?")
         .bind(now, errorMessage, job.capture_id),
     ]);
-    message.retry({ delaySeconds: RETRY_DELAYS_SECONDS[Math.min(attempts - 1, RETRY_DELAYS_SECONDS.length - 1)] });
+    message.ack();
     return;
   }
   await markJobFinished(env, job.job_id, job.capture_id, "failed", errorMessage, now, job.capture_interval_seconds, job.scheduled_due_at);
