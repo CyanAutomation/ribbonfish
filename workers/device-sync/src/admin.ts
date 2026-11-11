@@ -1586,6 +1586,8 @@ async function readApiDashboards(env: WorkerEnvironment) {
     "t.current_sha256, t.current_size, t.last_attempt_at, t.last_success_at, t.last_error, t.next_due_at, " +
     "t.api_sources_json, t.api_status_json, t.api_last_fetch_at, t.api_last_image_at, " +
     "(SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS job_status, " +
+    "(SELECT j.retry_after_at FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS retry_after_at, " +
+    "(SELECT j.recovery_attempts FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS recovery_attempts, " +
     "(SELECT j.api_fetch_ms FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS api_fetch_ms, " +
     "(SELECT j.api_render_ms FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS api_render_ms, " +
     "(SELECT j.api_total_ms FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS api_total_ms, " +
@@ -1607,8 +1609,10 @@ async function readApiDashboards(env: WorkerEnvironment) {
     items.push(job);
     jobsByCapture.set(job.capture_id, items);
   }
+  const now = Date.now();
   return (rows.results ?? []).map((row) => ({
     ...row,
+    stale: row.enabled === 1 && Number(row.next_due_at) < now - Number(row.capture_interval_seconds) * 1000,
     current_image: row.current_sha256 ? `/admin/api/assets/${row.current_sha256}` : null,
     configuration: parseMetadata(row.api_sources_json),
     sources: parseMetadataArray(row.api_status_json),

@@ -866,12 +866,18 @@ function renderApiDashboards(dashboards) {
     const content = node("div", undefined, "capture-target__content");
     const heading = node("div", undefined, "capture-target__heading");
     heading.append(node("h3", dashboard.name));
-    heading.append(statusBadge(dashboard.enabled ? (dashboard.job_status || "Enabled") : "Disabled", dashboard.last_error ? "warning" : "success"));
+    const retryScheduled = Number(dashboard.retry_after_at) > Date.now();
+    const dashboardStatus = !dashboard.enabled ? "Disabled" : dashboard.stale ? "Stale" : retryScheduled ? "Retry scheduled" : dashboard.job_status || "Enabled";
+    heading.append(statusBadge(dashboardStatus, dashboard.stale || dashboard.last_error || retryScheduled ? "warning" : "success"));
     content.append(heading);
     content.append(node("p", `${dashboard.capture_interval_seconds / 60} minute refresh · ${dashboard.viewport_width} × ${dashboard.viewport_height} px · ${dashboard.configuration?.sources?.length ?? 0} sources`, "muted"));
     if (dashboard.last_success_at) {
       const ageSeconds = Math.max(0, (Date.now() - Number(dashboard.last_success_at)) / 1000);
       content.append(node("p", `Last successful capture ${formatTimestamp(dashboard.last_success_at)} · ${formatAge(ageSeconds)} ago`, "muted"));
+    }
+    if (Number(dashboard.recovery_attempts) > 0) {
+      const retryDetail = retryScheduled ? ` · next retry ${formatTimestamp(dashboard.retry_after_at)}` : "";
+      content.append(node("p", `Queue recovery attempts ${dashboard.recovery_attempts}${retryDetail}`, "muted"));
     }
     if (dashboard.api_last_fetch_at) content.append(node("p", `Last successful source fetch ${formatTimestamp(dashboard.api_last_fetch_at)}`, "muted"));
     if (dashboard.api_last_image_at) content.append(node("p", `Image last changed ${formatTimestamp(dashboard.api_last_image_at)}`, "muted"));
@@ -1417,10 +1423,10 @@ async function refresh() {
     `${browserTargets.length} screenshot sites`,
     `${sitesNeedingAttention} need attention`,
   ]);
-  const dashboardErrors = apiDashboards.filter((dashboard) => dashboard.last_error).length;
+  const dashboardAttention = apiDashboards.filter((dashboard) => dashboard.last_error || dashboard.stale).length;
   setPageHeaderMetadata(requiredElement(document, "#dashboards-section > .page-header"), [
     `${apiDashboards.length} API dashboards`,
-    `${dashboardErrors} with errors`,
+    `${dashboardAttention} need attention`,
   ]);
   setPageHeaderMetadata(requiredElement(document, "#playlist-section > .page-header"), [
     `${overview.playlists.length} saved versions`,

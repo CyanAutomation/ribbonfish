@@ -9,7 +9,8 @@ import { HTTPError } from "./http-error.ts";
 import { hasExactKeys, isString } from "./validation.ts";
 import { assessUpcomingCaptures } from "./capture-intelligence.ts";
 import { handleAdminRequest } from "./admin.ts";
-import { cleanupExpiredCaptures, dispatchDueCaptures, handleCaptureQueue } from "./capture-workflow.ts";
+import { CAPTURE_DEAD_LETTER_QUEUE_NAME, cleanupExpiredCaptures, dispatchCaptureRetries, dispatchDueCaptures,
+  handleCaptureDeadLetterQueue, handleCaptureQueue, recoverStaleCaptureJobs } from "./capture-workflow.ts";
 import { reconcileAssets } from "./asset-maintenance.ts";
 import { cleanupDeviceHealth, persistDeviceHealth, refreshDeviceHealthStatuses, validateDeviceHealthReport } from "./device-health.ts";
 import type {
@@ -59,12 +60,15 @@ const worker = {
 export default worker;
 
 export async function queueHandler(batch: CaptureQueueBatch, env: WorkerEnvironment) {
+  if (batch.queue === CAPTURE_DEAD_LETTER_QUEUE_NAME) return handleCaptureDeadLetterQueue(batch, env);
   return handleCaptureQueue(batch, env);
 }
 
 export async function scheduledHandler(controller: WorkerScheduledController, env: WorkerEnvironment) {
   const now = Number.isSafeInteger(controller?.scheduledTime) ? controller.scheduledTime : Date.now();
   const cleanHealth = new Date(now).getUTCMinutes() === 0;
+  const recovery = await recoverStaleCaptureJobs(env, now);
+  const retries = await dispatchCaptureRetries(env, now);
   const [dispatch, assets, healthTransitions, healthRecordsCleaned] = await Promise.all([
     dispatchDueCaptures(env, now),
     reconcileAssets(env, now),
@@ -76,7 +80,8 @@ export async function scheduledHandler(controller: WorkerScheduledController, en
       }) : Promise.resolve(),
   ]);
   const cleanup = assets.cycle_completed ? await cleanupExpiredCaptures(env, now) : 0;
-  return { ...dispatch, cleaned_targets: cleanup, asset_reconciliation: assets,
+  return { ...dispatch, recovered_capture_jobs: recovery.recovered, exhausted_capture_recoveries: recovery.failed,
+    retried_capture_jobs: retries.enqueued, cleaned_targets: cleanup, asset_reconciliation: assets,
     ...(healthTransitions ? { device_health_transitions: healthTransitions } : {}),
     ...(cleanHealth ? { device_health_records_cleaned: healthRecordsCleaned } : {}) };
 }

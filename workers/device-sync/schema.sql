@@ -154,6 +154,9 @@ CREATE TABLE IF NOT EXISTS capture_jobs (
   capture_id TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'deferred')),
   attempts INTEGER NOT NULL DEFAULT 0,
+  retry_cycle_attempts INTEGER NOT NULL DEFAULT 0 CHECK (retry_cycle_attempts >= 0),
+  recovery_attempts INTEGER NOT NULL DEFAULT 0 CHECK (recovery_attempts >= 0),
+  retry_after_at INTEGER,
   created_at INTEGER NOT NULL,
   started_at INTEGER,
   finished_at INTEGER,
@@ -186,6 +189,7 @@ CREATE TABLE IF NOT EXISTS capture_jobs (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS capture_jobs_open_target_idx ON capture_jobs(capture_id) WHERE status IN ('queued', 'running');
 CREATE INDEX IF NOT EXISTS capture_jobs_status_idx ON capture_jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS capture_jobs_retry_due_idx ON capture_jobs(status, retry_after_at, created_at);
 CREATE INDEX IF NOT EXISTS capture_jobs_created_idx ON capture_jobs(created_at);
 CREATE TABLE IF NOT EXISTS capture_history (
   capture_id TEXT NOT NULL,

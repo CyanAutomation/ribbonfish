@@ -181,6 +181,146 @@ test("manual capture run normalizes uppercase UUIDs before the database lookup",
   }
 });
 
+test("scheduled recovery restages expired capture leases and dispatches the same job to the capture queue", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    let captureCalls = 0;
+    const { env, messages } = environment(sqlite, {
+      async quickAction() {
+        captureCalls += 1;
+        return new Response(screenshot, { headers: { "Content-Type": "image/png" } });
+      },
+    });
+    const created = await createCapturePlaylist(env);
+    const original = messages.shift();
+    const now = Date.now();
+    sqlite.prepare(
+      "UPDATE capture_jobs SET status = 'running', attempts = 3, retry_cycle_attempts = 3, started_at = ?, lease_until = ? WHERE job_id = ?",
+    ).run(now - 240_000, now - 1, original.job_id);
+    const scheduledDueAt = sqlite.prepare("SELECT next_due_at FROM capture_targets WHERE capture_id = ?")
+      .get(created.body.captures[0].capture_id).next_due_at;
+
+    await scheduledHandler({ scheduledTime: now }, env);
+
+    const staged = sqlite.prepare(
+      "SELECT status, attempts, retry_cycle_attempts, recovery_attempts, retry_after_at, lease_until FROM capture_jobs WHERE job_id = ?",
+    ).get(original.job_id);
+    assert.deepEqual({ ...staged }, {
+      status: "queued", attempts: 3, retry_cycle_attempts: 0, recovery_attempts: 1,
+      retry_after_at: now + 60_000, lease_until: null,
+    });
+    assert.equal(messages.length, 0, "a recovery backoff is durable before queue publication");
+    assert.equal(sqlite.prepare("SELECT next_due_at FROM capture_targets WHERE capture_id = ?")
+      .get(created.body.captures[0].capture_id).next_due_at, scheduledDueAt);
+
+    await scheduledHandler({ scheduledTime: now + 60_000 }, env);
+
+    assert.deepEqual(messages, [{ job_id: original.job_id }], "recovery returns the original job to the sole capture queue");
+    assert.equal(sqlite.prepare("SELECT retry_after_at FROM capture_jobs WHERE job_id = ?").get(original.job_id).retry_after_at, null);
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_jobs WHERE capture_id = ? AND status IN ('queued', 'running')")
+      .get(created.body.captures[0].capture_id).count, 1);
+
+    let acked = false;
+    await queueHandler({ queue: "ribbonfish-captures", messages: [{ body: messages.shift(), ack() { acked = true; }, retry() { throw new Error("unexpected retry"); } }] }, env);
+    assert.equal(acked, true);
+    assert.equal(captureCalls, 1, "only delivery on the main capture queue executes the capture");
+    assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(original.job_id).status, "succeeded");
+    assert.equal(sqlite.prepare("SELECT last_error FROM capture_targets WHERE capture_id = ?")
+      .get(created.body.captures[0].capture_id).last_error, null);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("dead-letter messages stage bounded recovery and never execute captures", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const original = messages.shift();
+    const now = Date.now();
+    sqlite.prepare(
+      "UPDATE capture_jobs SET status = 'queued', attempts = 3, retry_cycle_attempts = 3, lease_until = NULL WHERE job_id = ?",
+    ).run(original.job_id);
+    let acked = false;
+    let retried = false;
+
+    await queueHandler({
+      queue: "ribbonfish-capture-dead-letter",
+      messages: [{ body: original, ack() { acked = true; }, retry() { retried = true; } }],
+    }, env);
+
+    assert.equal(acked, true);
+    assert.equal(retried, false);
+    assert.equal(messages.length, 0, "dead-letter handling stages work instead of running or directly publishing it");
+    const retryAt = sqlite.prepare("SELECT retry_after_at FROM capture_jobs WHERE job_id = ?").get(original.job_id).retry_after_at;
+    assert.deepEqual({ ...sqlite.prepare(
+      "SELECT status, attempts, retry_cycle_attempts, recovery_attempts, retry_after_at FROM capture_jobs WHERE job_id = ?",
+    ).get(original.job_id) }, {
+      status: "queued", attempts: 3, retry_cycle_attempts: 0, recovery_attempts: 1, retry_after_at: retryAt,
+    });
+    assert.ok(retryAt >= now + 60_000 && retryAt <= now + 61_000);
+
+    await scheduledHandler({ scheduledTime: retryAt }, env);
+    assert.deepEqual(messages, [{ job_id: original.job_id }]);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("a failed recovery publish remains due and is retried on a later scheduled tick", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const original = messages.shift();
+    const now = Date.now();
+    const retryAt = now + 60_000;
+    sqlite.prepare(
+      "UPDATE capture_jobs SET status = 'queued', retry_cycle_attempts = 0, recovery_attempts = 1, retry_after_at = ? WHERE job_id = ?",
+    ).run(retryAt, original.job_id);
+    env.CAPTURE_QUEUE = { async send() { throw new Error("queue unavailable"); } };
+
+    await scheduledHandler({ scheduledTime: retryAt }, env);
+
+    assert.equal(messages.length, 0);
+    assert.equal(sqlite.prepare("SELECT retry_after_at FROM capture_jobs WHERE job_id = ?").get(original.job_id).retry_after_at, retryAt,
+      "the D1 outbox remains due when queue publication fails");
+
+    env.CAPTURE_QUEUE = { async send(body) { messages.push(body); } };
+    await scheduledHandler({ scheduledTime: retryAt + 60_000 }, env);
+
+    assert.deepEqual(messages, [{ job_id: original.job_id }]);
+    assert.equal(sqlite.prepare("SELECT retry_after_at FROM capture_jobs WHERE job_id = ?").get(original.job_id).retry_after_at, null);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("expired jobs stop recovering after the configured bounded recovery cycles", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const original = messages.shift();
+    const now = Date.now();
+    const captureID = created.body.captures[0].capture_id;
+    sqlite.prepare(
+      "UPDATE capture_jobs SET status = 'running', attempts = 9, retry_cycle_attempts = 3, recovery_attempts = 3, started_at = ?, lease_until = ? WHERE job_id = ?",
+    ).run(now - 240_000, now - 1, original.job_id);
+
+    await scheduledHandler({ scheduledTime: now }, env);
+
+    assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(original.job_id).status, "failed");
+    const target = sqlite.prepare("SELECT last_error, failure_count, next_due_at FROM capture_targets WHERE capture_id = ?").get(captureID);
+    assert.match(target.last_error, /recovery limit/i);
+    assert.equal(target.failure_count, 1);
+    assert.ok(target.next_due_at > now, "the normal schedule remains available after this job exhausts recovery");
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("capture interval API updates a stored target, next due time, and audit record", async () => {
   const sqlite = await freshDatabase();
   try {
@@ -566,14 +706,16 @@ test("API dashboard captures bypass Browser Run budgets and reuse the shared pla
 
     failApi = true;
     const failed = await enqueueCapture(dashboard.capture_id, env, { now: captureTime });
-    let failureRetryDelay = 0;
-    await handleCaptureQueue({ messages: [{ body: { job_id: failed.job_id }, ack() {}, retry(options) { failureRetryDelay = options.delaySeconds; } }] }, env, captureTime);
-    assert.equal(failureRetryDelay, 60);
+    let failureAcked = false;
+    await handleCaptureQueue({ messages: [{ body: { job_id: failed.job_id }, ack() { failureAcked = true; }, retry() { throw new Error("retries are staged in D1"); } }] }, env, captureTime);
+    assert.equal(failureAcked, true);
     assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(failed.job_id).status, "queued");
+    assert.equal(sqlite.prepare("SELECT retry_after_at FROM capture_jobs WHERE job_id = ?").get(failed.job_id).retry_after_at, captureTime + 60_000);
     assert.deepEqual({ ...sqlite.prepare("SELECT api_failed_request_count, api_outcome FROM capture_jobs WHERE job_id = ?").get(failed.job_id) }, { api_failed_request_count: 1, api_outcome: "all_failed" });
     assert.equal(sqlite.prepare("SELECT current_sha256, last_success_at FROM capture_targets WHERE capture_id = ?").get(dashboard.capture_id).current_sha256, current.current_sha256);
     assert.equal(JSON.parse(sqlite.prepare("SELECT api_status_json FROM capture_targets WHERE capture_id = ?").get(dashboard.capture_id).api_status_json)[0].freshness, "unavailable");
 
+    sqlite.prepare("UPDATE capture_jobs SET retry_after_at = NULL WHERE capture_id = ? AND status = 'queued'").run(dashboard.capture_id);
     sqlite.prepare("UPDATE capture_targets SET api_sources_json = ? WHERE capture_id = ?").run(JSON.stringify({
       width: 1920, height: 1080,
       sources: [{ id: "source-one", provider: "atlassian-statuspage", display_name: "Sample services", enabled: true, hostname: "private.internal" }],
@@ -613,6 +755,35 @@ test("API dashboards can be added to playlists without browser capture host allo
     assert.equal(playlist.capture_count, 1);
     assert.equal(sqlite.prepare("SELECT capture_id FROM playlist_capture_items WHERE playlist_id = ? AND revision = ?")
       .get("dashboard-playlist", playlist.revision).capture_id, dashboard.capture_id);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("API dashboard list flags stale captures and exposes the durable recovery schedule", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env } = environment(sqlite);
+    env.API_STATUS_ALLOWED_HOSTS = "status.example.org";
+    const response = await handleAdminRequest(await request("/admin/api/api-dashboards", {
+      method: "POST", body: { name: "Stale dashboard", capture_interval_seconds: 300, width: 1920, height: 1080,
+        sources: [{ id: "source-one", provider: "atlassian-statuspage", display_name: "Sample services", enabled: true, hostname: "status.example.org" }] },
+    }), env);
+    assert.equal(response.status, 201, await response.clone().text());
+    const dashboard = await response.json();
+    const now = Date.now();
+    sqlite.prepare("UPDATE capture_targets SET last_success_at = ?, next_due_at = ?, last_error = ? WHERE capture_id = ?")
+      .run(now - 60 * 60_000, now - 30 * 60_000, "Capture lease expired before the job finished.", dashboard.capture_id);
+    sqlite.prepare(
+      "INSERT INTO capture_jobs (job_id, capture_id, status, attempts, recovery_attempts, retry_after_at, created_at) VALUES (?, ?, 'queued', 4, 2, ?, ?)",
+    ).run(crypto.randomUUID(), dashboard.capture_id, now + 60_000, now);
+
+    const listed = await handleAdminRequest(await request("/admin/api/api-dashboards"), env);
+    const [result] = await listed.json();
+
+    assert.equal(result.stale, true);
+    assert.equal(result.recovery_attempts, 2);
+    assert.equal(result.retry_after_at, now + 60_000);
   } finally {
     sqlite.close();
   }
@@ -1162,24 +1333,28 @@ test("Browser Run failures use bounded delayed retries and leave the holding ima
       method: "POST", body: {},
     }), env);
     const jobID = (await requested.json()).job_id;
-    const delivery = (attempt) => ({
+    const delivery = () => ({
       body: { job_id: jobID },
-      attempt,
       acked: false,
-      retryDelay: null,
       ack() { this.acked = true; },
-      retry(options) { this.retryDelay = options.delaySeconds; },
+      retry() { throw new Error("application retries are scheduled through D1"); },
     });
 
-    const first = delivery(1);
-    await queueHandler({ messages: [first] }, env);
-    assert.equal(first.retryDelay, 60);
-    const second = delivery(2);
-    await queueHandler({ messages: [second] }, env);
-    assert.equal(second.retryDelay, 180);
-    const third = delivery(3);
-    await queueHandler({ messages: [third] }, env);
-    assert.equal(third.acked, true);
+    messages.length = 0;
+    let now = Date.now();
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const current = delivery();
+      await handleCaptureQueue({ messages: [current] }, env, now);
+      assert.equal(current.acked, true);
+      if (attempt < 3) {
+        const retryAt = sqlite.prepare("SELECT retry_after_at FROM capture_jobs WHERE job_id = ?").get(jobID).retry_after_at;
+        assert.equal(retryAt, now + (attempt === 1 ? 60_000 : 180_000));
+        now = retryAt;
+        await scheduledHandler({ scheduledTime: now }, env);
+        assert.deepEqual(messages, [{ job_id: jobID }], "the scheduled dispatcher republishes a durable retry");
+        messages.length = 0;
+      }
+    }
     assert.equal(calls, 3);
     assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(jobID).status, "failed");
     assert.equal(sqlite.prepare("SELECT current_sha256 FROM capture_targets WHERE capture_id = ?").get(captureID).current_sha256, null);
@@ -1221,15 +1396,13 @@ test("unexpected capture exceptions fail without retrying the queue delivery", a
     const message = {
       body: { job_id: jobID },
       acked: false,
-      retryDelay: null,
       ack() { this.acked = true; },
-      retry(options) { this.retryDelay = options.delaySeconds; },
+      retry() { throw new Error("unexpected queue retry"); },
     };
 
     await queueHandler({ messages: [message] }, env);
 
     assert.equal(message.acked, true);
-    assert.equal(message.retryDelay, null);
     assert.equal(calls, 1);
     assert.equal(sqlite.prepare("SELECT status FROM capture_jobs WHERE job_id = ?").get(jobID).status, "failed");
     assert.deepEqual({ ...sqlite.prepare("SELECT browser_ms_total, browser_ms_response_header, browser_ms_reserve FROM capture_jobs WHERE job_id = ?").get(jobID) }, {

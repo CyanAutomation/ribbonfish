@@ -318,7 +318,7 @@ test("API dashboard editor adds provider-aware sources and preserves existing ID
     assert.match(card.textContent, /Status: Fresh/);
     assert.match(card.textContent, /Last-Modified|ETag/);
     assert.deepEqual([...window.document.querySelectorAll("#dashboards-section > .page-header .page-header__meta span")].map((item) => item.textContent), [
-      "1 API dashboards", "0 with errors",
+      "1 API dashboards", "0 need attention",
     ]);
     const edit = card.querySelector("[data-api-dashboard-edit]");
     assert.ok(edit);
