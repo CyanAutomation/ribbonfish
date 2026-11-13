@@ -7,6 +7,7 @@ import {
   createSettingsGroup,
   metricCard,
   scaleMeter,
+  setStatusNotice,
 } from "../public/admin/ui-primitives.ts";
 import {
   createBrandLockup,
@@ -59,8 +60,12 @@ test("brand lockup is a reusable, accessible component with replaceable identity
 test("loading indicator announces work, counts concurrent callers, and restores its previous label", () => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>");
   const loading = createLoadingIndicator({ ownerDocument: dom.window.document });
+  const secondLoading = createLoadingIndicator({ ownerDocument: dom.window.document });
   dom.window.document.body.append(loading.element);
+  dom.window.document.body.append(secondLoading.element);
   const label = loading.element.querySelector<HTMLElement>(".loading-indicator__label");
+  assert.equal(loading.element.id, "");
+  assert.equal(secondLoading.element.id, "");
   assert.equal(loading.element.hidden, true);
   assert.equal(loading.element.getAttribute("role"), "status");
   assert.equal(loading.element.getAttribute("aria-live"), "polite");
@@ -76,6 +81,22 @@ test("loading indicator announces work, counts concurrent callers, and restores 
   assert.equal(loading.element.hidden, true);
   finishRefresh();
   assert.equal(loading.element.hidden, true, "finishing the same operation twice is harmless");
+  dom.window.close();
+});
+
+test("status notices expose polite informational feedback without an error or success tone", () => {
+  const dom = new JSDOM("<!doctype html><html><body><div class='alert alert--success' hidden><span data-feedback-text></span></div></body></html>");
+  const notice = requiredMatch<HTMLElement>(dom.window.document, ".alert");
+  const text = requiredMatch<HTMLElement>(notice, "[data-feedback-text]");
+  setStatusNotice(notice, text, "Automatic refresh paused to preserve your unsaved dashboard edits.", "info");
+
+  assert.equal(text.textContent, "Automatic refresh paused to preserve your unsaved dashboard edits.");
+  assert.equal(notice.hidden, false);
+  assert.equal(notice.getAttribute("role"), "status");
+  assert.equal(notice.getAttribute("aria-live"), "polite");
+  assert.equal(notice.classList.contains("alert--info"), true);
+  assert.equal(notice.classList.contains("alert--success"), false);
+  assert.equal(notice.classList.contains("alert--error"), false);
   dom.window.close();
 });
 
@@ -127,6 +148,27 @@ test("refresh coordinator deduplicates background/manual work and always clears 
   rejectLoad?.(new Error("network unavailable"));
   await assert.rejects(Promise.all([background, manual]), /network unavailable/);
   assert.equal(loading.element.hidden, true);
+  dom.window.close();
+});
+
+test("refresh coordinator reports one mid-flight skip and later quiet polls stay silent", async () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  let dirty = false;
+  let calls = 0;
+  let notices = 0;
+  const refresh = createRefreshCoordinator({
+    operation: async () => { calls += 1; dirty = true; return false; },
+    hasUnsavedChanges: () => dirty,
+    confirmDiscard: () => true,
+    loading: createLoadingIndicator({ ownerDocument: dom.window.document }),
+    isSkipped: (result) => result === false,
+    onSkipped: () => { notices += 1; },
+  });
+
+  await refresh("background");
+  await refresh("background");
+  assert.equal(calls, 1);
+  assert.equal(notices, 1);
   dom.window.close();
 });
 

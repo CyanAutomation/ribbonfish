@@ -10,6 +10,7 @@ import {
   createFormField,
   createSettingsGroup,
   beginButtonBusy,
+  setStatusNotice,
 } from "./ui-primitives.ts";
 import { createApiDashboardSourceEditor } from "./api-dashboard-editor.ts";
 import { parseApiDashboardConfig } from "../../src/api-dashboard/config.ts";
@@ -117,16 +118,18 @@ function showMessage(text, isError = false, context = "global") {
   const slot = feedbackSlots.get(context) ?? feedbackSlots.get("global");
   slot.timer.clear();
   slot.transient = !isError;
-  slot.text.textContent = text;
-  slot.element.classList.toggle("alert--success", !isError);
-  slot.element.classList.toggle("alert--error", isError);
-  slot.element.setAttribute("role", isError ? "alert" : "status");
-  slot.element.setAttribute("aria-live", isError ? "assertive" : "polite");
-  slot.element.hidden = false;
+  setStatusNotice(slot.element, slot.text, text, isError ? "error" : "success");
   if (!isError) {
     if (slot.hovered || slot.focused) slot.timer.pause();
     else slot.timer.start();
   }
+}
+
+function showInfoMessage(text, context = "global") {
+  const slot = feedbackSlots.get(context) ?? feedbackSlots.get("global");
+  slot.timer.clear();
+  slot.transient = false;
+  setStatusNotice(slot.element, slot.text, text, "info");
 }
 
 function showInlineMessage(target, text, isError = false) {
@@ -1431,13 +1434,18 @@ const runRefresh = createRefreshCoordinator({
     return true;
   },
   loading: ribbonfishLoading,
+  isSkipped: (result) => result === false,
+  onSkipped: () => showInfoMessage(
+    "Refresh paused to protect your unsaved API dashboard edits. Save or cancel the edit, then refresh again.",
+    "dashboards",
+  ),
 });
 
 function refresh(mode: RefreshMode = "action") {
   return runRefresh(mode);
 }
 
-async function refreshData() {
+async function refreshData(): Promise<boolean> {
   const [overview, enrollmentRequests, captureDecisions, intervals, apiDashboards] = await Promise.all([
     api("/admin/api/overview"),
     api("/admin/api/enrollment-requests"),
@@ -1445,7 +1453,7 @@ async function refreshData() {
     api("/admin/api/intervals"),
     api("/admin/api/api-dashboards").catch(() => []),
   ]);
-  if (hasUnsavedApiDashboardChanges()) return;
+  if (hasUnsavedApiDashboardChanges()) return false;
   intervalDefinitions = intervals;
   populateIntervalSelect(requiredElement(document, "#playlist-form [name=rotation_interval]"), intervals.rotation.options,
     intervals.rotation.default, (option) => option.value);
@@ -1503,6 +1511,7 @@ async function refreshData() {
   } else {
     fleetViewRuntime.refresh();
   }
+  return true;
 }
 
 function populateIntervalSelect(select, options, selectedValue, getValue) {

@@ -42,11 +42,17 @@ export interface RefreshCoordinatorOptions<T> {
   hasUnsavedChanges(): boolean;
   confirmDiscard(): boolean;
   loading: LoadingIndicatorComponent;
+  isSkipped?(result: T): boolean;
+  onSkipped?(): void;
 }
 
 /** Coordinate refresh prompts, quiet polling, shared in-flight work, and explicit busy feedback. */
 export function createRefreshCoordinator<T>(options: RefreshCoordinatorOptions<T>): (mode?: RefreshMode) => Promise<T | undefined> {
-  const operation = createSingleFlight(options.operation);
+  const operation = createSingleFlight(async () => {
+    const result = await options.operation();
+    if (options.isSkipped?.(result)) options.onSkipped?.();
+    return result;
+  });
   return async (mode: RefreshMode = "action") => {
     if (options.hasUnsavedChanges()) {
       if (mode === "background" || mode === "initial") return undefined;
@@ -68,7 +74,6 @@ export function createLoadingIndicator(options: LoadingIndicatorOptions = {}): L
   const ownerDocument = options.ownerDocument ?? document;
   const defaultLabel = options.defaultLabel ?? "Loading Ribbonfish…";
   const element = node("div", undefined, "loading-indicator ribbonfish-loading", ownerDocument);
-  element.id = "ribbonfish-loading";
   element.hidden = true;
   element.setAttribute("role", "status");
   element.setAttribute("aria-live", "polite");

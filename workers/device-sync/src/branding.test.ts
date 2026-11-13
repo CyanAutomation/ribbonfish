@@ -32,6 +32,9 @@ test("management UI uses the S identity and exposes the infinity mascot for load
   assert.match(app, /refresh\("initial"\)/);
   assert.match(app, /refresh\("manual"\)/);
   assert.match(app, /refresh\("background"\)/);
+  assert.match(app, /isSkipped: \(result\) => result === false/);
+  assert.match(app, /onSkipped: \(\) => showInfoMessage/);
+  assert.match(app, /Refresh paused to protect your unsaved API dashboard edits/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
 });
 
