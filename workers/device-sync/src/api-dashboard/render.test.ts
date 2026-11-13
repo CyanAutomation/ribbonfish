@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { dashboardSVG, renderDashboardPNG } from "./render.ts";
-import { svgCheckHistory, svgEventPanel, svgFreshnessBadge, svgGroupSummary, svgHealthLegend, svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
+import { svgCheckHistory, svgEventPanel, svgFreshnessBadge, svgGroupSummary, svgHealthLegend, svgHealthOverview, svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
 import type { DashboardSource } from "./model.ts";
 
 const sample: DashboardSource = { id: "source-1", provider: "uptime-kuma", displayName: "<SCRIPT>alert('x')</SCRIPT>", fetchedAt: "2026-01-01T00:00:00.000Z", freshness: "fresh", status: "operational", statusDescription: "All systems operational", incidents: [], maintenance: [], components: [
@@ -65,7 +65,7 @@ test("long text uses supported ASCII ellipses rather than missing font glyphs", 
   assert.doesNotMatch(svg, /…/);
 });
 
-test("small source sets use wide cards and identify the Kuma instance and update time", () => {
+test("small source sets use full-height cards and identify the Kuma instance and update time", () => {
   const kuma: DashboardSource = {
     ...sample,
     displayName: "Operations status",
@@ -76,10 +76,29 @@ test("small source sets use wide cards and identify the Kuma instance and update
   const cards = [...svg.matchAll(/<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)" rx="[\d.]+" fill="#142238" stroke="#344a66"/g)];
   assert.equal(cards.length, 2);
   assert.ok(Number(cards[0][3]) > 800, "two sources should use wide cards on a 1920px canvas");
-  assert.ok(Number(cards[0][4]) < 300, "short status summaries should use compact card heights");
+  assert.ok(Number(cards[0][4]) > 700, "source cards should use the available vertical screen space");
   assert.match(svg, /monitor-west\.example\.org/);
   assert.match(svg, /monitor-east\.example\.org/);
   assert.match(svg, /Checked 12:34 UTC/);
+});
+
+test("dense 720p layouts keep cards readable and center the final partial row", () => {
+  const sources = Array.from({ length: 7 }, (_, index) => ({ ...sample, id: `source-${index}`, displayName: `Operations source ${index + 1}` }));
+  const svg = dashboardSVG(sources, 1280, 720);
+  const cards = [...svg.matchAll(/<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)" rx="[\d.]+" fill="#142238" stroke="#344a66"/g)];
+  assert.equal(cards.length, 7);
+  assert.ok(Number(cards[0][4]) > 170, "three-card rows should receive enough height for readable service details");
+  assert.notEqual(cards[0][1], cards[1][1]);
+  assert.notEqual(cards[1][1], cards[2][1]);
+  assert.equal(cards[6][1], cards[1][1], "the single card on the last row should be centered");
+  assert.notEqual(cards[6][2], cards[1][2]);
+});
+
+test("source health badges do not squeeze longer card titles", () => {
+  const sources = Array.from({ length: 4 }, (_, index) => ({ ...sample, id: `source-${index}`, displayName: "North America services" }));
+  const svg = dashboardSVG(sources);
+  assert.match(svg, />North America services<\/text>/);
+  assert.match(svg, />Services: Unknown<\/text>/);
 });
 
 test("shared SVG primitives escape text and render status panels, dots, and badges", () => {
@@ -88,6 +107,8 @@ test("shared SVG primitives escape text and render status panels, dots, and badg
   assert.match(svgPanel(1, 2, 30, 40, 1, "#20c997"), /stroke="#344a66"/);
   assert.match(svgStatusDot(4, 5, 6, "#ff647c"), /<circle cx="4" cy="5" r="6" fill="#ff647c"\/>/);
   assert.match(svgStatusBadge(0, 0, 200, 50, 1, "Down", "#ff647c"), />Down<\/text>/);
+  assert.match(svgHealthOverview(10, 20, 1000, 1, [{ label: "Operational", count: 2, color: "#20c997" }, { label: "Down", count: 1, color: "#ff647c" }]), />2 Operational<\/text>/);
+  assert.match(svgHealthOverview(10, 20, 1000, 1, [{ label: '<img onerror="x">', count: 1, color: "#20c997" }]), /&lt;img onerror=&quot;x&quot;&gt;/);
   assert.match(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API <edge>", status: "Down", color: "#ff647c" }), /API &lt;edge&gt;/);
   assert.match(svgGroupSummary({ x: 10, y: 30, right: 600, scale: 1, label: "operational", count: 2, history: ["operational", "unknown"] }), />2 services operational<\/text>/);
   assert.equal((svgCheckHistory({ x: 0, y: 0, width: 100, height: 8, states: ["operational", "down"] }).match(/<rect /g) ?? []).length, 2);
@@ -255,32 +276,88 @@ test("unavailable feeds do not summarize old component data as operational", () 
   assert.match(svg, /1 stale or unavailable source/);
   assert.match(svg, /Feed unavailable/);
   assert.doesNotMatch(svg, /2 active services · 2 services operational/);
+  const descriptionY = Number(svg.match(/<text x="[^"]+" y="([\d.]+)"[^>]*>Statuspage: Status source unavailable<\/text>/)?.[1]);
+  const errorY = Number(svg.match(/<text x="[^"]+" y="([\d.]+)"[^>]*>Status API request failed\.<\/text>/)?.[1]);
+  assert.ok(errorY > descriptionY, "source errors should sit below the source details");
 });
 
 test("Statuspage incidents and scheduled maintenance use a prominent event panel", () => {
   const source: DashboardSource = {
     ...sample,
     provider: "atlassian-statuspage",
+    fetchedAt: "2026-01-02T03:00:00.000Z",
     incidents: [{ id: "incident", name: "Elevated error rate", status: "investigating", impact: "major", updatedAt: null }],
-    maintenance: [{ id: "maintenance", name: "Database upgrade", status: "scheduled", impact: "maintenance", updatedAt: "2026-01-02T03:00:00.000Z", scheduledFor: "2026-01-02T05:00:00.000Z" }],
+    maintenance: [{ id: "maintenance", name: "Sample flight-planning service v4.2.0 update", status: "scheduled", impact: "maintenance", updatedAt: "2026-01-02T03:00:00.000Z", scheduledFor: "2026-01-02T05:00:00.000Z" }],
   };
   const svg = dashboardSVG([source]);
   assert.match(svg, /fill="#202d40"/);
   assert.match(svg, /INCIDENT/);
   assert.match(svg, /MAINTENANCE/);
   assert.match(svg, /Elevated error rate/);
-  assert.match(svg, /Database upgrade/);
+  assert.match(svg, /Sample flight-planning service v4\.2\.0 update/);
   assert.match(svg, /Starts 2026-01-02 05:00 UTC/);
+  assert.match(svg, /in 2 hours/);
   assert.match(svg, /Updated 03:00 UTC/);
 });
 
+test("healthy Statuspage groups show service names when they fit", () => {
+  const source: DashboardSource = {
+    ...sample,
+    provider: "atlassian-statuspage",
+    groups: [{ id: "flight", name: "Flight services", order: 0 }],
+    components: [
+      { ...sample.components[0], id: "group-flight", name: "Flight services", isGroup: true, groupId: null, groupName: null },
+      { ...sample.components[0], id: "check-in", name: "Online check-in", status: "operational", groupId: "group-flight", groupName: "Flight services" },
+      { ...sample.components[0], id: "booking", name: "Booking", status: "operational", groupId: "group-flight", groupName: "Flight services" },
+    ],
+  };
+  const svg = dashboardSVG([source]);
+  assert.match(svg, /Online check-in/);
+  assert.match(svg, />Operational<\/text>/);
+  assert.match(svg, /Booking/);
+});
+
+test("Statuspage keeps affected services first and summarizes healthy overflow", () => {
+  const source: DashboardSource = {
+    ...sample,
+    provider: "atlassian-statuspage",
+    groups: [{ id: "platform", name: "Platform", order: 0 }],
+    components: [
+      { ...sample.components[0], id: "platform", name: "Platform", isGroup: true, groupId: null, groupName: null },
+      ...Array.from({ length: 10 }, (_, index) => ({ ...sample.components[0], id: `service-${index}`, name: `Service ${index + 1}`, status: index === 8 ? "down" as const : "operational" as const, componentOrder: index + 1, groupId: "platform", groupName: "Platform" })),
+    ],
+  };
+  const svg = dashboardSVG([source]);
+  assert.ok(svg.indexOf("Service 9") < svg.indexOf("Service 1"), "the affected component should appear first");
+  assert.match(svg, />2 services operational<\/text>/);
+  assert.match(svg, /Service 7/);
+  assert.doesNotMatch(svg, /Service 8/);
+  assert.doesNotMatch(svg, /Service 10/);
+});
+
+test("header emphasizes live service counts while retaining the full status key", () => {
+  const source: DashboardSource = {
+    ...sample,
+    provider: "atlassian-statuspage",
+    components: [
+      { ...sample.components[0], id: "a", name: "API", status: "operational" },
+      { ...sample.components[0], id: "b", name: "Web", status: "down" },
+    ],
+  };
+  const svg = dashboardSVG([source]);
+  assert.match(svg, />1 Operational<\/text>/);
+  assert.match(svg, />1 Down<\/text>/);
+  assert.match(svg, /Status key/);
+});
+
 test("shared event panel escapes names and gives scheduled time a separate visual line", () => {
-  const panel = svgEventPanel({ x: 0, y: 0, width: 600, height: 72, scale: 1, events: [
-    { kind: "Maintenance", name: "Database <upgrade>", status: "scheduled", color: "#a78bfa", scheduledFor: "2026-01-02T05:00:00.000Z" },
+  const panel = svgEventPanel({ x: 0, y: 0, width: 800, height: 72, scale: 1, events: [
+    { kind: "Maintenance", name: "Sample <service upgrade>", status: "scheduled", color: "#a78bfa", scheduledFor: "2026-01-02T05:00:00.000Z", referenceAt: "2026-01-02T03:00:00.000Z" },
   ] });
   assert.match(panel, /MAINTENANCE/);
-  assert.match(panel, /Database &lt;upgrade&gt;/);
+  assert.match(panel, /Sample &lt;service upgrade&gt;/);
   assert.match(panel, /Starts 2026-01-02 05:00 UTC/);
+  assert.match(panel, /in 2 hours/);
 });
 
 test("freshness badge is a reusable, labelled SVG primitive for every feed state", () => {

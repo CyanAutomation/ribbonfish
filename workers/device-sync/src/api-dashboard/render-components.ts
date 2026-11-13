@@ -16,16 +16,42 @@ const healthLegendItems = [
   ["Maintenance", "#a78bfa"], ["Pending", "#60a5fa"], ["Unknown", "#94a3b8"], ["Stale", "#fb923c"],
 ] as const;
 
+export interface SvgHealthCount {
+  label: string;
+  count: number;
+  color: string;
+}
+
+/** Prominent, readable health counts used above the detail cards. */
+export function svgHealthOverview(x: number, y: number, width: number, scale: number, items: SvgHealthCount[]): string {
+  const s = (value: number) => value * scale;
+  const visibleItems = items.filter((item) => item.count > 0);
+  if (!visibleItems.length) return `<text x="${x}" y="${y}" fill="#c0cede" font-size="${s(17)}">No active service data</text>`;
+  const gap = s(12);
+  let cursor = x;
+  let result = `<g role="group" aria-label="Current service health">`;
+  for (const item of visibleItems) {
+    const label = `${item.count} ${item.label}`;
+    const chipWidth = s(34 + label.length * 8.5);
+    if (cursor + chipWidth > x + width) break;
+    result += `<rect x="${cursor}" y="${y - s(23)}" width="${chipWidth}" height="${s(31)}" rx="${s(8)}" fill="#142238" stroke="${svgText(item.color)}" stroke-width="${s(1)}"/>`;
+    result += svgStatusDot(cursor + s(13), y - s(7), s(4), item.color);
+    result += `<text x="${cursor + s(23)}" y="${y}" fill="${svgText(item.color)}" font-size="${s(15)}" font-weight="700">${svgText(label)}</text>`;
+    cursor += chipWidth + gap;
+  }
+  return `${result}</g>`;
+}
+
 /** Shared, visible status key for dashboards that use color to encode health. */
 export function svgHealthLegend(x: number, y: number, width: number, scale: number): string {
   const s = (value: number) => value * scale;
-  const labelWidth = s(110);
+  const labelWidth = s(105);
   const itemWidth = (width - labelWidth) / healthLegendItems.length;
-  let result = `<g role="group" aria-label="Status key"><text x="${x}" y="${y}" fill="#b9c9dc" font-size="${s(18)}" font-weight="700">Status key</text>`;
+  let result = `<g role="group" aria-label="Status key"><text x="${x}" y="${y}" fill="#b9c9dc" font-size="${s(14)}" font-weight="700">Status key</text>`;
   healthLegendItems.forEach(([label, color], index) => {
     const itemX = x + labelWidth + index * itemWidth;
-    result += svgStatusDot(itemX + s(5), y - s(6), s(5), color);
-    result += `<text x="${itemX + s(16)}" y="${y}" fill="#d0dbea" font-size="${s(18)}">${label}</text>`;
+    result += svgStatusDot(itemX + s(5), y - s(4), s(4), color);
+    result += `<text x="${itemX + s(15)}" y="${y}" fill="#d0dbea" font-size="${s(14)}">${label}</text>`;
   });
   return `${result}</g>`;
 }
@@ -40,20 +66,20 @@ export function svgStatusBadge(x: number, y: number, width: number, height: numb
 
 /** Compact, reusable feed-health label kept visually distinct from service status. */
 export function svgFreshnessBadge(x: number, y: number, scale: number, label: string, color: string): string {
-  return `${svgStatusDot(x, y - 4 * scale, 4 * scale, color)}<text x="${x + 12 * scale}" y="${y}" fill="${svgText(color)}" font-size="${13 * scale}" font-weight="700">${svgText(label)}</text>`;
+  return `${svgStatusDot(x, y - 4 * scale, 4 * scale, color)}<text x="${x + 12 * scale}" y="${y}" fill="${svgText(color)}" font-size="${16 * scale}" font-weight="700">${svgText(label)}</text>`;
 }
 
 export function svgServiceRow(input: { x: number; y: number; right: number; scale: number; name: string; status: string; color: string; statusMeta?: string; compact?: boolean; showStatus?: boolean }): string {
   const { x, y, right, scale, name, status, color, statusMeta, compact = false, showStatus = false } = input;
   const statusLabel = status === "Operational" && !showStatus ? "" : [status, statusMeta].filter(Boolean).join(" · ");
-  const statusCharWidth = scale * (compact ? 6.5 : 8.5);
+  const statusCharWidth = scale * (compact ? 7 : 9.5);
   const maxStatusChars = Math.floor((right - x) * .48 / statusCharWidth);
   const shownStatus = statusLabel ? truncateText(statusLabel, maxStatusChars) : "";
   const statusWidth = shownStatus.length * statusCharWidth;
-  const maxName = Math.max(8, Math.floor((right - x - scale * 38 - statusWidth) / (scale * 8.5)));
+  const maxName = Math.max(8, Math.floor((right - x - scale * 38 - statusWidth) / (scale * 10.5)));
   let row = svgStatusDot(x + scale * 7, y - scale * 5, scale * 5, color);
-  row += `<text x="${x + scale * 22}" y="${y}" fill="#e5edf6" font-size="${scale * (compact ? 12 : 16)}">${svgText(truncateText(name, maxName))}</text>`;
-  if (shownStatus) row += `<text x="${right}" y="${y}" text-anchor="end" fill="${svgText(color)}" font-size="${scale * (compact ? 11 : 14)}" font-weight="700">${svgText(shownStatus)}</text>`;
+  row += `<text x="${x + scale * 22}" y="${y}" fill="#e5edf6" font-size="${scale * (compact ? 14 : 20)}">${svgText(truncateText(name, maxName))}</text>`;
+  if (shownStatus) row += `<text x="${right}" y="${y}" text-anchor="end" fill="${svgText(color)}" font-size="${scale * (compact ? 13 : 17)}" font-weight="700">${svgText(shownStatus)}</text>`;
   return row;
 }
 
@@ -77,6 +103,7 @@ export interface SvgDashboardEvent {
   color: string;
   updatedAt?: string | null;
   scheduledFor?: string | null;
+  referenceAt?: string | null;
 }
 
 function eventClock(value: string | null | undefined, includeDate = false): string | undefined {
@@ -86,6 +113,21 @@ function eventClock(value: string | null | undefined, includeDate = false): stri
   return includeDate ? `${date.toISOString().slice(0, 10)} ${date.toISOString().slice(11, 16)} UTC` : `${date.toISOString().slice(11, 16)} UTC`;
 }
 
+function relativeTime(value: string | null | undefined, reference: string | null | undefined): string | undefined {
+  if (!value || !reference) return undefined;
+  const target = Date.parse(value);
+  const now = Date.parse(reference);
+  if (!Number.isFinite(target) || !Number.isFinite(now)) return undefined;
+  const delta = target - now;
+  const absMinutes = Math.max(1, Math.round(Math.abs(delta) / 60_000));
+  const hours = Math.round(absMinutes / 60);
+  const days = Math.round(absMinutes / (24 * 60));
+  const duration = absMinutes < 60 ? `${absMinutes} ${absMinutes === 1 ? "minute" : "minutes"}`
+    : absMinutes < 24 * 60 ? `${hours} ${hours === 1 ? "hour" : "hours"}`
+      : `${days} ${days === 1 ? "day" : "days"}`;
+  return delta >= 0 ? `in ${duration}` : `started ${duration} ago`;
+}
+
 /** Shared, high-contrast event panel for active incidents and scheduled work. */
 export function svgEventPanel(input: { x: number; y: number; width: number; height: number; scale: number; events: SvgDashboardEvent[]; hiddenCount?: number }): string {
   const { x, y, width, height, scale, events, hiddenCount = 0 } = input;
@@ -93,19 +135,20 @@ export function svgEventPanel(input: { x: number; y: number; width: number; heig
   const s = (value: number) => value * scale;
   let result = `<rect x="${x}" y="${y}" width="${width}" height="${height}" rx="${s(10)}" fill="#202d40"/>`;
   events.forEach((event, index) => {
-    const rowY = y + s(7 + index * 44);
-    const titleBaseline = rowY + s(15);
-    const metaBaseline = rowY + s(33);
+    const rowY = y + s(7 + index * 54);
+    const titleBaseline = rowY + s(19);
+    const metaBaseline = rowY + s(42);
     const title = `${event.kind.toUpperCase()} · ${event.name}`;
+    const relativeStart = relativeTime(event.scheduledFor, event.referenceAt);
     const meta = event.kind === "Maintenance"
-      ? [event.status.replace(/_/g, " "), event.scheduledFor ? `Starts ${eventClock(event.scheduledFor, true)}` : undefined, event.updatedAt ? `Updated ${eventClock(event.updatedAt)}` : undefined].filter(Boolean).join(" · ")
+      ? [event.status.replace(/_/g, " "), relativeStart, event.scheduledFor ? `Starts ${eventClock(event.scheduledFor, true)}` : undefined, event.updatedAt ? `Updated ${eventClock(event.updatedAt)}` : undefined].filter(Boolean).join(" · ")
       : [event.status.replace(/_/g, " "), event.impact ? `${event.impact} impact` : undefined, event.updatedAt ? `Updated ${eventClock(event.updatedAt)}` : undefined].filter(Boolean).join(" · ");
     const isLast = index === events.length - 1;
     const suffix = isLast && hiddenCount ? ` · +${hiddenCount} more active events` : "";
-    const maxChars = Math.max(8, Math.floor((width - s(48)) / s(8.5)));
-    result += `<rect x="${x}" y="${rowY}" width="${s(4)}" height="${s(34)}" rx="${s(2)}" fill="${svgText(event.color)}"/>`;
-    result += `<text x="${x + s(14)}" y="${titleBaseline}" fill="#f4f7fb" font-size="${s(15)}" font-weight="700">${svgText(truncateText(title, maxChars))}</text>`;
-    result += `<text x="${x + s(14)}" y="${metaBaseline}" fill="${svgText(event.color)}" font-size="${s(12)}">${svgText(truncateText(`${meta}${suffix}`, maxChars))}</text>`;
+    const maxChars = Math.max(8, Math.floor((width - s(42)) / s(11)));
+    result += `<rect x="${x}" y="${rowY}" width="${s(5)}" height="${s(44)}" rx="${s(2)}" fill="${svgText(event.color)}"/>`;
+    result += `<text x="${x + s(16)}" y="${titleBaseline}" fill="#f4f7fb" font-size="${s(20)}" font-weight="700">${svgText(truncateText(title, maxChars))}</text>`;
+    result += `<text x="${x + s(16)}" y="${metaBaseline}" fill="${svgText(event.color)}" font-size="${s(15)}">${svgText(truncateText(`${meta}${suffix}`, maxChars))}</text>`;
   });
   return result;
 }
