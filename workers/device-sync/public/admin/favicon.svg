@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Ribbonfish favicon"><defs>
+<linearGradient id="t" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#c1faff"/><stop offset=".54" stop-color="#12dbe5"/><stop offset="1" stop-color="#0278c3"/></linearGradient>
+<linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#fff"/><stop offset=".5" stop-color="#d5efff"/><stop offset="1" stop-color="#69bdda"/></linearGradient></defs>
+<rect width="256" height="256" rx="54" fill="#0b2943"/>
+<path d="M50 149 C26 185 64 202 108 185 C162 161 183 177 170 198 C156 217 115 218 104 243 C129 220 168 227 198 205 C228 178 199 150 158 154 C104 159 75 183 60 158Z" fill="url(#t)" stroke="#1788b9" stroke-width="4"/>
+<path d="M70 118 Q81 92 111 84 Q104 103 105 111Z M109 90 Q127 66 157 71 Q150 88 151 97Z M150 79 Q170 58 197 71 L186 89Z" fill="#18dfeb" stroke="#087bb0" stroke-width="4"/>
+<path d="M49 155 C44 123 77 106 120 94 C158 82 189 78 206 91 C228 103 229 121 207 131 C183 146 146 140 113 146 C86 152 62 164 49 155Z" fill="url(#b)" stroke="#073c65" stroke-width="7"/>
+<path d="M55 143 C87 112 152 96 189 96" fill="none" stroke="#fff" stroke-width="7" opacity=".7"/>
+<path d="M194 107 Q190 124 211 124" fill="none" stroke="#61b5d6" stroke-width="3"/>
+<path d="M208 119 L225 112" stroke="#06385d" stroke-width="4" stroke-linecap="round"/>
+<circle cx="200" cy="105" r="6.8" fill="#07385b"/><circle cx="202" cy="103" r="2" fill="white"/></svg>

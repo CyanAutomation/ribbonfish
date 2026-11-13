@@ -1756,3 +1756,9 @@ requiredElement(document, "#hide-secret").addEventListener("click", () => {
 });
 
 refresh().catch((error) => showMessage(error.message, true));
+
+// Brand loader is available for explicit future loading states; hidden by default.
+export function setRibbonfishLoading(loading: boolean): void {
+  const overlay = document.getElementById("ribbonfish-loading");
+  if (overlay) overlay.hidden = !loading;
+}

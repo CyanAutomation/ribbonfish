@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="8 18 1210 620" role="img" aria-label="Ribbonfish infinity-loop loading mascot"><defs>
+<linearGradient id="rear" x1="0" y1="0" x2=".7" y2="1"><stop stop-color="#02e5eb"/><stop offset=".32" stop-color="#26d7e6"/><stop offset=".6" stop-color="#00699c"/><stop offset="1" stop-color="#01476f"/></linearGradient>
+<linearGradient id="left" x1="0" y1="0" x2=".6" y2="1"><stop stop-color="#65ffff"/><stop offset=".4" stop-color="#04cde5"/><stop offset=".75" stop-color="#08a1cd"/><stop offset="1" stop-color="#006498"/></linearGradient>
+<linearGradient id="fish" x1=".2" y1=".15" x2=".6" y2="1"><stop stop-color="#f8feff"/><stop offset=".35" stop-color="#e8f8ff"/><stop offset=".68" stop-color="#b5dff1"/><stop offset=".88" stop-color="#eafaff"/><stop offset="1" stop-color="#409dd0"/></linearGradient>
+<linearGradient id="fin" x1="0" y1="0" x2=".75" y2="1"><stop stop-color="#00fbed"/><stop offset=".62" stop-color="#0acadd"/><stop offset="1" stop-color="#0094c0"/></linearGradient>
+<linearGradient id="eye" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#115787"/><stop offset="1" stop-color="#062643"/></linearGradient></defs>
+<path d="M531 282 C627 370 742 470 860 494 C984 524 1079 459 1079 338 C1126 392 1118 476 1063 529 C1000 593 910 603 801 553 C679 495 594 394 501 340Z" fill="url(#rear)" stroke="#08456c" stroke-width="15" stroke-linejoin="round"/>
+<path d="M641 398 C739 482 865 549 971 525 C1027 516 1076 476 1092 429 C1080 505 1011 566 931 565 C803 568 707 483 641 398Z" fill="#17f5e6" opacity=".75"/>
+<path d="M571 302 C492 212 382 140 293 137 C172 122 74 201 55 297 C26 407 103 503 202 530 C335 567 437 479 534 368 L583 317 C497 370 421 487 310 485 C219 484 154 416 156 326 C159 255 215 207 270 197 C351 178 437 266 532 352Z" fill="url(#left)" stroke="#065482" stroke-width="16" stroke-linejoin="round"/>
+<path d="M68 328 C61 212 167 142 277 145 C386 142 471 220 555 310 C476 257 374 162 280 162 C173 151 92 235 68 328Z" fill="#bcffff" opacity=".82"/>
+<path d="M144 451 C226 550 378 515 470 424 C392 523 282 563 202 526 C183 511 157 491 144 451Z" fill="#d6ffff" opacity=".76"/>
+<path d="M548 313 Q570 231 643 195 Q689 189 719 206 Q639 238 611 292Z" fill="url(#fin)" stroke="#075b8a" stroke-width="10"/>
+<path d="M618 227 Q670 160 753 156 Q799 153 834 185 L744 233Z" fill="url(#fin)" stroke="#075b8a" stroke-width="10"/>
+<path d="M718 179 Q772 112 836 107 Q902 112 943 154 L830 193Z" fill="url(#fin)" stroke="#075b8a" stroke-width="10"/>
+<path d="M788 123 Q838 52 909 57 Q981 70 1005 133 L894 157Z" fill="url(#fin)" stroke="#075b8a" stroke-width="10"/>
+<path d="M812 104 Q854 67 904 70 Q949 77 978 121" fill="none" stroke="#abfffb" stroke-width="9" opacity=".65"/>
+<path d="M187 533 C267 553 357 507 437 434 C511 369 586 286 675 224 C784 147 890 111 1011 116 C1089 118 1152 159 1166 201 C1180 230 1140 262 1083 277 C1000 300 917 306 829 325 C727 347 641 403 545 465 C419 550 305 605 187 533Z" fill="url(#fish)" stroke="#07365a" stroke-width="17" stroke-linejoin="round"/>
+<path d="M201 532 C291 555 405 491 505 414 C654 301 761 225 913 213 C790 246 686 318 584 399 C416 531 300 580 201 532Z" fill="#f7ffff" opacity=".86"/>
+<path d="M306 539 C407 520 491 446 596 364 C711 276 851 270 949 267 C782 284 655 370 547 446 C445 520 352 553 306 539Z" fill="#7cc5e8" opacity=".65"/>
+<path d="M931 174 C914 213 929 257 976 271 C1044 292 1115 258 1160 215 C1130 155 1073 122 1014 121 C968 124 941 144 931 174Z" fill="#fafdff"/>
+<path d="M925 177 C918 216 943 262 992 274 C1050 288 1112 259 1160 214" fill="none" stroke="#51b2d5" stroke-width="9"/>
+<path d="M1072 238 L1162 201 Q1157 220 1125 235Z" fill="#042f52"/>
+<path d="M1080 237 Q1126 225 1156 212" fill="none" stroke="#f9ffff" stroke-width="7"/>
+<circle cx="1030" cy="178" r="22" fill="url(#eye)"/><circle cx="1037" cy="168" r="7" fill="#fff"/></svg>
