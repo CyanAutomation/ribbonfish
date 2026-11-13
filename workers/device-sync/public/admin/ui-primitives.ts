@@ -32,6 +32,24 @@ export function statusBadge(text: string, tone = "success", ownerDocument: Docum
   return node("span", text, tone === "success" ? "badge" : "badge badge--" + tone, ownerDocument);
 }
 
+export type StatusNoticeTone = "success" | "info" | "error";
+
+/** Set the visible text and assistive-technology semantics of a status notice. */
+export function setStatusNotice(
+  notice: HTMLElement,
+  textElement: HTMLElement,
+  message: string,
+  tone: StatusNoticeTone,
+): void {
+  textElement.textContent = message;
+  notice.classList.toggle("alert--success", tone === "success");
+  notice.classList.toggle("alert--info", tone === "info");
+  notice.classList.toggle("alert--error", tone === "error");
+  notice.setAttribute("role", tone === "error" ? "alert" : "status");
+  notice.setAttribute("aria-live", tone === "error" ? "assertive" : "polite");
+  notice.hidden = false;
+}
+
 export interface FormFieldOptions {
   id?: string;
   description?: string;

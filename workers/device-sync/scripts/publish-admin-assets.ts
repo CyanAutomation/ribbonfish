@@ -46,13 +46,17 @@ const files = [
   ["styles.css", "text/css; charset=utf-8"],
   ["favicon.png", "image/png"],
   ["favicon.svg", "image/svg+xml"],
+  ["site.webmanifest", "application/manifest+json; charset=utf-8"],
+  ["apple-touch-icon.png", "image/png"],
+  ["favicon-192.png", "image/png"],
+  ["favicon-512.png", "image/png"],
   ["ribbonfish-mark.svg", "image/svg+xml"],
   ["ribbonfish-loading.svg", "image/svg+xml"],
   ["capture-pending.png", "image/png"],
 ];
 
 for (const [file, contentType] of files) {
-  const source = file === "capture-pending.png" || file === "favicon.png" || file.endsWith(".svg")
+  const source = file.endsWith(".png") || file.endsWith(".svg") || file.endsWith(".webmanifest")
     ? resolve(workerDirectory, "public/admin", file)
     : resolve(buildDirectory, file);
   execFileSync("npx", [

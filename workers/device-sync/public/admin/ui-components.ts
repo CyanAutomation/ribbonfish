@@ -1,5 +1,116 @@
-import { formatTimestamp } from "./ui-utils.ts";
+import { createSingleFlight, formatTimestamp } from "./ui-utils.ts";
 import { linkButton, node, statusBadge } from "./ui-primitives.ts";
+
+export interface BrandLockupOptions {
+  brandName?: string;
+  markSrc?: string;
+  orientation?: "horizontal" | "stacked";
+  ownerDocument?: Document;
+}
+
+/** Render the Ribbonfish mark and wordmark as one reusable identity component. */
+export function createBrandLockup(options: BrandLockupOptions = {}): HTMLElement {
+  const ownerDocument = options.ownerDocument ?? document;
+  const orientation = options.orientation ?? "horizontal";
+  const lockup = node("div", undefined, `brand-lockup brand-lockup--${orientation}`, ownerDocument);
+  const mark = node("img", undefined, "brand-lockup__mark", ownerDocument);
+  mark.src = options.markSrc ?? "/admin/ribbonfish-mark.svg";
+  mark.alt = "";
+  mark.width = 56;
+  mark.height = 45;
+  mark.decoding = "async";
+  lockup.append(mark, node("span", options.brandName ?? "Ribbonfish", "brand-lockup__name", ownerDocument));
+  return lockup;
+}
+
+export interface LoadingIndicatorOptions {
+  defaultLabel?: string;
+  imageSrc?: string;
+  ownerDocument?: Document;
+}
+
+export interface LoadingIndicatorComponent {
+  element: HTMLElement;
+  begin(label?: string): () => void;
+  isLoading(): boolean;
+}
+
+export type RefreshMode = "initial" | "manual" | "background" | "action";
+
+export interface RefreshCoordinatorOptions<T> {
+  operation(): Promise<T>;
+  hasUnsavedChanges(): boolean;
+  confirmDiscard(): boolean;
+  loading: LoadingIndicatorComponent;
+  isSkipped?(result: T): boolean;
+  onSkipped?(): void;
+}
+
+/** Coordinate refresh prompts, quiet polling, shared in-flight work, and explicit busy feedback. */
+export function createRefreshCoordinator<T>(options: RefreshCoordinatorOptions<T>): (mode?: RefreshMode) => Promise<T | undefined> {
+  const operation = createSingleFlight(async () => {
+    const result = await options.operation();
+    if (options.isSkipped?.(result)) options.onSkipped?.();
+    return result;
+  });
+  return async (mode: RefreshMode = "action") => {
+    if (options.hasUnsavedChanges()) {
+      if (mode === "background" || mode === "initial") return undefined;
+      if (!options.confirmDiscard()) return undefined;
+    }
+
+    if (mode !== "initial" && mode !== "manual") return operation();
+    const finishLoading = options.loading.begin(mode === "initial" ? "Loading Ribbonfish…" : "Refreshing Ribbonfish…");
+    try {
+      return await operation();
+    } finally {
+      finishLoading();
+    }
+  };
+}
+
+/** A shared mascot status overlay that remains visible until every operation finishes. */
+export function createLoadingIndicator(options: LoadingIndicatorOptions = {}): LoadingIndicatorComponent {
+  const ownerDocument = options.ownerDocument ?? document;
+  const defaultLabel = options.defaultLabel ?? "Loading Ribbonfish…";
+  const element = node("div", undefined, "loading-indicator ribbonfish-loading", ownerDocument);
+  element.hidden = true;
+  element.setAttribute("role", "status");
+  element.setAttribute("aria-live", "polite");
+  element.setAttribute("aria-atomic", "true");
+
+  const image = node("img", undefined, "loading-indicator__mascot", ownerDocument);
+  image.src = options.imageSrc ?? "/admin/ribbonfish-loading.svg";
+  image.alt = "";
+  image.width = 128;
+  image.height = 70;
+  const label = node("span", defaultLabel, "loading-indicator__label", ownerDocument);
+  element.append(image, label);
+
+  const activeOperations: Array<{ label: string }> = [];
+  const update = () => {
+    element.hidden = activeOperations.length === 0;
+    label.textContent = activeOperations.at(-1)?.label ?? defaultLabel;
+  };
+
+  return {
+    element,
+    begin(nextLabel = defaultLabel) {
+      const operation = { label: nextLabel };
+      activeOperations.push(operation);
+      update();
+      let finished = false;
+      return () => {
+        if (finished) return;
+        finished = true;
+        const index = activeOperations.indexOf(operation);
+        if (index >= 0) activeOperations.splice(index, 1);
+        update();
+      };
+    },
+    isLoading: () => activeOperations.length > 0,
+  };
+}
 
 export interface SidebarControllerOptions {
   shell: HTMLElement;

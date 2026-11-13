@@ -7,8 +7,17 @@ import {
   createSettingsGroup,
   metricCard,
   scaleMeter,
+  setStatusNotice,
 } from "../public/admin/ui-primitives.ts";
-import { createPageHeader, createToolbar, setPageHeaderMetadata } from "../public/admin/ui-components.ts";
+import {
+  createBrandLockup,
+  createLoadingIndicator,
+  createPageHeader,
+  createRefreshCoordinator,
+  createToolbar,
+  setPageHeaderMetadata,
+} from "../public/admin/ui-components.ts";
+import { createSingleFlight } from "../public/admin/ui-utils.ts";
 import { requiredElement, requiredElements, requiredFormControl } from "../public/admin/dom.ts";
 
 function requiredMatch<T extends Element>(root: ParentNode, selector: string): T {
@@ -28,6 +37,166 @@ test("metric cards render labels and values as text in a reusable semantic compo
   assert.equal(requiredMatch<HTMLElement>(card, ".metric-card__value").textContent, "10m 0s");
   assert.equal(card.querySelector("img"), null, "label text is not parsed as markup");
   dom.window.close();
+});
+
+test("brand lockup is a reusable, accessible component with replaceable identity", () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const lockup = createBrandLockup({
+    brandName: "Ribbonfish",
+    markSrc: "/admin/ribbonfish-mark.svg",
+    orientation: "stacked",
+    ownerDocument: dom.window.document,
+  });
+  dom.window.document.body.append(lockup);
+
+  assert.equal(lockup.classList.contains("brand-lockup"), true);
+  assert.equal(lockup.querySelector("img")?.getAttribute("src"), "/admin/ribbonfish-mark.svg");
+  assert.equal(lockup.querySelector("img")?.getAttribute("alt"), "");
+  assert.equal(lockup.querySelector(".brand-lockup__name")?.textContent, "Ribbonfish");
+  assert.equal(lockup.classList.contains("brand-lockup--stacked"), true);
+  dom.window.close();
+});
+
+test("loading indicator announces work, counts concurrent callers, and restores its previous label", () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const loading = createLoadingIndicator({ ownerDocument: dom.window.document });
+  const secondLoading = createLoadingIndicator({ ownerDocument: dom.window.document });
+  dom.window.document.body.append(loading.element);
+  dom.window.document.body.append(secondLoading.element);
+  const label = loading.element.querySelector<HTMLElement>(".loading-indicator__label");
+  assert.equal(loading.element.id, "");
+  assert.equal(secondLoading.element.id, "");
+  assert.equal(loading.element.hidden, true);
+  assert.equal(loading.element.getAttribute("role"), "status");
+  assert.equal(loading.element.getAttribute("aria-live"), "polite");
+  assert.equal(loading.element.querySelector("img")?.getAttribute("alt"), "");
+
+  const finishRefresh = loading.begin("Refreshing data…");
+  const finishSave = loading.begin("Saving changes…");
+  assert.equal(loading.element.hidden, false);
+  assert.equal(label?.textContent, "Saving changes…");
+  finishSave();
+  assert.equal(label?.textContent, "Refreshing data…");
+  finishRefresh();
+  assert.equal(loading.element.hidden, true);
+  finishRefresh();
+  assert.equal(loading.element.hidden, true, "finishing the same operation twice is harmless");
+  dom.window.close();
+});
+
+test("status notices expose polite informational feedback without an error or success tone", () => {
+  const dom = new JSDOM("<!doctype html><html><body><div class='alert alert--success' hidden><span data-feedback-text></span></div></body></html>");
+  const notice = requiredMatch<HTMLElement>(dom.window.document, ".alert");
+  const text = requiredMatch<HTMLElement>(notice, "[data-feedback-text]");
+  setStatusNotice(notice, text, "Automatic refresh paused to preserve your unsaved dashboard edits.", "info");
+
+  assert.equal(text.textContent, "Automatic refresh paused to preserve your unsaved dashboard edits.");
+  assert.equal(notice.hidden, false);
+  assert.equal(notice.getAttribute("role"), "status");
+  assert.equal(notice.getAttribute("aria-live"), "polite");
+  assert.equal(notice.classList.contains("alert--info"), true);
+  assert.equal(notice.classList.contains("alert--success"), false);
+  assert.equal(notice.classList.contains("alert--error"), false);
+  dom.window.close();
+});
+
+test("refresh coordinator keeps background work quiet and protects unsaved forms", async () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const loading = createLoadingIndicator({ ownerDocument: dom.window.document });
+  let dirty = true;
+  let confirmations = 0;
+  let loads = 0;
+  const refresh = createRefreshCoordinator({
+    operation: async () => { loads += 1; },
+    hasUnsavedChanges: () => dirty,
+    confirmDiscard: () => { confirmations += 1; return false; },
+    loading,
+  });
+
+  await refresh("background");
+  await refresh("initial");
+  assert.equal(loads, 0);
+  assert.equal(confirmations, 0);
+  assert.equal(loading.element.hidden, true);
+  await refresh("action");
+  assert.equal(confirmations, 1);
+  assert.equal(loads, 0, "a declined discard does not refresh");
+  dom.window.close();
+});
+
+test("refresh coordinator deduplicates background/manual work and always clears busy state", async () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const loading = createLoadingIndicator({ ownerDocument: dom.window.document });
+  let calls = 0;
+  let rejectLoad: ((error: Error) => void) | undefined;
+  const refresh = createRefreshCoordinator({
+    operation: () => {
+      calls += 1;
+      return new Promise<void>((_resolve, reject) => { rejectLoad = reject; });
+    },
+    hasUnsavedChanges: () => false,
+    confirmDiscard: () => true,
+    loading,
+  });
+
+  const background = refresh("background");
+  await Promise.resolve();
+  const manual = refresh("manual");
+  assert.equal(calls, 1);
+  assert.equal(loading.element.hidden, false);
+  assert.equal(loading.element.querySelector(".loading-indicator__label")?.textContent, "Refreshing Ribbonfish…");
+  rejectLoad?.(new Error("network unavailable"));
+  await assert.rejects(Promise.all([background, manual]), /network unavailable/);
+  assert.equal(loading.element.hidden, true);
+  dom.window.close();
+});
+
+test("refresh coordinator reports one mid-flight skip and later quiet polls stay silent", async () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  let dirty = false;
+  let calls = 0;
+  let notices = 0;
+  const refresh = createRefreshCoordinator({
+    operation: async () => { calls += 1; dirty = true; return false; },
+    hasUnsavedChanges: () => dirty,
+    confirmDiscard: () => true,
+    loading: createLoadingIndicator({ ownerDocument: dom.window.document }),
+    isSkipped: (result) => result === false,
+    onSkipped: () => { notices += 1; },
+  });
+
+  await refresh("background");
+  await refresh("background");
+  assert.equal(calls, 1);
+  assert.equal(notices, 1);
+  dom.window.close();
+});
+
+test("single-flight calls share work, clear after rejection, and allow a later retry", async () => {
+  let resolveTask: ((value: string) => void) | undefined;
+  let calls = 0;
+  const run = createSingleFlight(() => {
+    calls += 1;
+    return new Promise<string>((resolve) => { resolveTask = resolve; });
+  });
+  const first = run();
+  const second = run();
+  assert.equal(first, second);
+  await Promise.resolve();
+  assert.equal(calls, 1);
+  resolveTask?.("shared result");
+  assert.deepEqual(await Promise.all([first, second]), ["shared result", "shared result"]);
+  await Promise.resolve();
+
+  let attempts = 0;
+  const retryable = createSingleFlight(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("temporary failure");
+    return "recovered";
+  });
+  await assert.rejects(retryable(), /temporary failure/);
+  assert.equal(await retryable(), "recovered");
+  assert.equal(attempts, 2);
 });
 
 test("scale meters clamp fills and markers and describe the scale to assistive technology", () => {
