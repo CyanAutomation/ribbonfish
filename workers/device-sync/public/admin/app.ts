@@ -14,7 +14,15 @@ import {
 import { createApiDashboardSourceEditor } from "./api-dashboard-editor.ts";
 import { parseApiDashboardConfig } from "../../src/api-dashboard/config.ts";
 import { renderCaptureEfficiencyModule } from "./capture-efficiency-module.ts";
-import { createToolbar, renderFindingList, setPageHeaderMetadata } from "./ui-components.ts";
+import {
+  createBrandLockup,
+  createLoadingIndicator,
+  createRefreshCoordinator,
+  createToolbar,
+  renderFindingList,
+  setPageHeaderMetadata,
+  type RefreshMode,
+} from "./ui-components.ts";
 import { initModuleNavigation } from "./module-navigation.ts";
 import {
   createFleetOpenUI,
@@ -45,6 +53,10 @@ import {
   prioritizeCaptureTargets,
   summarizeCaptureErrors,
 } from "./ui-utils.ts";
+
+requiredElement(document, "#brand-lockup").replaceWith(createBrandLockup({ ownerDocument: document }));
+const ribbonfishLoading = createLoadingIndicator({ ownerDocument: document });
+requiredElement(document, "#ribbonfish-loading").replaceWith(ribbonfishLoading.element);
 
 const fleetSummary = requiredElement(document, "#fleet-summary");
 const fleetAttention = requiredElement(document, "#fleet-attention");
@@ -1401,10 +1413,31 @@ function renderAudit(events) {
   });
 }
 
-async function refresh() {
-  const dirtyForms = [...document.querySelectorAll<HTMLFormElement>("#api-dashboard-form, form[data-api-dashboard-edit]")]
-    .filter((form) => form.dataset.dirty === "true");
-  if (dirtyForms.length && !window.confirm("Discard unsaved API dashboard changes and refresh the dashboard list?")) return;
+function hasUnsavedApiDashboardChanges() {
+  return [...document.querySelectorAll<HTMLFormElement>("#api-dashboard-form, form[data-api-dashboard-edit]")]
+    .some((form) => form.dataset.dirty === "true");
+}
+
+const runRefresh = createRefreshCoordinator({
+  operation: refreshData,
+  hasUnsavedChanges: hasUnsavedApiDashboardChanges,
+  confirmDiscard: () => {
+    if (!window.confirm("Discard unsaved API dashboard changes and refresh the dashboard list?")) return false;
+    document.querySelectorAll<HTMLFormElement>("#api-dashboard-form, form[data-api-dashboard-edit]")
+      .forEach((form) => {
+        form.reset();
+        delete form.dataset.dirty;
+      });
+    return true;
+  },
+  loading: ribbonfishLoading,
+});
+
+function refresh(mode: RefreshMode = "action") {
+  return runRefresh(mode);
+}
+
+async function refreshData() {
   const [overview, enrollmentRequests, captureDecisions, intervals, apiDashboards] = await Promise.all([
     api("/admin/api/overview"),
     api("/admin/api/enrollment-requests"),
@@ -1412,6 +1445,7 @@ async function refresh() {
     api("/admin/api/intervals"),
     api("/admin/api/api-dashboards").catch(() => []),
   ]);
+  if (hasUnsavedApiDashboardChanges()) return;
   intervalDefinitions = intervals;
   populateIntervalSelect(requiredElement(document, "#playlist-form [name=rotation_interval]"), intervals.rotation.options,
     intervals.rotation.default, (option) => option.value);
@@ -1670,13 +1704,13 @@ requiredElement(document, "#reload").addEventListener("click", async (event) => 
   const refreshButton = event.currentTarget as HTMLButtonElement;
   refreshButton.disabled = true;
   try {
-    await refresh();
+    await refresh("manual");
   } catch (error) { showMessage(error.message, true); }
   finally { refreshButton.disabled = false; }
 });
 
 setInterval(() => {
-  if (!document.hidden) refresh().catch(() => {});
+  if (!document.hidden) refresh("background").catch(() => {});
 }, 60_000);
 
 requiredElement(document, "#playlist-form").addEventListener("submit", async (event) => {
@@ -1755,10 +1789,5 @@ requiredElement(document, "#hide-secret").addEventListener("click", () => {
   requiredElement(document, "#secret-panel").hidden = true;
 });
 
-refresh().catch((error) => showMessage(error.message, true));
-
-// Brand loader is available for explicit future loading states; hidden by default.
-export function setRibbonfishLoading(loading: boolean): void {
-  const overlay = document.getElementById("ribbonfish-loading");
-  if (overlay) overlay.hidden = !loading;
-}
+refresh("initial")
+  .catch((error) => showMessage(error.message, true));
