@@ -32,6 +32,68 @@ export function statusBadge(text: string, tone = "success", ownerDocument: Docum
   return node("span", text, tone === "success" ? "badge" : "badge badge--" + tone, ownerDocument);
 }
 
+export type DefinitionListValue = string | number | Node | null | undefined;
+
+export interface DefinitionListItem {
+  label: string;
+  value: DefinitionListValue;
+}
+
+export interface DefinitionListOptions {
+  className?: string;
+  ownerDocument?: Document;
+}
+
+function appendDefinitionValue(target: HTMLElement, value: DefinitionListValue, ownerDocument: Document): void {
+  const NodeConstructor = ownerDocument.defaultView?.Node;
+  if (NodeConstructor && value instanceof NodeConstructor) {
+    target.append(value as Node);
+    return;
+  }
+  target.textContent = value === null || value === undefined ? "—" : String(value);
+}
+
+/** Render labelled operational data with the browser's native definition-list semantics. */
+export function createDefinitionList(items: DefinitionListItem[], options: DefinitionListOptions = {}): HTMLDListElement {
+  const ownerDocument = options.ownerDocument ?? document;
+  const className = ["definition-list", options.className].filter(Boolean).join(" ");
+  const list = node("dl", undefined, className, ownerDocument);
+  items.forEach(({ label, value }) => {
+    const item = node("div", undefined, undefined, ownerDocument);
+    const term = node("dt", label, undefined, ownerDocument);
+    const description = node("dd", undefined, undefined, ownerDocument);
+    appendDefinitionValue(description, value, ownerDocument);
+    item.append(term, description);
+    list.append(item);
+  });
+  return list;
+}
+
+export interface DisclosureOptions {
+  className?: string;
+  contentClassName?: string;
+  open?: boolean;
+  ownerDocument?: Document;
+}
+
+/** Compose native, keyboard-accessible progressive disclosure from a label and content nodes. */
+export function createDisclosure(
+  label: string,
+  contentNodes: HTMLElement[],
+  options: DisclosureOptions = {},
+): HTMLDetailsElement {
+  const ownerDocument = options.ownerDocument ?? document;
+  const className = ["disclosure", options.className].filter(Boolean).join(" ");
+  const details = node("details", undefined, className, ownerDocument);
+  details.open = options.open ?? false;
+  const summary = node("summary", label, "disclosure__summary", ownerDocument);
+  const content = node("div", undefined,
+    ["disclosure__content", options.contentClassName].filter(Boolean).join(" "), ownerDocument);
+  content.append(...contentNodes);
+  details.append(summary, content);
+  return details;
+}
+
 export type StatusNoticeTone = "success" | "info" | "error";
 
 /** Set the visible text and assistive-technology semantics of a status notice. */
@@ -192,12 +254,10 @@ export function beginButtonBusy(
 
 /** Group infrequent actions behind a native keyboard-accessible disclosure. */
 export function actionDisclosure(label: string, actions: HTMLElement[]): HTMLDetailsElement {
-  const details = node("details", undefined, "action-disclosure");
-  details.append(node("summary", label));
-  const content = node("div", undefined, "action-disclosure__content");
-  content.append(...actions);
-  details.append(content);
-  return details;
+  return createDisclosure(label, actions, {
+    className: "action-disclosure",
+    contentClassName: "action-disclosure__content",
+  });
 }
 
 /** A reusable, consistently labelled value card for compact dashboard summaries. */

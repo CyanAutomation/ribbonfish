@@ -6,6 +6,8 @@ import {
   button,
   statusBadge,
   actionDisclosure,
+  createDefinitionList,
+  createDisclosure,
   metricCard,
   createFormField,
   createSettingsGroup,
@@ -17,7 +19,9 @@ import { parseApiDashboardConfig } from "../../src/api-dashboard/config.ts";
 import { renderCaptureEfficiencyModule } from "./capture-efficiency-module.ts";
 import {
   createBrandLockup,
+  createActionGroup,
   createLoadingIndicator,
+  createRecordCard,
   createRefreshCoordinator,
   createToolbar,
   renderFindingList,
@@ -199,6 +203,7 @@ function renderResponsiveRecords({
   cardStatusField = undefined,
   cardActionField = "Actions",
   cardClass = "data-card",
+  cardHiddenFields = [],
 }) {
   const valuesFor = (record, layout) => fields.map((field) => ({
     ...field,
@@ -226,34 +231,20 @@ function renderResponsiveRecords({
 
   records.forEach((record) => {
     const recordFields = valuesFor(record, "card");
-    const card = node("article", undefined, cardClass);
-    const header = node("div", undefined, "data-card__header");
     const title = recordFields.find(({ label }) => label === cardTitleField);
-    const titleHeading = node("h3");
-    if (title?.value instanceof Node) titleHeading.append(title.value);
-    else titleHeading.textContent = title?.value == null ? "—" : String(title.value);
-    header.append(titleHeading);
     const status = recordFields.find(({ label }) => label === cardStatusField);
-    if (status) header.append(status.value);
-    card.append(header);
-
     const cardAction = recordFields.find(({ label }) => label === cardActionField);
     const detailsFields = recordFields.filter(({ label }) =>
       label !== cardTitleField && label !== cardStatusField && label !== cardActionField);
-    if (detailsFields.length) {
-      const details = node("dl");
-      detailsFields.forEach(({ label, value }) => {
-        const field = node("div");
-        field.append(node("dt", label));
-        const content = node("dd");
-        if (value instanceof Node) content.append(value);
-        else content.textContent = value == null ? "—" : String(value);
-        field.append(content);
-        details.append(field);
-      });
-      card.append(details);
-    }
-    if (cardAction) card.append(cardAction.value);
+    const card = createRecordCard({
+      title: title?.value instanceof HTMLElement ? title.value : title?.value == null ? "—" : String(title.value),
+      status: status?.value instanceof HTMLElement ? status.value : undefined,
+      fields: detailsFields,
+      hiddenFields: cardHiddenFields,
+      actions: cardAction?.value instanceof HTMLElement ? cardAction.value : undefined,
+      className: cardClass,
+      ownerDocument: cards.ownerDocument,
+    });
     cards.append(card);
   });
 }
@@ -373,11 +364,11 @@ async function startPlaylistEdit(playlist) {
 }
 
 function playlistActionButtons(playlist, deleteAction, layout) {
-  const actions = node("div", undefined, layout === "card" ? "card-actions" : "table-actions");
+  const actions = [];
   const edit = button("Edit", "secondary");
   edit.setAttribute("aria-label", `Edit playlist ${playlist.playlist_id} from version ${compactIdentifier(playlist.revision)}`);
   edit.addEventListener("click", () => startPlaylistEdit(playlist));
-  actions.append(edit);
+  actions.push(edit);
 
   if (!playlist.active) {
     const activate = button("Activate version", "primary");
@@ -402,7 +393,7 @@ function playlistActionButtons(playlist, deleteAction, layout) {
         await refresh();
       } catch (error) { showMessage(error.message, true, "playlist"); }
     });
-    actions.append(activate);
+    actions.push(activate);
   }
 
   if (deleteAction?.visible) {
@@ -410,7 +401,7 @@ function playlistActionButtons(playlist, deleteAction, layout) {
     if (deleteAction.disabled) {
       remove.disabled = true;
       remove.setAttribute("aria-label", `Delete playlist unavailable. ${deleteAction.hint}`);
-      actions.append(remove, node("p", deleteAction.hint, "playlist-delete-hint"));
+      actions.push(remove, node("p", deleteAction.hint, "playlist-delete-hint"));
     } else {
       remove.addEventListener("click", async () => {
         const description = `Delete playlist ${playlist.playlist_id} and all ${deleteAction.versionCount} saved versions? Uploaded images stay available and can be reused by another playlist.`;
@@ -430,10 +421,14 @@ function playlistActionButtons(playlist, deleteAction, layout) {
           await refresh();
         } catch (error) { showMessage(error.message, true, "playlist"); }
       });
-      actions.append(actionDisclosure(`More actions for ${playlist.playlist_id}`, [remove]));
+      actions.push(actionDisclosure(`More actions for ${playlist.playlist_id}`, [remove]));
     }
   }
-  return actions;
+  return createActionGroup(actions, {
+    label: `Actions for playlist ${playlist.playlist_id}, version ${compactIdentifier(playlist.revision)}`,
+    className: layout === "card" ? "card-actions" : "table-actions",
+    ownerDocument: document,
+  });
 }
 
 function renderHealth(health) {
@@ -513,6 +508,7 @@ function renderPlaylists(playlists) {
       href: "#playlist-editor",
     },
     cardTitleField: "Playlist",
+    cardHiddenFields: ["Playlist"],
     cardStatusField: "Status",
   };
   if (!groups.size) {
@@ -533,7 +529,14 @@ function renderPlaylists(playlists) {
     mobileGroup.append(cardContainer);
     desktop.append(desktopGroup);
     mobile.append(mobileGroup);
-    renderResponsiveRecords({ ...options, tableSelector: tableContainer, cardsSelector: cardContainer, caption: `Versions of ${name}`, records: versions });
+    renderResponsiveRecords({
+      ...options,
+      cardTitleField: "Version",
+      tableSelector: tableContainer,
+      cardsSelector: cardContainer,
+      caption: `Versions of ${name}`,
+      records: versions,
+    });
   });
 }
 
@@ -711,7 +714,6 @@ function renderCaptureTargets(targets, decisions = []) {
 
     detailContent.append(metadata, advanced);
 
-    const actions = node("div", undefined, "action-row");
     const capture = button("Take screenshot now", "secondary");
     capture.addEventListener("click", async () => {
       capture.disabled = true;
@@ -727,7 +729,6 @@ function renderCaptureTargets(targets, decisions = []) {
       } catch (error) { showMessage(error.message, true, "sites"); }
       finally { capture.disabled = false; }
     });
-    actions.append(capture);
     const removeSite = button("Remove capture site", "danger");
     removeSite.addEventListener("click", async () => {
       const description = `Remove ${target.display_url} from managed capture sites? Future screenshots will stop. Existing playlist versions will keep their last saved image.`;
@@ -769,10 +770,14 @@ function renderCaptureTargets(targets, decisions = []) {
         assessment.replaceChildren(node("p", error.message, "error-title"));
       } finally { assess.disabled = false; }
     });
-    detailContent.prepend(actions);
+    detailContent.prepend(createActionGroup([capture, removeActions], {
+      label: `Actions for capture site ${siteName}`,
+      className: "action-row",
+      ownerDocument: document,
+    }));
     if (metadata.dataset.assessment) assessmentDisclosure.append(node("p", metadata.dataset.assessment, "muted"));
     assessmentDisclosure.append(assess, assessment);
-    detailContent.append(assessmentDisclosure, removeActions);
+    detailContent.append(assessmentDisclosure);
     detail.append(detailContent);
     content.append(detail);
     card.append(preview, content);
@@ -894,10 +899,27 @@ function renderApiDashboards(dashboards) {
       const retryDetail = retryScheduled ? ` · next retry ${formatTimestamp(dashboard.retry_after_at)}` : "";
       content.append(node("p", `Queue recovery attempts ${dashboard.recovery_attempts}${retryDetail}`, "muted"));
     }
-    if (dashboard.api_last_fetch_at) content.append(node("p", `Last successful source fetch ${formatTimestamp(dashboard.api_last_fetch_at)}`, "muted"));
-    if (dashboard.api_last_image_at) content.append(node("p", `Image last changed ${formatTimestamp(dashboard.api_last_image_at)}`, "muted"));
-    if (dashboard.current_size != null) content.append(node("p", `Latest PNG ${formatBytes(dashboard.current_size)} · ${dashboard.viewport_width} × ${dashboard.viewport_height} px`, "muted"));
-    if (dashboard.api_fetch_ms !== null && dashboard.api_fetch_ms !== undefined) content.append(node("p", `Last run: API fetch ${dashboard.api_fetch_ms} ms · rendering ${dashboard.api_render_ms ?? 0} ms · capture work ${dashboard.api_total_ms ?? 0} ms · asset ${dashboard.api_asset_reused ? "reused" : "created"}`, "muted"));
+    const latestCaptureDetails: Array<{ label: string; value: string }> = [];
+    if (dashboard.api_last_fetch_at) latestCaptureDetails.push({ label: "Last successful source fetch", value: formatTimestamp(dashboard.api_last_fetch_at) });
+    if (dashboard.api_last_image_at) latestCaptureDetails.push({ label: "Image last changed", value: formatTimestamp(dashboard.api_last_image_at) });
+    if (dashboard.current_size != null) latestCaptureDetails.push({
+      label: "Latest PNG",
+      value: `${formatBytes(dashboard.current_size)} · ${dashboard.viewport_width} × ${dashboard.viewport_height} px`,
+    });
+    if (dashboard.api_fetch_ms !== null && dashboard.api_fetch_ms !== undefined) latestCaptureDetails.push({
+      label: "Last run",
+      value: `API fetch ${dashboard.api_fetch_ms} ms · rendering ${dashboard.api_render_ms ?? 0} ms · capture work ${dashboard.api_total_ms ?? 0} ms · asset ${dashboard.api_asset_reused ? "reused" : "created"}`,
+    });
+    if (latestCaptureDetails.length) {
+      content.append(createDisclosure("Latest capture details", [createDefinitionList(latestCaptureDetails, {
+        className: "capture-target__latest-list",
+        ownerDocument: document,
+      })], {
+        className: "capture-target__latest-details",
+        contentClassName: "capture-target__latest-details-content",
+        ownerDocument: document,
+      }));
+    }
     if (dashboard.last_error) content.append(node("p", dashboard.last_error, "capture-target__error error-title"));
     const configuredSources = new Map<string, any>((dashboard.configuration?.sources ?? []).map((source: any): [string, any] => [source.id, source]));
     const sourceDetails = node("details", undefined, "api-dashboard-source-health");
@@ -925,7 +947,6 @@ function renderApiDashboards(dashboards) {
     sourceDetails.append(sourceList);
     content.append(sourceDetails);
     content.append(renderApiDashboardMetrics(dashboard));
-    const actions = node("div", undefined, "form-actions");
     const run = button("Refresh now", "secondary");
     run.addEventListener("click", async () => {
       run.disabled = true;
@@ -938,7 +959,7 @@ function renderApiDashboards(dashboards) {
       try { await api(`/admin/api/api-dashboards/${encodeURIComponent(dashboard.capture_id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !dashboard.enabled }) }); await refresh(); }
       catch (error) { showMessage(error.message, true, "dashboards"); }
     });
-    const remove = button("Remove", "quiet");
+    const remove = button("Remove dashboard", "danger");
     remove.addEventListener("click", async () => {
       try {
         await confirmBeforeAction(
@@ -949,7 +970,15 @@ function renderApiDashboards(dashboards) {
         await refresh();
       } catch (error) { showMessage(error.message, true, "dashboards"); }
     });
-    actions.append(run, toggle, remove);
+    const actions = createActionGroup([
+      run,
+      toggle,
+      actionDisclosure(`More actions for ${dashboard.name}`, [remove]),
+    ], {
+      label: `Actions for dashboard ${dashboard.name}`,
+      className: "form-actions dashboard-actions",
+      ownerDocument: document,
+    });
     content.append(actions);
     const editor = node("details", undefined, "capture-target__details");
     editor.append(node("summary", "Edit dashboard settings"));
@@ -1129,9 +1158,14 @@ function deviceActionButtons(device, layout) {
     });
     moreActions.push(rotate);
   }
-  const actions = node("div", undefined, layout === "card" ? "card-actions" : "table-actions");
-  actions.append(...buttons, actionDisclosure(`More actions for ${device.device_id}`, moreActions));
-  return actions;
+  return createActionGroup([
+    ...buttons,
+    actionDisclosure(`More actions for ${device.device_id}`, moreActions),
+  ], {
+    label: `Actions for device ${device.device_id}`,
+    className: layout === "card" ? "card-actions" : "table-actions",
+    ownerDocument: document,
+  });
 }
 
 function healthBadge(health) {
@@ -1205,19 +1239,20 @@ function healthDetails(device) {
 function deviceDetails(device) {
   const details = node("details", undefined, "device-details");
   details.append(node("summary", "Device details"));
-  const list = node("dl", undefined, "device-details__list");
-  const fields = [
-    ["Authentication", device.auth_type === "key" ? "Key-based" : "Legacy token"],
-    ["Last report", formatTimestamp(device.health?.received_at)],
-    ["Playlist", device.health?.applied_playlist_id
-      ? `${device.health.applied_playlist_id} / ${compactIdentifier(device.health.applied_revision)}`
-      : "Not reported"],
-  ];
-  fields.forEach(([label, value]) => {
-    const item = node("div");
-    item.append(node("dt", label), node("dd", value));
-    list.append(item);
-  });
+  let playlist: HTMLElement | string = "Not reported";
+  if (device.health?.applied_playlist_id) {
+    playlist = node("span", undefined, "device-details__playlist");
+    playlist.append(
+      node("span", device.health.applied_playlist_id),
+      document.createTextNode(" / "),
+      identifier(device.health.applied_revision, "playlist revision", "device"),
+    );
+  }
+  const list = createDefinitionList([
+    { label: "Authentication", value: device.auth_type === "key" ? "Key-based" : "Legacy token" },
+    { label: "Last report", value: formatTimestamp(device.health?.received_at) },
+    { label: "Playlist", value: playlist },
+  ], { className: "device-details__list", ownerDocument: document });
   details.append(list, healthDetails(device));
   return details;
 }
@@ -1265,7 +1300,6 @@ function renderDevices(devices, activePlaylist) {
 }
 
 function pendingRequestActions(request, layout) {
-  const actions = node("div", undefined, layout === "card" ? "card-actions" : "table-actions");
   const approve = button("Approve", "primary");
   approve.addEventListener("click", async () => {
     try {
@@ -1310,8 +1344,11 @@ function pendingRequestActions(request, layout) {
       await refresh();
     } catch (error) { showMessage(error.message, true, "device"); }
   });
-  actions.append(approve, reject);
-  return actions;
+  return createActionGroup([approve, reject], {
+    label: `Actions for enrollment request from ${request.device_id}`,
+    className: layout === "card" ? "card-actions" : "table-actions",
+    ownerDocument: document,
+  });
 }
 
 function renderPendingEnrollments(requests) {
@@ -1379,15 +1416,10 @@ function renderAuditDetails(metadata) {
   if (!details.length) return node("span", "—", "muted");
   const disclosure = node("details", undefined, "audit-details");
   disclosure.append(node("summary", `View details (${details.length})`));
-  const list = node("dl", undefined, "audit-details__list");
-  details.forEach(({ label, value }) => {
-    const item = node("div");
-    const description = node("dd");
-    if (/^[A-Za-z0-9._:-]{25,}$/.test(value)) description.append(identifier(value, label, "activity"));
-    else description.textContent = value;
-    item.append(node("dt", label), description);
-    list.append(item);
-  });
+  const list = createDefinitionList(details.map(({ label, value }) => ({
+    label,
+    value: /^[A-Za-z0-9._:-]{25,}$/.test(value) ? identifier(value, label, "activity") : value,
+  })), { className: "audit-details__list", ownerDocument: document });
   disclosure.append(list);
   return disclosure;
 }

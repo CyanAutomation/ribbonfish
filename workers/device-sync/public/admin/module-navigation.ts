@@ -71,7 +71,13 @@ export function initModuleNavigation(): void {
   const navigationToggle = document.getElementById("module-navigation-toggle") as HTMLButtonElement;
   enhanceModulePageHeaders(sections);
   enhanceManagementToolbars();
-  createSidebarController({ shell, sidebar: navigation, toggleButton: navigationToggle });
+  const narrowViewport = window.matchMedia?.("(max-width: 56rem)").matches ?? false;
+  createSidebarController({
+    shell,
+    sidebar: navigation,
+    toggleButton: navigationToggle,
+    initialExpanded: !narrowViewport,
+  });
 
   function render(): void {
     const id = decodeURIComponent(location.hash.slice(1));
