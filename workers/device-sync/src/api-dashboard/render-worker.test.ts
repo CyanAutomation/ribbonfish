@@ -21,6 +21,29 @@ function visualScenarios(base: { width: number; height: number; sources: any[] }
   }
   const clone = () => structuredClone(healthy);
   const scenarios = [{ name: "all-services-operational", value: clone() }];
+  const officeSource = (id: string, displayName: string, hostname: string, names: string[]) => {
+    const groups = [{ id: `${id}-customer`, name: "Customer services", order: 0 }, { id: `${id}-shared`, name: "Shared services", order: 1 }];
+    const components = [
+      { id: groups[0].id, name: groups[0].name, status: "operational", sampledAt: null, groupId: null, groupName: null, isGroup: true, groupOrder: 0, componentOrder: 0 },
+      ...names.slice(0, 4).map((name, index) => ({ id: `${id}-customer-${index}`, name, status: "operational", sampledAt: null, groupId: groups[0].id, groupName: groups[0].name, groupOrder: 0, componentOrder: index + 1 })),
+      { id: groups[1].id, name: groups[1].name, status: "operational", sampledAt: null, groupId: null, groupName: null, isGroup: true, groupOrder: 1, componentOrder: 5 },
+      ...names.slice(4).map((name, index) => ({ id: `${id}-shared-${index}`, name, status: "operational", sampledAt: null, groupId: groups[1].id, groupName: groups[1].name, groupOrder: 1, componentOrder: index + 6 })),
+    ];
+    return {
+      id, provider: "atlassian-statuspage", displayName, hostname,
+      fetchedAt: "2026-11-05T12:00:00.000Z", freshness: "fresh", status: "operational",
+      statusDescription: "All systems operational", groups, components, incidents: [],
+      maintenance: [{ id: `${id}-maintenance`, name: "Sample flight-planning service v4.2.0 update", status: "scheduled", impact: "maintenance", updatedAt: "2026-11-05T11:45:00.000Z", scheduledFor: "2026-11-06T02:00:00.000Z" }],
+    };
+  };
+  scenarios.push({ name: "office-statuspage-display", value: {
+    width: base.width,
+    height: base.height,
+    sources: [
+      officeSource("west", "West region services", "status-west.example.net", ["Flight search", "Booking API", "Check-in", "Payment service", "Public website", "Notifications"]),
+      officeSource("north", "North region services", "status-north.example.net", ["Search API", "Booking API", "Mobile check-in", "Payment service", "Public website", "Messaging"]),
+    ],
+  } });
   const degraded = clone();
   degraded.sources[0].components[0].status = "degraded";
   degraded.sources[0].status = "degraded";
@@ -34,7 +57,7 @@ function visualScenarios(base: { width: number; height: number; sources: any[] }
   incident.sources[0].incidents = [{ id: "incident-active", name: "Elevated API response times", status: "investigating", impact: "minor", updatedAt: "2026-11-05T11:58:00.000Z" }];
   scenarios.push({ name: "active-incident", value: incident });
   const maintenance = clone();
-  maintenance.sources[1].maintenance = [{ id: "maintenance-active", name: "Scheduled database cluster maintenance", status: "scheduled", impact: "maintenance", updatedAt: "2026-11-05T11:45:00.000Z", scheduledFor: "2026-11-06T02:00:00.000Z" }];
+  maintenance.sources[1].maintenance = [{ id: "maintenance-active", name: "Sample flight-planning service v4.2.0 update", status: "scheduled", impact: "maintenance", updatedAt: "2026-11-05T11:45:00.000Z", scheduledFor: "2026-11-06T02:00:00.000Z" }];
   maintenance.sources[1].components[0].status = "maintenance";
   scenarios.push({ name: "scheduled-maintenance", value: maintenance });
   const partial = clone();
@@ -96,5 +119,5 @@ test("resvg WebAssembly and bundled font render under the Cloudflare Workers run
     await writeFile(join(outputDirectory, `${scenario.name}.png`), bytes);
     if (scenario.name === "realistic-seven-source") await writeFile(join(root, "../../examples/api-dashboard/status-dashboard.png"), bytes);
   }
-  assert.equal(scenarios.length, 10);
+  assert.equal(scenarios.length, 11);
 });
