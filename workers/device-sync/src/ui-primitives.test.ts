@@ -3,14 +3,19 @@ import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import {
   beginButtonBusy,
+  createDefinitionList,
+  createDisclosure,
   createFormField,
   createSettingsGroup,
   metricCard,
   scaleMeter,
   setStatusNotice,
+  statusBadge,
 } from "../public/admin/ui-primitives.ts";
 import {
   createBrandLockup,
+  createActionGroup,
+  createRecordCard,
   createLoadingIndicator,
   createPageHeader,
   createRefreshCoordinator,
@@ -25,6 +30,96 @@ function requiredMatch<T extends Element>(root: ParentNode, selector: string): T
   if (!match) throw new Error(`Expected test markup matching ${selector}`);
   return match;
 }
+
+test("definition lists render reusable, semantic label and value pairs", () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const { document } = dom.window;
+  const value = document.createElement("code");
+  value.textContent = "r-123456789012345678901234";
+  const list = createDefinitionList([
+    { label: "Version", value },
+    { label: "Items", value: 3 },
+    { label: "Created", value: null },
+  ], { className: "device-details__list", ownerDocument: document });
+
+  assert.equal(list.tagName, "DL");
+  assert.equal(list.classList.contains("device-details__list"), true);
+  assert.deepEqual([...list.querySelectorAll("dt")].map((item) => item.textContent), ["Version", "Items", "Created"]);
+  assert.deepEqual([...list.querySelectorAll("dd")].map((item) => item.textContent), ["r-123456789012345678901234", "3", "—"]);
+  assert.equal(list.querySelector("dd code"), value, "DOM values remain intact instead of being flattened to text");
+  dom.window.close();
+});
+
+test("record cards share a safe title, status, definition list, and action slot", () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const { document } = dom.window;
+  const version = document.createElement("code");
+  version.textContent = "r-123456789012345678901234";
+  const status = statusBadge("Ready", "neutral", document);
+  const actions = document.createElement("div");
+  actions.textContent = "Edit";
+  const card = createRecordCard({
+    title: "<img src=x onerror=alert(1)>",
+    status,
+    fields: [
+      { label: "Playlist", value: "operations" },
+      { label: "Version", value: version },
+      { label: "Items", value: 4 },
+    ],
+    hiddenFields: ["Playlist"],
+    actions,
+    className: "data-card playlist-version-card",
+    ownerDocument: document,
+  });
+
+  assert.equal(card.tagName, "ARTICLE");
+  assert.equal(card.classList.contains("playlist-version-card"), true);
+  assert.equal(card.querySelector("h3")?.textContent, "<img src=x onerror=alert(1)>");
+  assert.equal(card.querySelector("img"), null, "title text is never parsed as markup");
+  assert.equal(card.querySelector(".badge"), status);
+  assert.deepEqual([...card.querySelectorAll("dt")].map((item) => item.textContent), ["Version", "Items"]);
+  assert.equal(card.querySelector("dd code"), version);
+  assert.equal(card.lastElementChild, actions);
+  dom.window.close();
+});
+
+test("disclosures share native details semantics and a reusable content slot", () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const { document } = dom.window;
+  const content = document.createElement("p");
+  content.textContent = "Latest capture took 180 ms.";
+  const disclosure = createDisclosure("Latest capture details", [content], {
+    className: "capture-target__latest-details",
+    contentClassName: "capture-target__latest-details-content",
+    ownerDocument: document,
+  });
+
+  assert.equal(disclosure.tagName, "DETAILS");
+  assert.equal(disclosure.open, false);
+  assert.equal(disclosure.querySelector("summary")?.textContent, "Latest capture details");
+  assert.equal(disclosure.querySelector(".capture-target__latest-details-content p"), content);
+  dom.window.close();
+});
+
+test("action groups are named and preserve native controls in their visual order", () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const { document } = dom.window;
+  const refresh = document.createElement("button");
+  refresh.textContent = "Refresh";
+  const more = document.createElement("details");
+  more.append(document.createElement("summary"));
+  const group = createActionGroup([refresh, more], {
+    label: "Actions for Operations status",
+    className: "card-actions",
+    ownerDocument: document,
+  });
+
+  assert.equal(group.getAttribute("role"), "group");
+  assert.equal(group.getAttribute("aria-label"), "Actions for Operations status");
+  assert.deepEqual([...group.children], [refresh, more]);
+  assert.equal(group.classList.contains("card-actions"), true);
+  dom.window.close();
+});
 
 test("metric cards render labels and values as text in a reusable semantic component", () => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>");
