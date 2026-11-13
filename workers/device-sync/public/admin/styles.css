@@ -554,3 +554,10 @@ label { display: grid; gap: var(--space-1); color: var(--color-text-label); font
   .source-editor-toolbar { align-items: flex-start; flex-direction: column; }
   .source-editor-toolbar .toolbar__group--end { margin-inline-start: 0; }
 }
+
+/* Ribbonfish brand: S-mark identity and secondary infinity loader. */
+.brand-mark { display: block; flex: none; width: 54px; height: 30px; object-fit: contain; }
+.ribbonfish-loading { position: fixed; z-index: 30; inset: 0; display: grid; place-content: center; justify-items: center; gap: .65rem; background: rgba(245,247,250,.94); color: var(--color-brand-dark); font-weight: 650; }
+.ribbonfish-loading img { display: block; width: 128px; height: 70px; animation: ribbonfish-swim 1.7s ease-in-out infinite; }
+@keyframes ribbonfish-swim { 0%, 100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-7px) rotate(2deg); } }
+@media (prefers-reduced-motion: reduce) { .ribbonfish-loading img { animation: none; } }
