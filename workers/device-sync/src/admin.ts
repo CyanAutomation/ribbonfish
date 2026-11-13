@@ -75,6 +75,9 @@ const ADMIN_FILES = new Map([
   ["/admin/app.js", { key: "admin/app.js", contentType: "text/javascript; charset=utf-8", maxAge: 300 }],
   ["/admin/styles.css", { key: "admin/styles.css", contentType: "text/css; charset=utf-8", maxAge: 300 }],
   ["/admin/favicon.png", { key: "admin/favicon.png", contentType: "image/png", maxAge: 3600 }],
+  ["/admin/favicon.svg", { key: "admin/favicon.svg", contentType: "image/svg+xml", maxAge: 3600 }],
+  ["/admin/ribbonfish-mark.svg", { key: "admin/ribbonfish-mark.svg", contentType: "image/svg+xml", maxAge: 3600 }],
+  ["/admin/ribbonfish-loading.svg", { key: "admin/ribbonfish-loading.svg", contentType: "image/svg+xml", maxAge: 3600 }],
   ["/admin/capture-pending.png", { key: "admin/capture-pending.png", contentType: "image/png", maxAge: 3600 }],
 ]);
 
