@@ -1,6 +1,6 @@
 import { Resvg, initWasm } from "@resvg/resvg-wasm";
 import { healthLabel, overallHealth, type DashboardSource, type Health } from "./model.ts";
-import { svgEventPanel, svgFreshnessBadge, svgGroupSummary, svgHealthLegend, svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText, type SvgDashboardEvent } from "./render-components.ts";
+import { svgEventPanel, svgFreshnessBadge, svgGroupSummary, svgHealthLegend, svgHealthOverview, svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText, type SvgDashboardEvent } from "./render-components.ts";
 
 const MAX_PIXELS = 3840 * 2160;
 const MAX_PNG_BYTES = 32 * 1024 * 1024;
@@ -65,7 +65,12 @@ function buildServiceRows(source: DashboardSource): ServiceDisplayRow[] {
     if (!components.length) { rows.push({ kind: "empty", name }); return; }
     const issues = components.filter((component) => component.status !== "operational");
     const operationalCount = components.length - issues.length;
-    if (issues.length) {
+    if (source.provider === "atlassian-statuspage") {
+      const visible = components.slice(0, 8);
+      for (const component of visible) rows.push({ kind: "service", component });
+      const operationalOverflow = components.slice(8).filter((component) => component.status === "operational").length;
+      if (operationalOverflow) rows.push({ kind: "summary", count: operationalOverflow, history: [] });
+    } else if (issues.length) {
       issues.sort((a, b) => healthOrder(a.status) - healthOrder(b.status) || (a.componentOrder ?? 0) - (b.componentOrder ?? 0));
       for (const component of issues) rows.push({ kind: "service", component });
       if (operationalCount) rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components.filter((component) => component.status === "operational"), source.fetchedAt) });
@@ -99,15 +104,6 @@ function buildServiceRows(source: DashboardSource): ServiceDisplayRow[] {
   return rows;
 }
 
-function cardHeightFor(source: DashboardSource, scale: number): number {
-  const rows = buildServiceRows(source);
-  const hasDetails = rows.some((row) => row.kind === "summary" || row.kind === "service" || row.kind === "empty");
-  const eventCount = Math.min(3, source.incidents.length + source.maintenance.length);
-  const eventPanelHeight = eventCount ? 14 + eventCount * 44 : 0;
-  const serviceLines = rows.length;
-  return Math.max(194 * scale, 170 * scale + serviceLines * 24 * scale + (hasDetails ? 20 * scale : 0) + eventPanelHeight * scale + (source.error ? 26 * scale : 0));
-}
-
 function sourceHealth(source: DashboardSource): Health {
   if (source.disabled) return "unknown";
   const leafStates = source.components.filter((item) => !item.isGroup).map((item) => item.status);
@@ -129,52 +125,60 @@ function card(source: DashboardSource, x: number, y: number, width: number, heig
   const left = x + pad;
   const compact = height < s(170);
   const hasParentGroups = Boolean(source.groups?.length || source.components.some((component) => component.isGroup));
-  const contentY = y + s(compact ? 60 : source.error ? 140 : 120);
-  const lineH = s(compact ? 18 : Math.max(20, Math.min(24, height / 18)));
   const services = source.components.filter((component) => !component.isGroup);
   const serviceRows = buildServiceRows(source);
   const events: SvgDashboardEvent[] = [
     ...source.incidents.map((item) => ({ kind: "Incident" as const, name: item.name, status: item.status, impact: item.impact,
       color: item.impact === "critical" || item.impact === "major" ? colors.down : colors.degraded, updatedAt: item.updatedAt })),
     ...source.maintenance.map((item) => ({ kind: "Maintenance" as const, name: item.name, status: item.status, impact: item.impact,
-      color: colors.maintenance, updatedAt: item.updatedAt, scheduledFor: item.scheduledFor })),
+      color: colors.maintenance, updatedAt: item.updatedAt, scheduledFor: item.scheduledFor, referenceAt: source.fetchedAt })),
   ];
   const visibleEvents = events.slice(0, 3);
-  const eventAreaHeight = visibleEvents.length ? s(14 + visibleEvents.length * 44) : 0;
+  const eventAreaHeight = visibleEvents.length ? s(18 + visibleEvents.length * 54) : 0;
   const hasDetails = serviceRows.some((row) => row.kind === "service" || row.kind === "empty" || row.kind === "summary");
   const contentOffset = compact ? 60 : source.error ? 140 : 120;
+  const contentAreaHeight = Math.max(0, height - s(contentOffset) - eventAreaHeight - s(hasDetails ? 20 : 8));
+  const lineH = Math.min(s(compact ? 30 : 62), Math.max(s(compact ? 18 : 20), contentAreaHeight / Math.max(1, serviceRows.length)));
   const maxLines = Math.max(0, Math.floor((height - s(contentOffset) - eventAreaHeight - s(hasDetails ? 20 : 8)) / lineH));
   const showRows = serviceRows.slice(0, maxLines);
   while (showRows.at(-1)?.kind === "group") showRows.pop();
   const visibleServices = showRows.reduce((count, row) => count + (row.kind === "service" ? 1 : row.kind === "summary" ? row.count : 0), 0);
   const hiddenServices = Math.max(0, services.length - visibleServices);
   const hiddenGroups = Math.max(0, serviceRows.filter((row) => row.kind === "group").length - showRows.filter((row) => row.kind === "group").length);
+  const contentY = y + s(contentOffset) + Math.max(0, (contentAreaHeight - showRows.length * lineH) / 2);
   const sourceHealthLabel = health === "stale" ? "Stale" : healthLabel[health];
   const sourceStatusLabel = source.disabled ? "Disabled" : `Services: ${sourceHealthLabel}`;
-  const statusTextWidth = sourceStatusLabel.length * s(compact ? 6.5 : 8.5);
+  const statusTextWidth = sourceStatusLabel.length * s(compact ? 6.5 : 9);
   const statusTextX = x + width - pad - statusTextWidth;
   const statusDotX = statusTextX - s(14);
-  const titleMaxChars = Math.max(8, Math.floor((statusDotX - left - s(14)) / s(compact ? 10 : 17)));
+  const titleMaxChars = compact
+    ? Math.max(8, Math.floor((statusDotX - left - s(14)) / s(10)))
+    : Math.max(8, Math.floor((width - pad * 2 - s(16)) / s(17)));
   let svg = `<g>${svgPanel(x, y, width, height, scale, colors[health])}`;
-  svg += `<text x="${left}" y="${y + s(compact ? 25 : 42)}" fill="#f5f8fc" font-size="${s(compact ? 17 : 26)}" font-weight="700">${svgText(truncateText(source.displayName, titleMaxChars))}</text>`;
-  svg += svgStatusDot(statusDotX, y + s(compact ? 20 : 34), s(7), colors[health]);
-  svg += `<text x="${statusTextX}" y="${y + s(compact ? 26 : 41)}" fill="${svgText(colors[health])}" font-size="${s(compact ? 12 : 15)}" font-weight="700">${svgText(sourceStatusLabel)}</text>`;
+  svg += `<text x="${left}" y="${y + s(compact ? 25 : 42)}" fill="#f5f8fc" font-size="${s(compact ? 17 : 32)}" font-weight="700">${svgText(truncateText(source.displayName, titleMaxChars))}</text>`;
+  if (compact) {
+    svg += svgStatusDot(statusDotX, y + s(20), s(7), colors[health]);
+    svg += `<text x="${statusTextX}" y="${y + s(26)}" fill="${svgText(colors[health])}" font-size="${s(12)}" font-weight="700">${svgText(sourceStatusLabel)}</text>`;
+  }
   if (!compact) {
     const sourceIdentity = source.hostname ?? (source.provider === "uptime-kuma" ? "Uptime Kuma" : "Statuspage");
     const updated = formatFetched(source.fetchedAt);
     const freshnessLabel = [freshnessDescription(source), updated].filter(Boolean).join(" · ");
-    const freshnessTextWidth = freshnessLabel.length * s(7.5);
+    const freshnessTextWidth = freshnessLabel.length * s(9);
     const freshnessX = x + width - pad - freshnessTextWidth - s(12);
     const identityLimit = Math.max(8, Math.floor((freshnessX - left - s(16)) / s(8.5)));
-    svg += `<text x="${left}" y="${y + s(70)}" fill="#d0dbea" font-size="${s(15)}">${svgText(truncateText(sourceIdentity, identityLimit))}</text>`;
+    svg += `<text x="${left}" y="${y + s(70)}" fill="#d0dbea" font-size="${s(17)}">${svgText(truncateText(sourceIdentity, identityLimit))}</text>`;
     svg += svgFreshnessBadge(freshnessX, y + s(70), scale, freshnessLabel, freshnessColor(source));
+    svg += svgStatusDot(statusDotX, y + s(90), s(7), colors[health]);
+    svg += `<text x="${statusTextX}" y="${y + s(96)}" fill="${svgText(colors[health])}" font-size="${s(16)}" font-weight="700">${svgText(sourceStatusLabel)}</text>`;
     if (source.provider === "atlassian-statuspage" && source.statusDescription) {
-      svg += `<text x="${left}" y="${y + s(96)}" fill="#b9c9dc" font-size="${s(14)}">${svgText(truncateText(`Statuspage: ${source.statusDescription}`, Math.floor((width - pad * 2) / s(8))))}</text>`;
+      const statusDescriptionWidth = Math.max(0, statusDotX - left - s(16));
+      svg += `<text x="${left}" y="${y + s(96)}" fill="#b9c9dc" font-size="${s(16)}">${svgText(truncateText(`Statuspage: ${source.statusDescription}`, Math.floor(statusDescriptionWidth / s(8.5))))}</text>`;
     }
     if (source.error) svg += `<text x="${left}" y="${y + s(116)}" fill="#ffb86c" font-size="${s(14)}">${svgText(truncateText(source.error, Math.floor(width / s(9))))}</text>`;
   }
-  if (source.disabled) svg += `<text x="${left}" y="${y + s(compact ? 48 : 106)}" fill="#aab8ca" font-size="${s(17)}">Source is disabled and not polled</text>`;
-  else if (!services.length && !source.error && !hasParentGroups) svg += `<text x="${left}" y="${y + s(compact ? 48 : 106)}" fill="#aab8ca" font-size="${s(17)}">No component data available</text>`;
+  if (source.disabled) svg += `<text x="${left}" y="${contentY}" fill="#aab8ca" font-size="${s(17)}">Source is disabled and not polled</text>`;
+  else if (!services.length && !source.error && !hasParentGroups) svg += `<text x="${left}" y="${contentY}" fill="#aab8ca" font-size="${s(17)}">No component data available</text>`;
   showRows.forEach((row, index) => {
     const cy = contentY + index * lineH;
     if (row.kind === "group") {
@@ -220,17 +224,14 @@ export function dashboardSVG(sources: DashboardSource[], width = 1920, height = 
   const scale = Math.min(width / 1920, height / 1080);
   const pad = 48 * scale;
   const gap = 20 * scale;
-  const headerH = 170 * scale;
-  const columns = Math.min(sources.length || 1, 4, Math.max(1, Math.floor((width - 2 * pad + gap) / 430)));
+  const headerH = 195 * scale;
+  const minimumCardWidth = Math.max(360, 430 * scale);
+  const columns = Math.min(sources.length || 1, 4, Math.max(1, Math.floor((width - 2 * pad + gap) / minimumCardWidth)));
   const cardW = (width - 2 * pad - gap * (columns - 1)) / columns;
   const rows = Math.ceil(sources.length / columns);
   const orderedSources = [...sources].sort((a, b) => healthOrder(sourceHealth(a)) - healthOrder(sourceHealth(b)));
   const availableCardHeight = (height - headerH - pad - gap * Math.max(0, rows - 1)) / Math.max(rows, 1);
-  const rowHeights = Array.from({ length: rows }, (_, row) => {
-    const rowSources = orderedSources.slice(row * columns, (row + 1) * columns);
-    const desired = Math.max(176 * scale, ...rowSources.map((source) => cardHeightFor(source, scale)));
-    return Math.min(availableCardHeight, desired);
-  });
+  const rowHeights = Array.from({ length: rows }, () => availableCardHeight);
   const overall = overallHealth(sources);
   const activeSources = sources.filter((source) => !source.disabled);
   const totalServices = activeSources.reduce((sum, source) => sum + source.components.filter((component) => !component.isGroup).length, 0);
@@ -243,7 +244,7 @@ export function dashboardSVG(sources: DashboardSource[], width = 1920, height = 
   const staleSources = activeSources.filter((source) => source.freshness !== "fresh").length;
   const disabledSources = sources.length - activeSources.length;
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#0b1422"/>`;
-  svg += `<text x="${pad}" y="${60 * scale}" fill="#ffffff" font-family="Ribbon Sans" font-size="${36 * scale}" font-weight="700">Operations status</text>`;
+  svg += `<text x="${pad}" y="${60 * scale}" fill="#ffffff" font-family="Ribbon Sans" font-size="${42 * scale}" font-weight="700">Operations status</text>`;
   const statusCounts = [
     [downServices, "down"], [degradedServices, "degraded"], [staleServices, "stale"],
     [pendingServices, "pending"], [maintenanceServices, "in maintenance"], [unknownServices, "unknown"],
@@ -252,16 +253,26 @@ export function dashboardSVG(sources: DashboardSource[], width = 1920, height = 
   if (staleSources) reportedIssues.push(`${staleSources} stale or unavailable ${staleSources === 1 ? "source" : "sources"}`);
   const healthySummary = staleSources ? "" : totalServices ? `${totalServices} ${totalServices === 1 ? "service" : "services"} operational` : "No service data";
   const summary = `${sources.length} configured ${sources.length === 1 ? "source" : "sources"} · ${totalServices} active ${totalServices === 1 ? "service" : "services"}${disabledSources ? ` · ${disabledSources} disabled ${disabledSources === 1 ? "source" : "sources"}` : ""} · ${reportedIssues.length ? reportedIssues.join(" · ") : healthySummary}`;
-  svg += `<text x="${pad}" y="${100 * scale}" fill="#c0cede" font-family="Ribbon Sans" font-size="${17 * scale}">${svgText(summary)}</text>`;
+  svg += `<text x="${pad}" y="${94 * scale}" fill="#c0cede" font-family="Ribbon Sans" font-size="${19 * scale}">${svgText(summary)}</text>`;
+  const overview: Array<{ label: string; count: number; color: string }> = [];
+  const freshOperational = activeSources.reduce((sum, source) => sum + (source.freshness === "fresh" ? source.components.filter((component) => !component.isGroup && component.status === "operational").length : 0), 0);
+  if (freshOperational) overview.push({ label: "Operational", count: freshOperational, color: colors.operational });
+  for (const [count, label, health] of [
+    [downServices, "Down", "down"], [degradedServices, "Degraded", "degraded"], [staleServices, "Stale services", "stale"],
+    [pendingServices, "Pending", "pending"], [maintenanceServices, "Maintenance", "maintenance"], [unknownServices, "Unknown", "unknown"],
+  ] as const) if (count) overview.push({ label, count, color: colors[health] });
+  if (staleSources) overview.push({ label: "Stale sources", count: staleSources, color: colors.stale });
+  svg += svgHealthOverview(pad, 132 * scale, width - 2 * pad, scale, overview);
   svg += svgStatusBadge(width - pad - 320 * scale, 24 * scale, 320 * scale, 62 * scale, scale, healthLabel[overall], colors[overall]);
-  svg += svgHealthLegend(pad, 136 * scale, width - 2 * pad, scale);
-  if (staleSources) svg += `<text x="${width - pad - 320 * scale}" y="${112 * scale}" fill="#ffbd78" font-family="Ribbon Sans" font-size="${15 * scale}" font-weight="700">${staleSources} source${staleSources === 1 ? "" : "s"} stale or unavailable</text>`;
+  svg += svgHealthLegend(pad, 166 * scale, width - 2 * pad, scale);
   if (!sources.length) svg += `<text x="${pad}" y="${(headerH + 45 * scale)}" fill="#c0cede" font-family="Ribbon Sans" font-size="${20 * scale}">No status sources are configured.</text>`;
   orderedSources.forEach((source, index) => {
     const col = index % columns;
     const row = Math.floor(index / columns);
     const y = headerH + rowHeights.slice(0, row).reduce((sum, value) => sum + value + gap, 0);
-    svg += card(source, pad + col * (cardW + gap), y, cardW, rowHeights[row], scale);
+    const rowCount = Math.min(columns, orderedSources.length - row * columns);
+    const rowOffset = (columns - rowCount) * (cardW + gap) / 2;
+    svg += card(source, pad + rowOffset + col * (cardW + gap), y, cardW, rowHeights[row], scale);
   });
   svg += "</svg>";
   return svg;
