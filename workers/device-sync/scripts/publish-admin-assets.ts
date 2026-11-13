@@ -45,11 +45,14 @@ const files = [
   ["app.js", "text/javascript; charset=utf-8"],
   ["styles.css", "text/css; charset=utf-8"],
   ["favicon.png", "image/png"],
+  ["favicon.svg", "image/svg+xml"],
+  ["ribbonfish-mark.svg", "image/svg+xml"],
+  ["ribbonfish-loading.svg", "image/svg+xml"],
   ["capture-pending.png", "image/png"],
 ];
 
 for (const [file, contentType] of files) {
-  const source = file === "capture-pending.png" || file === "favicon.png"
+  const source = file === "capture-pending.png" || file === "favicon.png" || file.endsWith(".svg")
     ? resolve(workerDirectory, "public/admin", file)
     : resolve(buildDirectory, file);
   execFileSync("npx", [
