@@ -48,7 +48,7 @@ const overviewFixture = () => ({
   },
 });
 
-function openConsole(initialDashboards = []) {
+function openConsole(initialDashboards = [], { smallScreen = false } = {}) {
   const dom = new JSDOM(html, { url: "https://example.test/admin/", runScripts: "outside-only" });
   const { window } = dom;
   const calls = [];
@@ -56,6 +56,16 @@ function openConsole(initialDashboards = []) {
   const overview = overviewFixture();
   let apiDashboards = initialDashboards;
   let fail = false;
+  window.matchMedia = (query) => ({
+    matches: smallScreen && query === "(max-width: 56rem)",
+    media: query,
+    onchange: null,
+    addListener() {},
+    removeListener() {},
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent() { return false; },
+  });
   window.confirm = () => true;
   window.fetch = async (path, options = {}) => {
     calls.push(path);
@@ -149,6 +159,23 @@ test("management navigation shows the selected section and moves focus", { timeo
   }
 });
 
+test("management navigation starts collapsed on narrow screens and can be expanded", { timeout: 5000 }, async () => {
+  const { dom, window } = openConsole([], { smallScreen: true });
+  try {
+    await settle();
+    const navigation = window.document.querySelector("#module-navigation");
+    const toggle = window.document.querySelector("#module-navigation-toggle");
+    assert.equal(navigation.hidden, true);
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    assert.equal(window.document.querySelector("#dashboard-tiles").hidden, false);
+    toggle.click();
+    assert.equal(navigation.hidden, false);
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  } finally {
+    dom.window.close();
+  }
+});
+
 test("management modules share page headers and labeled control toolbars", { timeout: 5000 }, async () => {
   const { dom, window } = openConsole();
   try {
@@ -183,12 +210,19 @@ test("management modules share page headers and labeled control toolbars", { tim
       "0 devices", "0 awaiting approval",
     ]);
 
-    const playlistAction = window.document.querySelector('#playlist-section .page-header__actions a[href="#playlist-editor"]');
-    assert.equal(playlistAction.textContent, "Create playlist version");
-    const siteAction = window.document.querySelector('#sites-section .page-header__actions a[href="#capture-site-editor"]');
-    assert.equal(siteAction.textContent, "Add site");
-    const dashboardAction = window.document.querySelector('#dashboards-section .page-header__actions a[href="#api-dashboard-editor"]');
-    assert.equal(dashboardAction.textContent, "Add API dashboard");
+    for (const sectionID of ["sites-section", "dashboards-section", "playlist-section"]) {
+      assert.equal(window.document.querySelector(`#${sectionID} .page-header__actions`), null,
+        `${sectionID} keeps its editor action beside the editor instead of repeating it in the page heading`);
+    }
+    for (const [editorID, label] of [
+      ["capture-site-editor", "Add a site"],
+      ["api-dashboard-editor", "Add an API status dashboard"],
+      ["playlist-editor", "Create playlist version"],
+    ]) {
+      const editor = window.document.getElementById(editorID);
+      assert.equal(editor.open, false);
+      assert.equal(editor.querySelector("summary").textContent.trim(), label);
+    }
 
     const filters = window.document.querySelector(".capture-filters");
     assert.equal(filters.getAttribute("role"), "group");
@@ -202,14 +236,14 @@ test("management modules share page headers and labeled control toolbars", { tim
     assert.equal(sourceToolbar.getAttribute("aria-label"), "Dashboard source controls");
     assert.equal(sourceToolbar.querySelector("[data-add-dashboard-source]").textContent, "Add source");
 
-    await navigate(window, () => siteAction.click());
+    window.document.querySelector("#capture-site-editor > summary").click();
     const siteEditor = window.document.getElementById("capture-site-editor");
-    assert.equal(siteEditor.open, true, "the page action opens its existing native editor disclosure");
-    assert.equal(window.document.activeElement, siteEditor.querySelector("summary"), "focus moves to the editor disclosure trigger");
-    await navigate(window, () => dashboardAction.click());
+    assert.equal(siteEditor.open, true, "the editor opens from its native disclosure trigger");
+    window.document.querySelector("#api-dashboard-editor > summary").click();
     const dashboardEditor = window.document.getElementById("api-dashboard-editor");
-    assert.equal(dashboardEditor.open, true, "the dashboard page action opens its native editor disclosure");
-    assert.equal(window.document.activeElement, dashboardEditor.querySelector("summary"));
+    assert.equal(dashboardEditor.open, true, "the dashboard editor opens from its native disclosure trigger");
+    window.document.querySelector("#playlist-editor > summary").click();
+    assert.equal(window.document.getElementById("playlist-editor").open, true);
   } finally {
     dom.window.close();
   }
@@ -306,8 +340,14 @@ test("API dashboard editor adds provider-aware sources and preserves existing ID
     assert.ok(card, "existing dashboard is listed in its own module");
     assert.match(card.textContent, /Last successful capture/);
     assert.match(card.textContent, /Image last changed/);
-    assert.match(card.textContent, /PNG 122\.1 KB/);
     assert.match(card.textContent, /capture work 300 ms/);
+    const latestCaptureDetails = card.querySelector(".capture-target__latest-details");
+    assert.ok(latestCaptureDetails);
+    assert.equal(latestCaptureDetails.open, false, "latest capture diagnostics stay out of the first-read summary");
+    assert.deepEqual([...latestCaptureDetails.querySelectorAll("dt")].map((term) => term.textContent), [
+      "Image last changed", "Latest PNG", "Last run",
+    ]);
+    assert.match(latestCaptureDetails.querySelectorAll("dd")[1].textContent, /122\.1 KB/);
     assert.match(card.textContent, /Efficiency · 8 recent jobs/);
     assert.match(card.textContent, /API fetch duration/);
     assert.match(card.textContent, /Capture work wall time/);
@@ -317,6 +357,10 @@ test("API dashboard editor adds provider-aware sources and preserves existing ID
     assert.match(card.textContent, /Kuma: Disabled/);
     assert.match(card.textContent, /Status: Fresh/);
     assert.match(card.textContent, /Last-Modified|ETag/);
+    const removeActions = [...card.querySelectorAll("details")].find((details) => details.querySelector("summary")?.textContent.includes("More actions"));
+    assert.ok(removeActions);
+    assert.equal(removeActions.open, false);
+    assert.equal(removeActions.querySelector("button.button--danger")?.textContent, "Remove dashboard");
     assert.deepEqual([...window.document.querySelectorAll("#dashboards-section > .page-header .page-header__meta span")].map((item) => item.textContent), [
       "1 API dashboards", "0 need attention",
     ]);
@@ -508,6 +552,9 @@ test("playlist revisions stay grouped and refresh errors can be dismissed", asyn
     assert.equal(window.document.querySelectorAll("#playlists .playlist-group").length, 2);
     assert.equal(window.document.querySelectorAll("#playlists-mobile .playlist-group").length, 2);
     assert.equal(window.document.querySelector("#playlists .playlist-group tbody").rows.length, 2);
+    const operationsCards = window.document.querySelectorAll("#playlists-mobile .playlist-group:first-child .data-card");
+    assert.deepEqual([...operationsCards].map((card) => card.querySelector("h3")?.textContent), ["rev-one", "rev-two"]);
+    assert.equal(operationsCards[0].querySelector("dt")?.textContent, "Show each item for", "playlist ID is carried by the group heading instead of repeated in every revision card");
 
     setFailure(true);
     window.document.querySelector("#reload").click();

@@ -98,7 +98,6 @@
       <section id="sites-section" class="panel" aria-labelledby="sites-title">
         <div class="section-heading">
           <div><p class="eyebrow">Sites</p><h2 id="sites-title">Capture sites</h2></div>
-          <a class="button button--primary" href="#capture-site-editor">Add site</a>
         </div>
         <p class="muted">Register pages and review their screenshot schedules here. Sites are independent of playlists; only reviewed sites can be added to a playlist. Scheduled captures run when a site is included in the active playlist.</p>
         <div class="alert alert--success status-banner" data-feedback-slot="sites" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss site message">Dismiss</button></div>
@@ -130,7 +129,6 @@
       <section id="dashboards-section" class="panel" aria-labelledby="dashboards-title">
         <div class="section-heading">
           <div><p class="eyebrow">API status</p><h2 id="dashboards-title">Capture dashboards</h2></div>
-          <a class="button button--primary" href="#api-dashboard-editor">Add API dashboard</a>
         </div>
         <p class="muted">Configure public API status sources and inspect generated dashboard images. These captures use the Worker renderer and do not consume Browser Run minutes.</p>
         <div class="alert alert--success status-banner" data-feedback-slot="dashboards" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss dashboard message">Dismiss</button></div>
@@ -170,20 +168,17 @@
 
       <section id="capture-efficiency-section" class="panel" aria-labelledby="capture-efficiency-title">
         <div class="section-heading"><div><p class="eyebrow">Capture operations</p><h2 id="capture-efficiency-title">Capture efficiency and Browser Run usage</h2></div></div>
-        <p class="muted">Review daily Browser Run usage, the estimated cost of current schedules, and recent capture outcomes.</p>
+        <p class="muted">Review daily Browser Run usage, forecast runtime for current schedules, and recent capture outcomes.</p>
         <div id="capture-efficiency-content" role="region" aria-label="Browser Run usage and capture forecast" aria-live="polite"></div>
       </section>
 
       <section id="playlist-section" class="panel" aria-labelledby="playlist-title">
         <div class="section-heading">
           <div><p class="eyebrow">Playlists</p><h2 id="playlist-title">Playlist versions</h2></div>
-          <a class="button button--primary" href="#playlist-editor">Create playlist version</a>
         </div>
         <p class="muted">Manage versions, images, and reviewed capture content for device playlists.</p>
         <div id="playlist-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="playlist" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss playlist message">Dismiss</button></div>
-        <div id="playlists" class="table-scroll desktop-data" role="region" aria-label="Playlist versions" tabindex="0"></div>
-        <div id="playlists-mobile" class="mobile-card-list" role="region" aria-label="Playlist versions"></div>
-        <details id="playlist-editor" class="playlist-editor">
+        <details id="playlist-editor" class="playlist-editor editor-disclosure">
           <summary id="playlist-editor-summary">Create playlist version</summary>
           <form id="playlist-form" class="form-grid">
           <p id="playlist-form-help" class="field--wide muted">Add PNG images and select reviewed sites from the library. Saved versions stay available until you delete the playlist.</p>
@@ -212,6 +207,8 @@
           <p id="playlist-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
           </form>
         </details>
+        <div id="playlists" class="table-scroll desktop-data" role="region" aria-label="Playlist versions" tabindex="0"></div>
+        <div id="playlists-mobile" class="mobile-card-list" role="region" aria-label="Playlist versions"></div>
       </section>
 
       <section id="device-section" class="panel" aria-labelledby="device-title">

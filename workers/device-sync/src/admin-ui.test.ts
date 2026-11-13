@@ -97,6 +97,9 @@ test("shared page headers and toolbars wrap without hiding page controls", async
   assert.ok(declarations(".page-header__actions").some(([property, value]) => property === "flex-wrap" && value === "wrap"));
   assert.ok(declarations(".toolbar").some(([property, value]) => property === "flex-wrap" && value === "wrap"));
   assert.ok(declarations(".toolbar__group--end").some(([property, value]) => property === "margin-inline-start" && value === "auto"));
+  assert.ok(declarations(".definition-list").some(([property, value]) => property === "display" && value === "grid"));
+  assert.ok(declarations(".action-group, .form-actions, .table-actions").some(([property, value]) => property === "display" && value === "flex"));
+  assert.ok(declarations(".action-group, .form-actions, .table-actions").some(([property, value]) => property === "flex-wrap" && value === "wrap"));
 
   let narrowHeaderStacks = false;
   stylesheet.walkAtRules("media", (media) => {
@@ -196,7 +199,31 @@ test("management page prioritizes task navigation and defers optional panels", a
     assert.equal(attribute(panel, "open"), undefined, `${id} starts collapsed`);
     assert.ok(descendants(panel).some((node) => node.tagName === "summary"));
   }
+  for (const [sectionID, editorID, listID] of [
+    ["sites-section", "capture-site-editor", "capture-target-list"],
+    ["dashboards-section", "api-dashboard-editor", "api-dashboard-list"],
+    ["playlist-section", "playlist-editor", "playlists"],
+  ]) {
+    const section = byID(nodes, sectionID);
+    const editor = byID(nodes, editorID);
+    assert.equal(editor.tagName, "details");
+    assert.match(attribute(editor, "class"), /editor-disclosure/);
+    assert.equal(descendants(editor).some((node) => node.tagName === "summary"), true);
+    assert.ok(descendants(section).indexOf(editor) < descendants(section).indexOf(byID(nodes, listID)),
+      `${editorID} appears before its managed records`);
+    const heading = descendants(section).find((node) => node.tagName === "div" && attribute(node, "class")?.includes("section-heading"));
+    assert.ok(!descendants(heading).some((node) => node.tagName === "a" || node.tagName === "button"),
+      `${sectionID} avoids repeating the editor trigger in its heading`);
+  }
   assert.ok(byID(nodes, "fleet-attention"));
+});
+
+test("capture efficiency introduction describes runtime forecasts instead of monetary cost", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const section = parseHTML(html).find((node) => attribute(node, "id") === "capture-efficiency-section");
+  const copy = descendants(section).map((node) => node.value ?? "").join(" ");
+  assert.match(copy, /forecast runtime for current schedules/i);
+  assert.doesNotMatch(copy, /estimated cost/i);
 });
 
 test("pending enrollment details start collapsed in a native disclosure", async () => {
