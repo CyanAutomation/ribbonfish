@@ -1,5 +1,11 @@
 import { createSingleFlight, formatTimestamp } from "./ui-utils.ts";
-import { linkButton, node, statusBadge } from "./ui-primitives.ts";
+import {
+  createDefinitionList,
+  linkButton,
+  node,
+  statusBadge,
+  type DefinitionListItem,
+} from "./ui-primitives.ts";
 
 export interface BrandLockupOptions {
   brandName?: string;
@@ -216,6 +222,57 @@ export function createToolbar(options: ToolbarOptions): HTMLElement {
   });
 
   return toolbar;
+}
+
+export interface ActionGroupOptions {
+  label: string;
+  className?: string;
+  ownerDocument?: Document;
+}
+
+/** Group an entity's actions with a name that remains meaningful to assistive technology. */
+export function createActionGroup(actions: HTMLElement[], options: ActionGroupOptions): HTMLElement {
+  const ownerDocument = options.ownerDocument ?? document;
+  const className = ["action-group", options.className].filter(Boolean).join(" ");
+  const group = node("div", undefined, className, ownerDocument);
+  group.setAttribute("role", "group");
+  group.setAttribute("aria-label", options.label);
+  group.append(...actions);
+  return group;
+}
+
+export interface RecordCardOptions {
+  title: string | HTMLElement;
+  fields: DefinitionListItem[];
+  status?: HTMLElement;
+  actions?: HTMLElement;
+  hiddenFields?: string[];
+  className?: string;
+  ownerDocument?: Document;
+}
+
+/** Render the common responsive record card used by playlist, device, and activity lists. */
+export function createRecordCard(options: RecordCardOptions): HTMLElement {
+  const ownerDocument = options.ownerDocument ?? document;
+  const card = node("article", undefined, options.className ?? "data-card", ownerDocument);
+  const header = node("div", undefined, "data-card__header", ownerDocument);
+  const heading = node("h3", undefined, undefined, ownerDocument);
+  if (typeof options.title === "string") heading.textContent = options.title;
+  else heading.append(options.title);
+  header.append(heading);
+  if (options.status) header.append(options.status);
+  card.append(header);
+
+  const hiddenFields = new Set(options.hiddenFields ?? []);
+  const visibleFields = options.fields.filter(({ label }) => !hiddenFields.has(label));
+  if (visibleFields.length) {
+    card.append(createDefinitionList(visibleFields, {
+      className: "data-card__details",
+      ownerDocument,
+    }));
+  }
+  if (options.actions) card.append(options.actions);
+  return card;
 }
 
 /** Add optional collapse/reveal behavior while leaving native navigation links intact. */
