@@ -1,27 +1,41 @@
 # Ribbonfish brand assets
 
-Ribbonfish uses two coordinated but distinct marks inspired by an elongated ribbonfish.
+Ribbonfish uses two coordinated but distinct **original vector marks**. The formal identity is a ribbonfish whose silver-to-cyan body sweeps into an S; the secondary loading mascot is a fish flowing around a continuous infinity loop. Both are rebuilt as editable SVG shapes with gradients, **not PNGs embedded inside SVGs**.
 
-- **Ribbon S** — official product identity, shown in the management header and the favicon. Its curved, streamlined silhouette forms a loose S.
-- **Infinity Ribbon** — secondary mascot, reserved for loading, capture and refresh states. The loop suggests ongoing capture and dashboard rotation.
+## Official identity: Ribbon S
 
-## Source assets
+![Ribbon S vector mark](../workers/device-sync/public/admin/ribbonfish-mark.svg)
 
-All source SVGs live under `workers/device-sync/public/admin/` and use transparent backgrounds except for the dark square favicon.
+Use the **Ribbon S** in the management UI, docs, headers and product branding. Its recognisable features are the long silvery head, four aqua dorsal fins, deep navy outlines, expressive eye, dark gill contour and the curled cyan tail.
 
-| Asset | Intended use |
+## Secondary mascot: Infinity Ribbon
+
+![Infinity Ribbon vector mascot](../workers/device-sync/public/admin/ribbonfish-loading.svg)
+
+Use the **Infinity Ribbon** as loading and capture art, not as the default product logo. It has its own vector silhouette and is animated gently by the management UI's CSS. The animation stops under `prefers-reduced-motion: reduce`. The asset can be displayed statically elsewhere.
+
+## Favicon
+
+![Ribbonfish favicon](../workers/device-sync/public/admin/favicon.svg)
+
+The favicon is a separately simplified vector, designed for 16–64 px tab sizes. It preserves the S motif, navy rounded-square background, eye and cyan fins without requiring details that are illegible at small sizes. `favicon.png` is a matching 64×64 PNG fallback.
+
+## Source assets and usage
+
+| Asset | Usage |
 | --- | --- |
-| `ribbonfish-mark.svg` | Official primary identity (transparent) |
-| `favicon.svg` | Modern browser tab icon (dark navy background) |
-| `ribbonfish-loading.svg` | Animated loader through CSS; stationary fallback when reduced motion is requested |
+| `workers/device-sync/public/admin/ribbonfish-mark.svg` | Official standalone logo / management header |
+| `workers/device-sync/public/admin/ribbonfish-loading.svg` | Loading and capture mascot / CSS animation |
+| `workers/device-sync/public/admin/favicon.svg` | Preferred browser favicon |
+| `workers/device-sync/public/admin/favicon.png` | Legacy PNG favicon fallback |
 
-The management Worker publishes these SVG files to R2 via `npm run publish:admin:local` or `npm run publish:admin:production` and serves them at `/admin/<filename>`.
+The management Worker serves these under `/admin/`. The existing `npm run publish:admin:local` and `npm run publish:admin:production` commands upload the SVGs and PNG to R2. The loading overlay is included in the markup and a `setRibbonfishLoading(boolean)` helper is available for integration with asynchronous operations, but it is hidden by default.
 
-## Styling
+## Palette
 
-- Navy ink: `#0c304d` / icon background `#0b2943`
-- Cyan: `#45d2ec`
-- Aqua: `#41f7e9`
-- White highlight: `#f5fdff`
+- Navy outlines: `#07365a`, `#0b2943`
+- Cyan and aqua fins: `#00fbed`, `#16dbeb`
+- Blue ribbon: `#007db9`, `#168abb`
+- Silver / white highlights: `#ecfbff`, `#f9feff`
 
-Keep original proportions when resizing. Avoid adding dashboard graphics to the formal mark or using the animated mascot as the primary favicon. The loader is decorative; its accompanying text provides the accessible status. Respect `prefers-reduced-motion`.
+Never stretch the artwork out of aspect ratio or add dashboard/pixel motifs inside the official mark. Use the simplified favicon at small sizes, rather than shrinking the detailed full mark. Keep animations non-essential and honour reduced-motion preferences.
