@@ -11,12 +11,11 @@ Use this skill for changes to `.github/workflows/`, CI triggers, deployment auto
 
 ## Workflow map
 
-- `agent.yml` runs Go checks for agent changes and pull requests.
-- `arm-container-smoke.yml` validates Compose and runs simulator profiles in ARM containers; it is not physical hardware acceptance.
-- `device-sync.yml` builds admin assets, tests the Worker, and dry-runs both Worker configurations.
-- `deploy-device-sync.yml` validates and then deploys both Workers and publishes the management panel on protected `main` pushes matching its path filter. It checks migration readiness but does not apply D1 migrations.
-- `publish-agent.yml` calls `verify-agent.yml`, and the ARM smoke workflow, then publishes ARM images to GHCR on protected `main` pushes affecting `agent/**`.
-- `docker-publish.yml` handles Docker Hub multi-architecture publication and latest-tag promotion.
+- `agent.yml` runs Go checks on every pull request. `publish-agent.yml` calls the same verifier for agent changes on protected `main` pushes.
+- `arm-container-smoke.yml` validates Compose and runs simulator profiles in ARM containers on pull requests and Raspberry Pi example changes; it is not physical hardware acceptance.
+- `device-sync.yml` builds admin assets, tests the Worker, dry-runs both Worker configurations, and deploys both Workers plus the management panel on protected `main` pushes after migration readiness and release-freshness checks.
+- `publish-agent.yml` runs Go verification and source smoke once, then publishes ARM images to GHCR and a multi-architecture image to Docker Hub. Each immutable image is scanned, attested, and smoke-tested before its moving tag is promoted.
+- `dependency-review.yml` checks pull requests for newly introduced vulnerable dependencies.
 - `workflow-lint.yml` runs actionlint on workflow changes.
 
 ## Workflow change checklist
