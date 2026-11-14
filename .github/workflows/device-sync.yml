@@ -7,7 +7,6 @@ on:
     paths:
       - "workers/device-sync/**"
       - ".github/workflows/device-sync.yml"
-      - ".github/workflows/deploy-device-sync.yml"
       - ".github/scripts/release-freshness.mts"
   # Keep this unfiltered so required checks are reported for every PR.
   pull_request:
@@ -52,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
-      name: production
+      name: cloudflare
       url: https://ribbonfish.scheimann.workers.dev
     concurrency:
       group: cloudflare-ribbonfish-production
@@ -84,21 +83,21 @@ jobs:
         run: node scripts/migration-readiness.ts
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       - name: Deploy device-sync Worker
         if: steps.freshness.outcome == 'success' && steps.freshness.outputs.current == 'true' && steps.migration.outcome == 'success'
         working-directory: workers/device-sync
         run: npm run deploy:production
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       - name: Publish management assets and deploy Worker
         if: steps.freshness.outcome == 'success' && steps.freshness.outputs.current == 'true' && steps.migration.outcome == 'success'
         working-directory: workers/device-sync
         run: npm run deploy:management
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       - name: Check deployed Worker readiness
         if: steps.freshness.outcome == 'success' && steps.freshness.outputs.current == 'true' && steps.migration.outcome == 'success'
         run: curl --fail --silent --show-error --retry 5 --retry-delay 2 --retry-all-errors https://ribbonfish.scheimann.workers.dev/healthz
