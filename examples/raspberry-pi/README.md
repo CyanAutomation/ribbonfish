@@ -194,13 +194,13 @@ a read-only root filesystem and no added capabilities.
 
 Protected `main` pushes that change `agent/**` and pass verification publish
 `cyanautomation/ribbonfish` for AMD64, ARM64, and ARMv7 through
-`.github/workflows/docker-publish.yml`, tagged `sha-<commit-SHA>`. `latest`
-advances only when the published commit is still the `main` tip, and the Pi
-deployment defaults to that tag. The separate
-`.github/workflows/publish-agent.yml` publishes ARMv7 and ARM64 images to
-`ghcr.io/cyanautomation/ribbonfish` with `main` and `sha-<commit-SHA>` tags.
-GHCR package visibility must allow Pi pulls, or the Pi must log in with a token
-that can read the package.
+`.github/workflows/publish-agent.yml`, tagged `sha-<commit-SHA>`. The workflow
+scans, attests, and smoke-tests the published image before advancing `latest`
+when the published commit still matches the `main` agent tree. The Pi
+deployment defaults to that tag. The same workflow publishes ARMv7 and ARM64
+images to `ghcr.io/cyanautomation/ribbonfish` with `main` and
+`sha-<commit-SHA>` tags. GHCR package visibility must allow Pi pulls, or the Pi
+must log in with a token that can read the package.
 
 ## Optional Cloudflare sync and enrollment
 

@@ -3,15 +3,19 @@ set -eu
 
 # Contract source: agent/README.md#arm-container-compatibility.
 
-platform=${1:?usage: smoke-container.sh <linux/amd64|linux/arm/v7|linux/arm64> <pi3a-plus|pi3b|pi4>}
-profile=${2:?usage: smoke-container.sh <linux/amd64|linux/arm/v7|linux/arm64> <pi3a-plus|pi3b|pi4>}
+platform=${1:?usage: smoke-container.sh <linux/amd64|linux/arm/v7|linux/arm64> <pi3a-plus|pi3b|pi4> [image-ref]}
+profile=${2:?usage: smoke-container.sh <linux/amd64|linux/arm/v7|linux/arm64> <pi3a-plus|pi3b|pi4> [image-ref]}
+if [ "$#" -gt 3 ]; then
+	echo "usage: smoke-container.sh <linux/amd64|linux/arm/v7|linux/arm64> <pi3a-plus|pi3b|pi4> [image-ref]" >&2
+	exit 2
+fi
 case "$platform:$profile" in
 	linux/arm/v7:pi3b|linux/arm64:pi3a-plus|linux/arm64:pi4|linux/amd64:pi3a-plus|linux/amd64:pi3b|linux/amd64:pi4) ;;
   *) echo "unsupported platform/profile pair: $platform:$profile" >&2; exit 2 ;;
 esac
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-image="ribbonfish:smoke-${profile}"
+image=${3:-"ribbonfish:smoke-${profile}"}
 container="ribbonfish-smoke-${profile}-$$"
 cache_volume="ribbonfish-smoke-cache-${profile}-$$"
 scratch=$(mktemp -d)
@@ -60,7 +64,11 @@ playlist_shas=$(python3 -c 'import json,sys; print(" ".join(asset["sha256"] for 
   "$repo_root/agent/defaults/$default_profile.json")
 [ -n "$playlist_shas" ] || { echo "default playlist is empty: $default_profile" >&2; exit 1; }
 
-docker buildx build --platform "$platform" --load --tag "$image" "$repo_root/agent"
+if [ "$#" -eq 3 ]; then
+	sh "$repo_root/agent/scripts/prepare-smoke-image.sh" "$platform" "$image"
+else
+	sh "$repo_root/agent/scripts/prepare-smoke-image.sh" "$platform" "$image" "$repo_root/agent"
+fi
 docker volume create "$cache_volume" >/dev/null
 docker run --detach --platform "$platform" --name "$container" \
 	  --init --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
