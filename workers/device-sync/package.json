@@ -23,7 +23,7 @@
     "typecheck": "npm run typecheck:bindings && tsc -p tsconfig.worker.json && tsc -p tsconfig.admin.json && tsc -p tsconfig.admin-entry.json && tsc -p tsconfig.scripts.json && tsc -p tsconfig.tdd-tests.json && node scripts/typecheck-tests.ts"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20261103.1",
+    "@cloudflare/workers-types": "^5.20261107.1",
     "@openuidev/lang-core": "^1.1.0",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^26.6.6",
