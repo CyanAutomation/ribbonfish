@@ -85,13 +85,16 @@ not check ARM compatibility. On Ribbonfish, run the ARM64 Pi 3 A+ profile to
 exercise the actual Pi's Docker Engine and kernel. It writes PNG files in an
 isolated container and does not open DRM or disturb the active HDMI output.
 
-GitHub Actions runs both checks on changes to the agent, simulator, or Pi
-examples, validates the Pi configs and Compose files, tests the device sync
-Worker separately, and publishes images on protected `main` pushes that
-change `agent/**`. GHCR receives ARMv7 and ARM64 images tagged `main` and with
-the full commit SHA (`sha-<commit-SHA>`); Docker Hub receives AMD64, ARM64, and
-ARMv7 images tagged with the full commit SHA. Moving tags advance only when the agent tree still matches `main`; ARM smoke checks must also pass. Use the immutable SHA tag to pin
-a deployment. The published-image
+GitHub Actions runs both checks on pull requests, runs Go verification and the
+source-image smoke checks once for protected `main` pushes that change
+`agent/**`, and runs the container checks for simulator and Pi example
+changes. It validates the Pi configs and Compose files, tests the device sync
+Worker separately, and publishes images from one release workflow. GHCR
+receives ARMv7 and ARM64 images; Docker Hub receives AMD64, ARM64, and ARMv7
+images. Each registry gets an immutable full commit SHA tag. The workflow scans,
+attests, and smoke-tests the published image before advancing `main` on GHCR or
+`latest` on Docker Hub, and only advances those tags while the agent tree still
+matches `main`. Use the immutable SHA tag to pin a deployment. The published-image
 simulator Compose example is in
 `examples/raspberry-pi/docker-compose.published.yaml`. The hardware Compose
 example starts from bundled local content with no network by default. Optional
