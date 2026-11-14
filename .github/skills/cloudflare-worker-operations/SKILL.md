@@ -35,7 +35,7 @@ npm run build:admin
 npm run check:config
 ```
 
-Inspect `.github/workflows/device-sync.yml` for pull request validation and `.github/workflows/deploy-device-sync.yml` for production deployment. Deploys run from protected `main` after validation; the deploy job uses the `production` environment and serializes production deploys.
+Inspect `.github/workflows/device-sync.yml` for pull request validation and production deployment. Deploys run from protected `main` after validation; the deploy job checks release freshness before accessing Cloudflare credentials, uses the `production` environment, serializes production deploys, and checks `/healthz` afterward.
 
 Before production changes, verify the target config, binding names, migration state, Access policy, required secrets, queue/bucket/database prerequisites, and rollback path. Never enable management routes on the device-sync Worker or enable capture before its documented queues, migrations, allowlist, and account limits are ready. Current provider limits and quotas must be checked against Cloudflare's active documentation.
 
@@ -43,6 +43,6 @@ Before production changes, verify the target config, binding names, migration st
 
 - [Worker setup and migration/deployment procedure](../../../workers/device-sync/README.md)
 - [Worker validation and deploy workflows](../../workflows/device-sync.yml)
-- [Production deployment workflow](../../workflows/deploy-device-sync.yml)
+- [Validation and production deployment workflow](../../workflows/device-sync.yml)
 - [Device sync and enrollment](../cloudflare-device-sync-enrollment/SKILL.md)
 - [Capture prerequisites](../cloudflare-capture-design/SKILL.md)

@@ -5,10 +5,8 @@ on:
     branches:
       - main
     paths:
-      - "agent/**"
-      - "examples/agent/simulator/**"
       - "examples/raspberry-pi/**"
-      - ".github/workflows/arm-container-smoke.yml"
+      - "examples/agent/simulator/**"
   # Keep this unfiltered so required checks are reported for every PR.
   pull_request:
   workflow_call:
@@ -42,6 +40,9 @@ jobs:
       - name: Test Raspberry Pi deployment scripts
         if: matrix.platform == 'linux/arm/v7'
         run: sh examples/raspberry-pi/tests/prepare-deployment.test.sh
+      - name: Test smoke image preparation
+        if: matrix.platform == 'linux/arm/v7'
+        run: sh agent/scripts/tests/prepare-smoke-image.test.sh
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Validate Raspberry Pi Compose examples

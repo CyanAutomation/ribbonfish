@@ -11,9 +11,9 @@ Use this skill for changes to the Go build, `agent/Dockerfile`, simulator, conta
 
 ## Checks in GitHub Actions
 
-`.github/workflows/agent.yml` runs for every pull request and for `main` pushes affecting `agent/**` or the workflow. It checks Go formatting, `go vet`, `govulncheck`, unit tests with the race detector, and Linux ARMv7 and ARM64 cross-compilation.
+`.github/workflows/agent.yml` runs for every pull request. On protected `main` pushes affecting `agent/**`, `.github/workflows/publish-agent.yml` runs the same Go checks before publishing images. Checks include Go formatting, `go vet`, `govulncheck`, unit tests with the race detector, and Linux ARMv7 and ARM64 cross-compilation.
 
-`.github/workflows/arm-container-smoke.yml` runs for changes to the agent, simulator assets/config, Pi examples, or that workflow. It validates Pi Compose files and runs the `pi3b` ARMv7, `pi3a-plus` ARM64, and `pi4` ARM64 container profiles under QEMU.
+`.github/workflows/arm-container-smoke.yml` runs on pull requests and changes to simulator assets/config or Pi examples. It validates Pi Compose files and runs the `pi3b` ARMv7, `pi3a-plus` ARM64, and `pi4` ARM64 source image profiles under QEMU. The publisher also pulls and smoke-tests the immutable images from each registry before moving tags.
 
 ## Run the smoke harness locally
 
@@ -27,7 +27,7 @@ sh agent/scripts/smoke-container.sh linux/arm64 pi4
 
 The accepted pairs include `linux/arm/v7 pi3b`, `linux/arm64 pi3a-plus`, `linux/arm64 pi4`, and native `linux/amd64` simulator profiles. The native pair is a simulator/container check and does not establish ARM compatibility.
 
-The harness builds the image, starts it with bundled sample PNGs, checks that each expected display writes a valid PNG and logs a frame update, stops the process cleanly, then restarts without source assets while retaining its cache volume. The Pi 4 simulator presents the same active playlist on both outputs. The harness removes its temporary container, volumes, and scratch directory on exit.
+The harness builds the image when no image reference is supplied, or pulls the given image reference for a published-image check. It starts the image with bundled sample PNGs, checks that each expected display writes a valid PNG and logs a frame update, stops the process cleanly, then restarts without source assets while retaining its cache volume. The Pi 4 simulator presents the same active playlist on both outputs. The harness removes its temporary container, volumes, and scratch directory on exit.
 
 ## What a pass establishes
 
