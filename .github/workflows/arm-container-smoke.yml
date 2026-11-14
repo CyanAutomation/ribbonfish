@@ -10,10 +10,16 @@ on:
   # Keep this unfiltered so required checks are reported for every PR.
   pull_request:
   workflow_call:
+    inputs:
+      caller_run_id:
+        description: Distinguish smoke runs started by the calling workflow.
+        required: false
+        type: string
 
-# Keep one run per PR or main branch and stop superseded QEMU work.
+# Keep one run per PR or main branch and stop superseded QEMU work. Reusable
+# workflow calls use their caller's run ID so they cannot cancel direct runs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.caller_run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:

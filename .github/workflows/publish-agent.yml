@@ -8,7 +8,6 @@ on:
       - "agent/**"
       - ".github/workflows/agent.yml"
       - ".github/workflows/publish-agent.yml"
-      - ".github/workflows/docker-publish.yml"
       - ".github/workflows/verify-agent.yml"
       - ".github/workflows/arm-container-smoke.yml"
       - ".github/scripts/release-freshness.mts"
@@ -22,6 +21,8 @@ jobs:
 
   smoke:
     uses: ./.github/workflows/arm-container-smoke.yml
+    with:
+      caller_run_id: ${{ github.run_id }}
 
   publish-ghcr:
     needs: [verify, smoke]

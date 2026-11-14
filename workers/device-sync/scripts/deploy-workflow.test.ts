@@ -19,6 +19,7 @@ interface WorkflowStep {
 interface WorkflowJob {
   steps?: WorkflowStep[];
   uses?: string;
+  with?: Record<string, string>;
   needs?: string | string[];
   if?: string;
   environment?: { name: string } | string;
@@ -27,11 +28,14 @@ interface WorkflowJob {
 interface WorkflowDocument {
   on: {
     pull_request?: unknown;
-    workflow_call?: unknown;
+    workflow_call?: {
+      inputs?: Record<string, { description?: string; type: string; required?: boolean }>;
+    };
     push?: { paths?: string[]; branches?: string[] };
   };
   jobs: Record<string, WorkflowJob>;
   permissions?: Record<string, string>;
+  concurrency?: { group: string; "cancel-in-progress": boolean };
   updates?: { "package-ecosystem": string; directory: string }[];
 }
 
@@ -132,9 +136,11 @@ test("agent release runs shared verification once and gates both registry promot
   assert.deepEqual(workflow.on.push?.branches, ["main"]);
   const paths = workflow.on.push?.paths ?? [];
   assert.ok(paths.includes("agent/**"));
-  assert.ok(paths.includes(".github/workflows/docker-publish.yml"));
+  assert.ok(paths.includes(".github/workflows/verify-agent.yml"));
+  assert.ok(!paths.includes(".github/workflows/docker-publish.yml"));
   calledJob(workflow.jobs.verify, "./.github/workflows/verify-agent.yml");
   calledJob(workflow.jobs.smoke, "./.github/workflows/arm-container-smoke.yml");
+  assert.deepEqual(workflow.jobs.smoke.with, { caller_run_id: "${{ github.run_id }}" });
 
   for (const [jobName, registry, platformRule] of [
     ["publish-ghcr", "ghcr.io/cyanautomation/ribbonfish", /linux\/arm\/v7,linux\/arm64/],
@@ -197,6 +203,15 @@ test("Go, container, dependency, and workflow checks run on pull requests", asyn
   const smoke = await readYaml(".github/workflows/arm-container-smoke.yml");
   assert.ok(Object.hasOwn(smoke.on, "pull_request"));
   assert.ok(Object.hasOwn(smoke.on, "workflow_call"));
+  assert.deepEqual(smoke.on.workflow_call?.inputs?.caller_run_id, {
+    description: "Distinguish smoke runs started by the calling workflow.",
+    type: "string",
+    required: false,
+  });
+  assert.equal(
+    smoke.concurrency?.group,
+    "${{ github.workflow }}-${{ inputs.caller_run_id || github.event.pull_request.number || github.ref }}",
+  );
   assert.ok(smoke.on.push?.paths?.includes("examples/raspberry-pi/**"));
   assert.ok(smoke.on.push?.paths?.includes("examples/agent/simulator/**"));
   assert.ok(!smoke.on.push?.paths?.includes("agent/**"));
