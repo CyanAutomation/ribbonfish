@@ -66,7 +66,8 @@ test("Worker validation and protected-main deployment share one validated workfl
 
   assert.deepEqual(workflow.on.push?.branches, ["main"]);
   assert.ok(paths.includes("workers/device-sync/**"));
-  assert.ok(paths.includes(".github/workflows/deploy-device-sync.yml"));
+  assert.ok(paths.includes(".github/workflows/device-sync.yml"));
+  assert.ok(!paths.includes(".github/workflows/deploy-device-sync.yml"));
   assert.ok(paths.includes(".github/scripts/release-freshness.mts"));
   assert.deepEqual(workflow.permissions, { contents: "read" });
   assert.match(stepNamed(validate, "Test Worker routes and authorization").run ?? "", /npm test/);
@@ -75,7 +76,7 @@ test("Worker validation and protected-main deployment share one validated workfl
   assert.equal(deploy.needs, "validate");
   assert.match(deploy.if ?? "", /default_branch/);
   assert.match(deploy.if ?? "", /ref_protected/);
-  assert.equal(environmentName(deploy), "production");
+  assert.equal(environmentName(deploy), "cloudflare");
 
   const steps = deploy.steps ?? [];
   const freshness = steps.findIndex((step) => step.name === "Check current Worker inputs");
@@ -91,8 +92,10 @@ test("Worker validation and protected-main deployment share one validated workfl
   for (const index of [deviceDeploy, managementDeploy]) {
     assert.match(steps[index].if ?? "", /steps\.migration\.outcome == 'success'/);
   }
-  assert.equal(steps[deviceDeploy].env?.CLOUDFLARE_API_TOKEN, "${{ secrets.CLOUDFLARE_API_TOKEN }}");
-  assert.equal(steps[deviceDeploy].env?.CLOUDFLARE_ACCOUNT_ID, "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}");
+  for (const index of [migration, deviceDeploy, managementDeploy]) {
+    assert.equal(steps[index].env?.CLOUDFLARE_API_TOKEN, "${{ secrets.CLOUDFLARE_API_TOKEN }}");
+    assert.equal(steps[index].env?.CLOUDFLARE_ACCOUNT_ID, "${{ vars.CLOUDFLARE_ACCOUNT_ID }}");
+  }
   assert.match(steps[health].run ?? "", /\/healthz/);
   assert.equal(existsSync(new URL(".github/workflows/deploy-device-sync.yml", root)), false);
 });
@@ -254,6 +257,7 @@ test("worker and image release safeguards check current inputs before sensitive 
   const deployIndex = deploySteps.findIndex((step) => step.name === "Deploy device-sync Worker");
   assert.ok(freshnessIndex < migrationIndex && migrationIndex < deployIndex);
   assert.equal(deploySteps[migrationIndex].env?.CLOUDFLARE_API_TOKEN, "${{ secrets.CLOUDFLARE_API_TOKEN }}");
+  assert.equal(deploySteps[migrationIndex].env?.CLOUDFLARE_ACCOUNT_ID, "${{ vars.CLOUDFLARE_ACCOUNT_ID }}");
   assert.ok(deploySteps.some((step) => step.name === "Check deployed Worker readiness" && step.run?.includes("/healthz")));
 
   const skills = await readFile(new URL(".github/skills/github-actions-release/SKILL.md", root), "utf8");
