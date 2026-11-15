@@ -286,23 +286,7 @@ export interface ScaleMeterSegment {
   captureId?: string;
 }
 
-/** A reusable horizontal meter with accessible descriptions for reference markers. */
-export function scaleMeter({
-  label,
-  value,
-  valueLabel,
-  max,
-  maxLabel,
-  fillTone = "brand",
-  markers = [],
-  segments,
-  ownerDocument = document,
-  className,
-  captionClassName,
-  trackClassName,
-  fillClassName,
-  markerClassName,
-}: {
+interface ScaleMeterOptions {
   label: string;
   value: number;
   valueLabel: string;
@@ -317,55 +301,110 @@ export function scaleMeter({
   trackClassName?: string;
   fillClassName?: string;
   markerClassName?: string;
-}): HTMLElement {
-  const safeMax = Number.isFinite(max) && max > 0 ? max : 1;
-  const percent = (amount: number) => {
-    const number = Number(amount);
-    return Math.max(0, Math.min(100, Number.isFinite(number) ? (number / safeMax) * 100 : 0));
-  };
-  const markerDescription = markers.map((marker) => marker.label + ": " + marker.valueLabel).join("; ");
-  const meter = node("div", undefined, "scale-meter scale-meter--" + fillTone + (className ? " " + className : ""), ownerDocument);
-  meter.setAttribute("role", "img");
-  meter.setAttribute("aria-label", (label + ": " + valueLabel + ". Scale from 0 to " + maxLabel + ". " + markerDescription).trim());
+}
 
-  const caption = node("div", undefined, "scale-meter__caption" + (captionClassName ? " " + captionClassName : ""), ownerDocument);
-  caption.append(
-    node("span", label, "scale-meter__label", ownerDocument),
-    node("strong", valueLabel, "scale-meter__value", ownerDocument),
+function scalePercent(amount: number, max: number): number {
+  const number = Number(amount);
+  return Math.max(0, Math.min(100, Number.isFinite(number) ? (number / max) * 100 : 0));
+}
+
+function scaleMeterRoot(options: ScaleMeterOptions, ownerDocument: Document): HTMLElement {
+  const markerDescription = (options.markers ?? []).map((marker) => marker.label + ": " + marker.valueLabel).join("; ");
+  const meter = node("div", undefined,
+    "scale-meter scale-meter--" + (options.fillTone ?? "brand") + (options.className ? " " + options.className : ""),
+    ownerDocument,
   );
-  const track = node("div", undefined, "scale-meter__track" + (trackClassName ? " " + trackClassName : ""), ownerDocument);
-  track.setAttribute("aria-hidden", "true");
-  if (segments) {
-    const stack = node("span", undefined, "scale-meter__stack browser-usage-chart__stack", ownerDocument);
-    stack.setAttribute("aria-hidden", "true");
-    stack.style.width = "100%";
-    for (const segment of segments) {
-      if (!Number.isFinite(segment.value) || segment.value <= 0) continue;
-      const item = node("span", undefined, "scale-meter__segment browser-usage-chart__segment" + (segment.className ? " " + segment.className : ""), ownerDocument);
-      item.style.width = percent(segment.value) + "%";
-      if (segment.captureId) item.dataset.captureId = segment.captureId;
-      stack.append(item);
-    }
-    track.append(stack);
-  } else {
-    const fill = node("span", undefined, "scale-meter__fill scale-meter__fill--" + fillTone + (fillClassName ? " " + fillClassName : ""), ownerDocument);
-    fill.style.width = percent(value) + "%";
-    track.append(fill);
+  meter.setAttribute("role", "img");
+  meter.setAttribute("aria-label", (
+    options.label + ": " + options.valueLabel + ". Scale from 0 to " + options.maxLabel + ". " + markerDescription
+  ).trim());
+  return meter;
+}
+
+function scaleMeterCaption(options: ScaleMeterOptions, ownerDocument: Document): HTMLElement {
+  const caption = node("div", undefined,
+    "scale-meter__caption" + (options.captionClassName ? " " + options.captionClassName : ""), ownerDocument);
+  caption.append(
+    node("span", options.label, "scale-meter__label", ownerDocument),
+    node("strong", options.valueLabel, "scale-meter__value", ownerDocument),
+  );
+  return caption;
+}
+
+function scaleMeterSegments(
+  track: HTMLElement,
+  segments: ScaleMeterSegment[],
+  max: number,
+  ownerDocument: Document,
+): void {
+  const stack = node("span", undefined, "scale-meter__stack browser-usage-chart__stack", ownerDocument);
+  stack.setAttribute("aria-hidden", "true");
+  stack.style.width = "100%";
+  for (const segment of segments) {
+    if (!Number.isFinite(segment.value) || segment.value <= 0) continue;
+    const item = node("span", undefined,
+      "scale-meter__segment browser-usage-chart__segment" + (segment.className ? " " + segment.className : ""),
+      ownerDocument,
+    );
+    item.style.width = scalePercent(segment.value, max) + "%";
+    if (segment.captureId) item.dataset.captureId = segment.captureId;
+    stack.append(item);
   }
+  track.append(stack);
+}
+
+function scaleMeterFill(
+  track: HTMLElement,
+  options: ScaleMeterOptions,
+  max: number,
+  ownerDocument: Document,
+): void {
+  const fillTone = options.fillTone ?? "brand";
+  const fill = node("span", undefined,
+    "scale-meter__fill scale-meter__fill--" + fillTone +
+    (options.fillClassName ? " " + options.fillClassName : ""),
+    ownerDocument,
+  );
+  fill.style.width = scalePercent(options.value, max) + "%";
+  track.append(fill);
+}
+
+function scaleMeterMarkers(
+  track: HTMLElement,
+  markers: ScaleMeterMarker[],
+  max: number,
+  options: ScaleMeterOptions,
+  ownerDocument: Document,
+): void {
   for (const marker of markers) {
     if (!Number.isFinite(marker.value) || marker.value <= 0) continue;
     const line = node("span", undefined,
       "scale-meter__marker scale-meter__marker--" + marker.tone +
-      (markerClassName ? " " + markerClassName : "") +
+      (options.markerClassName ? " " + options.markerClassName : "") +
       (marker.className ? " " + marker.className : ""),
       ownerDocument,
     );
     line.setAttribute("aria-hidden", "true");
-    line.style.left = percent(marker.value) + "%";
+    line.style.left = scalePercent(marker.value, max) + "%";
     line.title = marker.label + ": " + marker.valueLabel;
     if (marker.quotaMarker) line.dataset.quotaMarker = marker.quotaMarker;
     track.append(line);
   }
+}
+
+/** A reusable horizontal meter with accessible descriptions for reference markers. */
+export function scaleMeter(options: ScaleMeterOptions): HTMLElement {
+  const ownerDocument = options.ownerDocument ?? document;
+  const max = Number.isFinite(options.max) && options.max > 0 ? options.max : 1;
+  const markers = options.markers ?? [];
+  const meter = scaleMeterRoot(options, ownerDocument);
+  const caption = scaleMeterCaption(options, ownerDocument);
+  const track = node("div", undefined,
+    "scale-meter__track" + (options.trackClassName ? " " + options.trackClassName : ""), ownerDocument);
+  track.setAttribute("aria-hidden", "true");
+  if (options.segments) scaleMeterSegments(track, options.segments, max, ownerDocument);
+  else scaleMeterFill(track, options, max, ownerDocument);
+  scaleMeterMarkers(track, markers, max, options, ownerDocument);
   meter.append(caption, track);
   return meter;
 }

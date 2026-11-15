@@ -760,6 +760,31 @@ test("API dashboards can be added to playlists without browser capture host allo
   }
 });
 
+test("API dashboard patches reject unsupported and empty edits without changing stored settings", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env } = environment(sqlite);
+    env.API_STATUS_ALLOWED_HOSTS = "status.example.org";
+    const created = await handleAdminRequest(await request("/admin/api/api-dashboards", {
+      method: "POST", body: { name: "Operations", capture_interval_seconds: 300, width: 1920, height: 1080,
+        sources: [{ id: "source-one", provider: "atlassian-statuspage", display_name: "Status", enabled: true, hostname: "status.example.org" }] },
+    }), env);
+    const dashboard = await created.json();
+    const path = `/admin/api/api-dashboards/${dashboard.capture_id}`;
+
+    const unsupported = await handleAdminRequest(await request(path, { method: "PATCH", body: { unexpected: true } }), env);
+    const empty = await handleAdminRequest(await request(path, { method: "PATCH", body: {} }), env);
+    const invalidConfig = await handleAdminRequest(await request(path, { method: "PATCH", body: { width: 4000 } }), env);
+    assert.equal(unsupported.status, 400);
+    assert.equal(empty.status, 400);
+    assert.equal(invalidConfig.status, 400);
+    const stored = sqlite.prepare("SELECT name, capture_interval_seconds FROM capture_targets WHERE capture_id = ?").get(dashboard.capture_id);
+    assert.deepEqual({ ...stored }, { name: "Operations", capture_interval_seconds: 300 });
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("API dashboard list flags stale captures and exposes the durable recovery schedule", async () => {
   const sqlite = await freshDatabase();
   try {

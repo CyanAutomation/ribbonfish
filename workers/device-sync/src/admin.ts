@@ -1,10 +1,23 @@
 import { jsonResponse } from "./http-response.ts";
 import { matchesETag } from "./http-cache.ts";
-import { readRequestBody as readBytes, parseJSONBody } from "./request-body.ts";
+import { readRequestBody as readBytes } from "./request-body.ts";
 import { randomToken, sha256Hex } from "./crypto-primitives.ts";
 export { sha256Hex } from "./crypto-primitives.ts";
 import { HTTPError } from "./http-error.ts";
 import { hasExactKeys, hasOnlyKeys, isRecord, isString } from "./validation.ts";
+import { readAdminJSON as readJSON } from "./admin-request.ts";
+import { parseMetadata } from "./admin-metadata.ts";
+import { auditStatement } from "./admin-audit.ts";
+import { createApiDashboard, readApiDashboards, updateApiDashboard } from "./admin-api-dashboards.ts";
+import {
+  configuredCaptureReserveMs,
+  readCaptureForecast,
+  readDeviceHealth,
+  readDeviceHealthHistory,
+  readEnrollmentRequests,
+  readOverview,
+  summarizeDurationAggregate,
+} from "./admin-read-models.ts";
 import {
   DEFAULT_CAPTURE_INTERVAL_SECONDS,
   DEFAULT_ROTATION_INTERVAL,
@@ -12,20 +25,13 @@ import {
   isSupportedCaptureInterval,
   isSupportedRotationInterval,
 } from "./intervals.ts";
-import { deriveDeviceHealth, type DeviceHealthReport } from "./device-health.ts";
 import { isPNG, MAX_ASSET_BYTES, storePngAsset } from "./asset-store.ts";
 import { normalizeCaptureSelector, validateCaptureSettings, validateCaptureTargetURL } from "./capture.ts";
-import { parseApiDashboardConfig } from "./api-dashboard/index.ts";
-import { validateSourceConfig } from "./api-dashboard/adapters.ts";
 import { CaptureTargetNotAllowedError, dispatchDueCaptures, enqueueCapture } from "./capture-workflow.ts";
 import { AssetDeletionInProgressError, markAssetLiveStatement } from "./asset-registry.ts";
 import { callJevDecision, JEVRequestError } from "./jev.ts";
-import { classifyReserveReview, summarizeCaptureDurations } from "./capture-duration.ts";
+import { summarizeCaptureDurations } from "./capture-duration.ts";
 import type { CaptureDurationSampleSummaryInput } from "./capture-duration.ts";
-import {
-  calculateDailyCaptureForecast,
-  CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS,
-} from "./capture-forecast.ts";
 import {
   buildCaptureAssessmentState,
   captureAssessmentQuestions,
@@ -55,15 +61,9 @@ type CaptureAssessmentTargetRow = SqlRow & {
   enabled: number;
   job_status: string | null;
 };
-type StoredHealthSnapshot = Pick<DeviceHealthReport, "state" | "startup_error_code"> & {
-  sync?: Pick<DeviceHealthReport["sync"], "status" | "error_code">;
-  outputs?: Array<Pick<DeviceHealthReport["outputs"][number], "display_id" | "connector" | "status" | "error_code">>;
-  host?: DeviceHealthReport["host"];
-};
 type PlaylistAssetInput = { sha256: string; size: number };
 type PlaylistCaptureInput = { capture_id: string };
 
-const MAX_JSON_BYTES = 64 << 10;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -462,6 +462,37 @@ async function enforceJevRateLimit(env: WorkerEnvironment, actorID: string) {
 }
 
 async function readCaptureDurationSamples(captureID: string, searchParams: URLSearchParams, env: WorkerEnvironment, now = Date.now()) {
+  const query = parseCaptureDurationQuery(searchParams, now);
+  const target = await env.DB.prepare("SELECT capture_id FROM capture_targets WHERE capture_id = ?")
+    .bind(captureID).first();
+  if (!target) throw new HTTPError(404, "That webpage capture could not be found.");
+
+  const retainedSince = now - CAPTURE_DURATION_RETENTION_MS;
+  const since = Math.max(query.since ?? retainedSince, retainedSince);
+  const [summaryRows, page] = await Promise.all([
+    env.DB.prepare(
+      "SELECT browser_ms, browser_ms_source, reserve_ms, attempt, outcome FROM capture_duration_samples " +
+      "WHERE capture_id = ? AND sampled_at >= ? ORDER BY sampled_at DESC, sample_id DESC LIMIT ?",
+    ).bind(captureID, since, CAPTURE_DURATION_SUMMARY_LIMIT).all<CaptureDurationSampleSummaryInput>(),
+    readCaptureDurationPage(captureID, since, query, env),
+  ]);
+  const samples = page.results.slice(0, query.limit);
+  const last = samples.at(-1);
+  const reserveMs = configuredCaptureReserveMs(env);
+  return {
+    capture_id: captureID,
+    retained_since: since,
+    configured_reserve_ms: reserveMs,
+    summary_sample_limit: CAPTURE_DURATION_SUMMARY_LIMIT,
+    summary_truncated: (summaryRows.results ?? []).length === CAPTURE_DURATION_SUMMARY_LIMIT,
+    summary: summarizeCaptureDurations(summaryRows.results ?? [], reserveMs),
+    samples,
+    next_before: page.hasMore && last ? last.sampled_at : null,
+    next_before_sample_id: page.hasMore && last ? last.sample_id : null,
+  };
+}
+
+function parseCaptureDurationQuery(searchParams: URLSearchParams, now: number) {
   for (const key of searchParams.keys()) {
     if (!["since", "limit", "before", "before_sample_id"].includes(key)) {
       throw new HTTPError(400, `unsupported query parameter: ${key}`);
@@ -470,52 +501,36 @@ async function readCaptureDurationSamples(captureID: string, searchParams: URLSe
   const requestedLimit = parseOptionalQueryInteger(searchParams.get("limit"), "limit");
   const limit = requestedLimit ?? 50;
   if (limit < 1 || limit > 100) throw new HTTPError(400, "limit must be an integer from 1 to 100");
-  const requestedSince = parseOptionalQueryInteger(searchParams.get("since"), "since");
-  if (requestedSince !== null && requestedSince > now) throw new HTTPError(400, "since must not be in the future");
-  const requestedBefore = parseOptionalQueryInteger(searchParams.get("before"), "before");
+  const since = parseOptionalQueryInteger(searchParams.get("since"), "since");
+  if (since !== null && since > now) throw new HTTPError(400, "since must not be in the future");
+  const before = parseOptionalQueryInteger(searchParams.get("before"), "before");
   const beforeSampleID = searchParams.get("before_sample_id");
-  if ((requestedBefore === null) !== (beforeSampleID === null) || (beforeSampleID !== null && (!beforeSampleID || beforeSampleID.length > 128))) {
+  if ((before === null) !== (beforeSampleID === null) || (beforeSampleID !== null && (!beforeSampleID || beforeSampleID.length > 128))) {
     throw new HTTPError(400, "before and before_sample_id must be supplied together");
   }
-  if (requestedBefore !== null && requestedBefore > now) throw new HTTPError(400, "before must not be in the future");
+  if (before !== null && before > now) throw new HTTPError(400, "before must not be in the future");
+  return { limit, since, before, beforeSampleID };
+}
 
-  const target = await env.DB.prepare("SELECT capture_id FROM capture_targets WHERE capture_id = ?")
-    .bind(captureID).first();
-  if (!target) throw new HTTPError(404, "That webpage capture could not be found.");
-
-  const retainedSince = now - CAPTURE_DURATION_RETENTION_MS;
-  const since = Math.max(requestedSince ?? retainedSince, retainedSince);
-  const summaryRows = await env.DB.prepare(
-    "SELECT browser_ms, browser_ms_source, reserve_ms, attempt, outcome FROM capture_duration_samples " +
-    "WHERE capture_id = ? AND sampled_at >= ? ORDER BY sampled_at DESC, sample_id DESC LIMIT ?",
-  ).bind(captureID, since, CAPTURE_DURATION_SUMMARY_LIMIT).all<CaptureDurationSampleSummaryInput>();
-
+async function readCaptureDurationPage(
+  captureID: string,
+  since: number,
+  query: ReturnType<typeof parseCaptureDurationQuery>,
+  env: WorkerEnvironment,
+) {
   let sql = "SELECT sample_id, capture_id, job_id, attempt, sampled_at, browser_ms, browser_ms_source, reserve_ms, " +
     "browser_run_elapsed_ms, capture_elapsed_ms, outcome, readiness_mode, readiness_selector FROM capture_duration_samples " +
     "WHERE capture_id = ? AND sampled_at >= ?";
   const values = [captureID, since];
-  if (requestedBefore !== null && beforeSampleID !== null) {
+  if (query.before !== null && query.beforeSampleID !== null) {
     sql += " AND (sampled_at < ? OR (sampled_at = ? AND sample_id < ?))";
-    values.push(requestedBefore, requestedBefore, beforeSampleID);
+    values.push(query.before, query.before, query.beforeSampleID);
   }
   sql += " ORDER BY sampled_at DESC, sample_id DESC LIMIT ?";
-  values.push(limit + 1);
+  values.push(query.limit + 1);
   const page = await env.DB.prepare(sql).bind(...values).all<SqlRow>();
-  const hasMore = (page.results ?? []).length > limit;
-  const samples = (page.results ?? []).slice(0, limit);
-  const last = samples.at(-1);
-  const currentReserveMs = configuredCaptureReserveMs(env);
-  return {
-    capture_id: captureID,
-    retained_since: since,
-    configured_reserve_ms: currentReserveMs,
-    summary_sample_limit: CAPTURE_DURATION_SUMMARY_LIMIT,
-    summary_truncated: (summaryRows.results ?? []).length === CAPTURE_DURATION_SUMMARY_LIMIT,
-    summary: summarizeCaptureDurations(summaryRows.results ?? [], currentReserveMs),
-    samples,
-    next_before: hasMore && last ? last.sampled_at : null,
-    next_before_sample_id: hasMore && last ? last.sample_id : null,
-  };
+  const results = page.results ?? [];
+  return { results, hasMore: results.length > query.limit };
 }
 
 function parseOptionalQueryInteger(value: string | null, name: string): number | null {
@@ -524,40 +539,6 @@ function parseOptionalQueryInteger(value: string | null, name: string): number |
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) throw new HTTPError(400, `${name} must be a nonnegative integer`);
   return parsed;
-}
-
-function configuredCaptureReserveMs(env: WorkerEnvironment): number {
-  const parsed = Number(env.CAPTURE_BUDGET_RESERVE_MS);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 60_000;
-}
-
-function summarizeDurationAggregate(row: SqlRow | null | undefined, reserveMs: number) {
-  const totalSamples = Number(row?.total_samples ?? 0);
-  const measuredCount = Number(row?.measured_sample_count ?? 0);
-  const measuredCoverage = totalSamples ? measuredCount / totalSamples : 0;
-  const measuredP50 = finiteNonNegativeOrNull(row?.measured_p50_ms);
-  const measuredP90 = finiteNonNegativeOrNull(row?.measured_p90_ms);
-  return {
-    total_samples: totalSamples,
-    measured_sample_count: measuredCount,
-    reserve_estimated_sample_count: Number(row?.reserve_estimated_sample_count ?? 0),
-    unknown_sample_count: Number(row?.unknown_sample_count ?? 0),
-    failed_attempt_count: Number(row?.failed_attempt_count ?? 0),
-    retry_attempt_count: Number(row?.retry_attempt_count ?? 0),
-    capture_attempt_failure_rate: totalSamples ? Number(row?.failed_attempt_count ?? 0) / totalSamples : 0,
-    retry_attempt_rate: totalSamples ? Number(row?.retry_attempt_count ?? 0) / totalSamples : 0,
-    measured_header_coverage: measuredCoverage,
-    measured_p50_ms: measuredP50,
-    measured_p90_ms: measuredP90,
-    measured_average_ms: finiteNonNegativeOrNull(row?.measured_average_ms),
-    reserve_estimated_total_ms: Number(row?.reserve_estimated_total_ms ?? 0),
-    configured_reserve_ms: reserveMs,
-    reserve_review: classifyReserveReview(measuredCount, measuredCoverage, measuredP90, reserveMs),
-  };
-}
-
-function finiteNonNegativeOrNull(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 function isAllowedAdminEmail(email: string, configuredEmails: string | undefined) {
@@ -595,450 +576,6 @@ function adminAssetHeaders(file: { contentType: string }, cacheControl: string, 
   });
   if (etag) headers.set("ETag", etag);
   return headers;
-}
-
-async function readOverview(env: WorkerEnvironment) {
-  const now = Date.now();
-  const windowStart = now - 30 * 24 * 60 * 60 * 1000;
-  const [devices, playlists, active, audit, captureTargets, captureRuntimeAverages, integrityIssues, captureJobs, captureHistory, captureDurationSummaries, captureUsage, captureDecisions] = await Promise.all([
-    env.DB.prepare(
-      "SELECT d.device_id, d.enabled, d.created_at, d.last_seen_at, " +
-      "CASE WHEN d.public_key IS NULL THEN 'token' ELSE 'key' END AS auth_type, " +
-      "h.received_at AS health_received_at, h.reported_state, h.agent_version, h.sync_status, " +
-      "h.applied_playlist_id, h.applied_revision, h.report_json " +
-      "FROM devices d LEFT JOIN device_health_latest h ON h.device_id = d.device_id ORDER BY d.device_id",
-    ).all(),
-    env.DB.prepare(
-      "SELECT p.playlist_id, p.revision, p.rotation_interval, p.created_at, " +
-      "((SELECT COUNT(*) FROM playlist_assets pa WHERE pa.playlist_id = p.playlist_id AND pa.revision = p.revision) + " +
-      "(SELECT COUNT(*) FROM playlist_capture_items pc WHERE pc.playlist_id = p.playlist_id AND pc.revision = p.revision)) AS asset_count, " +
-      "COUNT(*) OVER (PARTITION BY p.playlist_id) AS revision_count, " +
-      "CASE WHEN ap.playlist_id = p.playlist_id AND ap.revision = p.revision THEN 1 ELSE 0 END AS active " +
-      "FROM playlists p LEFT JOIN playlist_assets pa ON pa.playlist_id = p.playlist_id AND pa.revision = p.revision " +
-      "LEFT JOIN active_playlist ap ON ap.singleton = 1 " +
-      "GROUP BY p.playlist_id, p.revision " +
-      "ORDER BY CASE WHEN ap.playlist_id = p.playlist_id AND ap.revision = p.revision THEN 0 ELSE 1 END, " +
-      "p.created_at DESC LIMIT 100",
-    ).all(),
-    env.DB.prepare("SELECT playlist_id, revision FROM active_playlist WHERE singleton = 1").first(),
-    env.DB.prepare(
-      "SELECT event_id, actor_id, event_type, subject_type, subject_id, occurred_at, metadata_json " +
-      "FROM audit_events ORDER BY occurred_at DESC LIMIT ?",
-    ).bind(20).all(),
-    env.DB.prepare(
-      "SELECT t.capture_id, t.url, t.name, t.capture_type, t.api_status_json, t.api_last_fetch_at, t.api_last_image_at, t.capture_interval_seconds, t.viewport_width, t.viewport_height, t.wait_for_selector, " +
-      "CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
-      "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size, " +
-      "t.last_attempt_at, t.last_success_at, " +
-      "t.last_error, t.next_due_at, t.schedule_reviewed_at, " +
-      "EXISTS (SELECT 1 FROM playlist_capture_items p JOIN active_playlist a " +
-      "ON a.playlist_id = p.playlist_id AND a.revision = p.revision WHERE p.capture_id = t.capture_id) AS active_in_playlist, " +
-      "(SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id AND j.status IN ('queued', 'running') " +
-      "ORDER BY j.created_at DESC LIMIT 1) AS job_status FROM capture_targets t " +
-      "WHERE t.enabled = 1 ORDER BY t.next_due_at, t.created_at LIMIT 1000",
-    ).bind(now - 30 * 24 * 60 * 60 * 1000, now - 30 * 24 * 60 * 60 * 1000).all(),
-    env.DB.prepare(
-      "SELECT capture_id, AVG(browser_ms) AS average_browser_ms, COUNT(*) AS sample_count " +
-      "FROM capture_history WHERE captured_at >= ? GROUP BY capture_id",
-    ).bind(windowStart).all(),
-    env.DB.prepare(
-      "SELECT sha256, issue_type, first_seen_at, last_seen_at FROM asset_integrity_issues " +
-      "WHERE resolved_at IS NULL ORDER BY last_seen_at DESC LIMIT 100",
-    ).all(),
-    env.DB.prepare(
-      "SELECT " +
-      "SUM(CASE WHEN status = 'succeeded' AND result_kind = 'screenshot' THEN 1 ELSE 0 END) AS successful_screenshots, " +
-      "SUM(CASE WHEN status = 'succeeded' AND result_kind = 'validator_unchanged' THEN 1 ELSE 0 END) AS validator_unchanged, " +
-      "SUM(CASE WHEN status = 'succeeded' AND result_kind = 'unknown' THEN 1 ELSE 0 END) AS successful_unclassified, " +
-      "SUM(CASE WHEN validator_outcome = 'disabled' THEN 1 ELSE 0 END) AS validator_disabled, " +
-      "SUM(CASE WHEN validator_outcome = 'changed' THEN 1 ELSE 0 END) AS validator_changed, " +
-      "SUM(CASE WHEN validator_outcome = 'no_stored_validator' THEN 1 ELSE 0 END) AS validator_no_stored_validator, " +
-      "SUM(CASE WHEN validator_outcome = 'unavailable' THEN 1 ELSE 0 END) AS validator_unavailable, " +
-      "SUM(CASE WHEN validator_outcome = 'cached_asset_missing' THEN 1 ELSE 0 END) AS validator_cached_asset_missing, " +
-      "SUM(CASE WHEN validator_outcome = 'unknown' THEN 1 ELSE 0 END) AS validator_unknown, " +
-      "SUM(browser_ms_response_header) AS browser_ms_response_header, " +
-      "SUM(browser_ms_reserve) AS browser_ms_reserve, " +
-      "SUM(browser_ms_legacy_unknown) AS browser_ms_unclassified_jobs " +
-      "FROM capture_jobs WHERE created_at >= ? AND capture_id IN (SELECT capture_id FROM capture_targets WHERE capture_type = 'browser-screenshot')",
-    ).bind(windowStart).first(),
-    env.DB.prepare(
-      "SELECT " +
-      "SUM(CASE WHEN browser_ms_source = 'response_header' THEN 1 ELSE 0 END) AS response_header, " +
-      "SUM(CASE WHEN browser_ms_source = 'reserve' THEN 1 ELSE 0 END) AS reserve, " +
-      "SUM(CASE WHEN browser_ms_source = 'unknown' THEN 1 ELSE 0 END) AS unknown " +
-      "FROM capture_history WHERE captured_at >= ? AND capture_id IN (SELECT capture_id FROM capture_targets WHERE capture_type = 'browser-screenshot')",
-    ).bind(windowStart).first(),
-    env.DB.prepare(
-      "WITH measured_ranked AS (" +
-      "SELECT capture_id, browser_ms, ROW_NUMBER() OVER (PARTITION BY capture_id ORDER BY browser_ms) AS sample_rank, " +
-      "COUNT(*) OVER (PARTITION BY capture_id) AS measured_count FROM capture_duration_samples " +
-      "WHERE sampled_at >= ? AND browser_ms_source = 'response_header'), " +
-      "measured_stats AS (SELECT capture_id, COUNT(*) AS measured_sample_count, AVG(browser_ms) AS measured_average_ms, " +
-      "AVG(CASE WHEN sample_rank IN (CAST((measured_count + 1) / 2 AS INTEGER), CAST((measured_count + 2) / 2 AS INTEGER)) THEN browser_ms END) AS measured_p50_ms, " +
-      "MAX(CASE WHEN sample_rank = CAST(measured_count * 0.9 + 0.999999 AS INTEGER) THEN browser_ms END) AS measured_p90_ms " +
-      "FROM measured_ranked GROUP BY capture_id), " +
-      "source_stats AS (SELECT capture_id, COUNT(*) AS total_samples, " +
-      "SUM(CASE WHEN browser_ms_source = 'response_header' THEN 1 ELSE 0 END) AS measured_sample_count, " +
-      "SUM(CASE WHEN browser_ms_source = 'reserve' THEN 1 ELSE 0 END) AS reserve_estimated_sample_count, " +
-      "SUM(CASE WHEN browser_ms_source = 'unknown' THEN 1 ELSE 0 END) AS unknown_sample_count, " +
-      "SUM(CASE WHEN outcome = 'failed' THEN 1 ELSE 0 END) AS failed_attempt_count, " +
-      "SUM(CASE WHEN attempt > 1 THEN 1 ELSE 0 END) AS retry_attempt_count, " +
-      "SUM(CASE WHEN browser_ms_source = 'reserve' THEN browser_ms ELSE 0 END) AS reserve_estimated_total_ms " +
-      "FROM capture_duration_samples WHERE sampled_at >= ? GROUP BY capture_id) " +
-      "SELECT source_stats.*, measured_stats.measured_average_ms, measured_stats.measured_p50_ms, measured_stats.measured_p90_ms " +
-      "FROM source_stats LEFT JOIN measured_stats USING (capture_id)",
-    ).bind(windowStart, windowStart).all(),
-    env.DB.prepare("SELECT usage_day, browser_ms FROM capture_usage WHERE singleton = 1").first(),
-    env.DB.prepare(
-      "SELECT COUNT(*) AS assessments, " +
-      "SUM(CASE WHEN action = 'defer_once' THEN 1 ELSE 0 END) AS candidate_deferrals, " +
-      "SUM(CASE WHEN action = 'defer_once' AND observed_result = 'changed' THEN 1 ELSE 0 END) AS candidate_changed, " +
-      "SUM(CASE WHEN action = 'defer_once' AND observed_result = 'unchanged' THEN 1 ELSE 0 END) AS candidate_unchanged, " +
-      "SUM(CASE WHEN action = 'defer_once' AND observed_result = 'validator_unchanged' THEN 1 ELSE 0 END) AS candidate_validator_unchanged, " +
-      "SUM(CASE WHEN action = 'defer_once' AND observed_result = 'failed' THEN 1 ELSE 0 END) AS candidate_failed, " +
-      "SUM(CASE WHEN action = 'defer_once' AND observed_result = 'budget_deferred' THEN 1 ELSE 0 END) AS candidate_budget_deferred, " +
-      "SUM(CASE WHEN action = 'defer_once' AND observed_result IS NULL THEN 1 ELSE 0 END) AS candidate_unobserved, " +
-      "SUM(CASE WHEN action = 'defer_once' AND (observed_result IN ('validator_unchanged', 'failed', 'budget_deferred') OR observed_result IS NULL) THEN 1 ELSE 0 END) AS candidate_unverified, " +
-      "SUM(CASE WHEN action = 'error' THEN 1 ELSE 0 END) AS errors " +
-      "FROM capture_decisions WHERE assessed_at >= ? AND action != 'pending'",
-    ).bind(windowStart).first(),
-  ]);
-
-  const missing = await readMissingActiveAssets(env, active, windowStart);
-  const budgetValue = Number(env.DAILY_BROWSER_BUDGET_MS);
-  const budgetMs = Number.isSafeInteger(budgetValue) && budgetValue >= 0 ? budgetValue : 600_000;
-  const reserveMs = configuredCaptureReserveMs(env);
-  const captureTargetSummaries = summarizeOverviewCaptureTargets(
-    captureTargets.results ?? [], captureRuntimeAverages.results ?? [], captureDurationSummaries.results ?? [], reserveMs,
-  );
-  const captureUsageSummary = buildCaptureUsageSummary(captureTargetSummaries.filter((target) => target.capture_type !== "api-dashboard"), captureUsage, budgetMs, now);
-
-  return {
-    generated_at: now,
-    environment: env.ADMIN_ACCESS_REQUIRED === "true" ? "production" : "development",
-    devices: (devices.results ?? []).map((device) => summarizeDeviceHealth(device, now)),
-    playlists: playlists.results ?? [],
-    active_playlist: active,
-    capture_targets: captureTargetSummaries,
-    capture_efficiency: summarizeOverviewCaptureEfficiency(
-      captureTargetSummaries, captureUsage, budgetMs, now, captureJobs, captureHistory, captureDecisions,
-    ),
-    asset_health: {
-      missing,
-      integrity_issues: integrityIssues.results ?? [],
-    },
-    audit: (audit.results ?? []).map(formatOverviewAuditEvent),
-  };
-}
-
-type MissingAsset = { sha256: string; expected_size: number; actual_size: number | null };
-
-async function readMissingActiveAssets(env: WorkerEnvironment, active: SqlRow | null, windowStart: number): Promise<MissingAsset[]> {
-  if (!active) return [];
-  const [assets, captures] = await Promise.all([
-    env.DB.prepare(
-      "SELECT sha256, size FROM playlist_assets WHERE playlist_id = ? AND revision = ? ORDER BY position",
-    ).bind(active.playlist_id, active.revision).all(),
-    env.DB.prepare(
-      "SELECT CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
-      "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size " +
-      "FROM playlist_capture_items p JOIN capture_targets t ON t.capture_id = p.capture_id " +
-      "WHERE p.playlist_id = ? AND p.revision = ? ORDER BY p.position",
-    ).bind(windowStart, windowStart, active.playlist_id, active.revision).all(),
-  ]);
-  const missing = await Promise.all([...(assets.results ?? []), ...(captures.results ?? [])].map(async (asset): Promise<MissingAsset | null> => {
-    const object = await env.ASSETS.head("assets/" + asset.sha256);
-    if (object && object.size === asset.size) return null;
-    return { sha256: asset.sha256, expected_size: asset.size, actual_size: object?.size ?? null };
-  }));
-  return missing.filter((item): item is MissingAsset => item !== null);
-}
-
-function summarizeOverviewCaptureTargets(targets: SqlRow[], runtimes: SqlRow[], durations: SqlRow[], reserveMs: number) {
-  const runtimeAverageByCapture = new Map(runtimes.map((row) => [row.capture_id, row]));
-  const durationSummaryByCapture = new Map(durations.map((row) => [row.capture_id, row]));
-  return targets.map((target) => {
-    const source = target.capture_type === "api-dashboard" ? null : new URL(target.url);
-    const runtime = runtimeAverageByCapture.get(target.capture_id);
-    const duration = durationSummaryByCapture.get(target.capture_id);
-    return {
-      capture_id: target.capture_id,
-      display_url: source ? source.origin + source.pathname : "API dashboard",
-      capture_type: target.capture_type ?? "browser-screenshot",
-      api_status: parseMetadata(target.api_status_json) ?? [],
-      api_last_fetch_at: target.api_last_fetch_at ?? null,
-      api_last_image_at: target.api_last_image_at ?? null,
-      name: target.name ?? null,
-      capture_interval_seconds: target.capture_interval_seconds,
-      wait_for_selector: target.wait_for_selector,
-      viewport: { width: target.viewport_width, height: target.viewport_height },
-      sha256: target.sha256,
-      size: target.size,
-      last_attempt_at: target.last_attempt_at,
-      last_success_at: target.last_success_at,
-      last_error: target.last_error,
-      job_status: target.job_status,
-      next_due_at: target.next_due_at,
-      schedule_reviewed: target.schedule_reviewed_at != null,
-      active_in_playlist: target.active_in_playlist === 1,
-      average_browser_ms: target.capture_type !== "api-dashboard" && typeof runtime?.average_browser_ms === "number" && Number.isFinite(runtime.average_browser_ms)
-        ? runtime.average_browser_ms : null,
-      browser_ms_samples: Number(runtime?.sample_count ?? 0),
-      duration_summary: target.capture_type === "api-dashboard" ? null : summarizeDurationAggregate(duration, reserveMs),
-    };
-  });
-}
-
-function summarizeOverviewCaptureEfficiency(
-  captureTargets: SqlRow[],
-  captureUsage: SqlRow | null,
-  budgetMs: number,
-  now: number,
-  captureJobs: SqlRow | null,
-  captureHistory: SqlRow | null,
-  captureDecisions: SqlRow | null,
-) {
-  const summary = buildCaptureUsageSummary(captureTargets.filter((target) => target.capture_type !== "api-dashboard"), captureUsage, budgetMs, now);
-  return {
-    daily_usage: summary.daily_usage,
-    forecast: summary.forecast,
-    last_30_days: summarizeOverviewLast30Days(captureJobs, captureHistory, captureDecisions),
-  };
-}
-
-function overviewCount(row: SqlRow | null, key: string) {
-  return row?.[key] ?? 0;
-}
-
-function summarizeOverviewLast30Days(captureJobs: SqlRow | null, captureHistory: SqlRow | null, captureDecisions: SqlRow | null) {
-  return {
-    successful_screenshots: overviewCount(captureJobs, "successful_screenshots"),
-    validator_unchanged: overviewCount(captureJobs, "validator_unchanged"),
-    successful_unclassified: overviewCount(captureJobs, "successful_unclassified"),
-    jev_shadow_assessments: overviewCount(captureDecisions, "assessments"),
-    jev_candidate_deferrals: overviewCount(captureDecisions, "candidate_deferrals"),
-    jev_candidate_changed: overviewCount(captureDecisions, "candidate_changed"),
-    jev_candidate_unchanged: overviewCount(captureDecisions, "candidate_unchanged"),
-    jev_candidate_validator_unchanged: overviewCount(captureDecisions, "candidate_validator_unchanged"),
-    jev_candidate_failed: overviewCount(captureDecisions, "candidate_failed"),
-    jev_candidate_budget_deferred: overviewCount(captureDecisions, "candidate_budget_deferred"),
-    jev_candidate_unobserved: overviewCount(captureDecisions, "candidate_unobserved"),
-    jev_candidate_unverified: overviewCount(captureDecisions, "candidate_unverified"),
-    jev_errors: overviewCount(captureDecisions, "errors"),
-    validator_outcomes: {
-      disabled: overviewCount(captureJobs, "validator_disabled"),
-      changed: overviewCount(captureJobs, "validator_changed"),
-      no_stored_validator: overviewCount(captureJobs, "validator_no_stored_validator"),
-      unavailable: overviewCount(captureJobs, "validator_unavailable"),
-      cached_asset_missing: overviewCount(captureJobs, "validator_cached_asset_missing"),
-      unknown: overviewCount(captureJobs, "validator_unknown"),
-    },
-    browser_run_ms: {
-      response_header: overviewCount(captureJobs, "browser_ms_response_header"),
-      reserve: overviewCount(captureJobs, "browser_ms_reserve"),
-      unclassified_jobs: overviewCount(captureJobs, "browser_ms_unclassified_jobs"),
-    },
-    browser_ms_sources: {
-      response_header: overviewCount(captureHistory, "response_header"),
-      reserve: overviewCount(captureHistory, "reserve"),
-      unknown: overviewCount(captureHistory, "unknown"),
-    },
-  };
-}
-
-function formatOverviewAuditEvent(event: SqlRow) {
-  return {
-    event_id: event.event_id,
-    actor_id: event.actor_id,
-    event_type: event.event_type,
-    subject_type: event.subject_type,
-    subject_id: event.subject_id,
-    occurred_at: event.occurred_at,
-    metadata: parseMetadata(event.metadata_json),
-  };
-}
-
-async function readCaptureForecast(env: WorkerEnvironment, now = Date.now()) {
-  const windowStart = now - 30 * 24 * 60 * 60 * 1000;
-  const [targets, runtimeAverages, captureUsage] = await Promise.all([
-    env.DB.prepare(
-      "SELECT t.capture_id, t.name, t.url, t.capture_type, t.capture_interval_seconds, t.schedule_reviewed_at, " +
-      "EXISTS (SELECT 1 FROM playlist_capture_items p JOIN active_playlist a " +
-      "ON a.playlist_id = p.playlist_id AND a.revision = p.revision WHERE p.capture_id = t.capture_id) AS active_in_playlist " +
-      "FROM capture_targets t WHERE t.enabled = 1 AND t.capture_type = 'browser-screenshot' ORDER BY t.next_due_at, t.created_at LIMIT 1000",
-    ).all(),
-    env.DB.prepare(
-      "SELECT capture_id, AVG(browser_ms) AS average_browser_ms, COUNT(*) AS sample_count " +
-      "FROM capture_history WHERE captured_at >= ? GROUP BY capture_id",
-    ).bind(windowStart).all(),
-    env.DB.prepare("SELECT usage_day, browser_ms FROM capture_usage WHERE singleton = 1").first(),
-  ]);
-  const runtimeAverageByCapture = new Map((runtimeAverages.results ?? []).map((row) => [row.capture_id, row]));
-  const forecastTargets = (targets.results ?? []).map((target) => {
-    const runtime = runtimeAverageByCapture.get(target.capture_id);
-    const source = new URL(target.url);
-    return {
-      capture_id: target.capture_id,
-      display_url: source.origin + source.pathname,
-      name: target.name ?? null,
-      capture_interval_seconds: target.capture_interval_seconds,
-      schedule_reviewed: target.schedule_reviewed_at != null,
-      active_in_playlist: target.active_in_playlist === 1,
-      average_browser_ms: typeof runtime?.average_browser_ms === "number" && Number.isFinite(runtime.average_browser_ms)
-        ? runtime.average_browser_ms : null,
-      browser_ms_samples: Number(runtime?.sample_count ?? 0),
-    };
-  });
-  const budgetValue = Number(env.DAILY_BROWSER_BUDGET_MS);
-  const budgetMs = Number.isSafeInteger(budgetValue) && budgetValue >= 0 ? budgetValue : CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS;
-  const summary = buildCaptureUsageSummary(forecastTargets, captureUsage, budgetMs, now);
-  return {
-    generated_at: now,
-    plan: "workers-free",
-    quota_scope: "account-wide",
-    other_account_usage_included: false,
-    ...summary,
-  };
-}
-
-function buildCaptureUsageSummary(targets: SqlRow[], captureUsage: SqlRow | null, budgetMs: number, now: number) {
-  const accountedMs = captureUsage?.usage_day === new Date(now).toISOString().slice(0, 10)
-    ? captureUsage.browser_ms : 0;
-  const forecast = calculateDailyCaptureForecast(targets.map((target) => ({
-    capture_id: target.capture_id,
-    display_label: target.name || target.display_url,
-    capture_interval_seconds: target.capture_interval_seconds,
-    active_in_playlist: target.active_in_playlist === true,
-    schedule_reviewed: target.schedule_reviewed === true,
-    average_browser_ms: target.average_browser_ms,
-    browser_ms_samples: target.browser_ms_samples,
-  })), new Map(), {
-    freePlanLimitMs: CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS,
-    workerBudgetMs: budgetMs,
-  });
-  return {
-    daily_usage: {
-      day: captureUsage?.usage_day ?? null,
-      accounted_ms: accountedMs,
-      budget_ms: budgetMs,
-      free_plan_limit_ms: CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS,
-      remaining_ms: Math.max(0, budgetMs - accountedMs),
-    },
-    forecast,
-  };
-}
-
-function summarizeDeviceHealth(device: SqlRow, now: number) {
-  const report = parseHealthJSON(device.report_json);
-  return {
-    device_id: device.device_id,
-    enabled: device.enabled,
-    created_at: device.created_at,
-    last_seen_at: device.last_seen_at,
-    auth_type: device.auth_type,
-    health: {
-      status: device.enabled ? deriveDeviceHealth(report, device.health_received_at, now) : "disabled",
-      received_at: device.health_received_at ?? null,
-      reported_state: device.reported_state ?? null,
-      agent_version: device.agent_version ?? null,
-      sync_status: device.sync_status ?? "unknown",
-      applied_playlist_id: device.applied_playlist_id ?? null,
-      applied_revision: device.applied_revision ?? null,
-      outputs: (report?.outputs ?? []).map(({ display_id, connector, status, error_code }) => ({ display_id, connector, status, error_code })),
-      host: report?.host ?? null,
-      last_error_code: report?.startup_error_code ?? report?.sync?.error_code ?? report?.outputs?.find((item) => item.error_code)?.error_code ?? null,
-    },
-  };
-}
-
-async function readDeviceHealth(deviceID: string, env: WorkerEnvironment) {
-  const device = await env.DB.prepare("SELECT device_id, enabled FROM devices WHERE device_id = ?").bind(deviceID).first();
-  if (!device) throw new HTTPError(404, "device not found");
-  const [latest, events] = await Promise.all([
-    env.DB.prepare("SELECT instance_id, received_at, reported_state, agent_version, sync_status, report_json FROM device_health_latest WHERE device_id = ?")
-      .bind(deviceID).first(),
-    env.DB.prepare("SELECT event_id, received_at, event_type, reported_state, error_code, metadata_json FROM device_health_events WHERE device_id = ? ORDER BY received_at DESC LIMIT ?")
-      .bind(deviceID, 50).all(),
-  ]);
-  const report = parseHealthJSON(latest?.report_json);
-  return {
-    device_id: deviceID,
-    enabled: Boolean(device.enabled),
-    health_status: device.enabled ? deriveDeviceHealth(report, latest?.received_at, Date.now()) : "disabled",
-    received_at: latest?.received_at ?? null,
-    latest: report,
-    events: (events.results ?? []).map(formatHealthEvent),
-  };
-}
-
-async function readDeviceHealthHistory(deviceID: string, params: URLSearchParams, env: WorkerEnvironment) {
-  const device = await env.DB.prepare("SELECT device_id, enabled FROM devices WHERE device_id = ?").bind(deviceID).first();
-  if (!device) throw new HTTPError(404, "device not found");
-  const rawLimit = params.get("limit") ?? "100";
-  const limit = Number(rawLimit);
-  if (!/^\d+$/.test(rawLimit) || !Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
-    throw new HTTPError(400, "limit must be an integer from 1 to 500");
-  }
-  const rawSince = params.get("since");
-  const now = Date.now();
-  const retentionCutoff = now - 30 * 24 * 60 * 60 * 1000;
-  let since = rawSince === null ? retentionCutoff : Number(rawSince);
-  if (rawSince !== null && (!/^\d+$/.test(rawSince) || !Number.isSafeInteger(since))) {
-    throw new HTTPError(400, "since must be a Unix timestamp in milliseconds");
-  }
-  if (since > now) throw new HTTPError(400, "since must not be in the future");
-  since = Math.max(since, retentionCutoff);
-  const [samples, events] = await Promise.all([
-    env.DB.prepare("SELECT bucket_at, received_at, report_json FROM device_health_samples WHERE device_id = ? AND received_at >= ? ORDER BY received_at DESC LIMIT ?")
-      .bind(deviceID, since, limit).all(),
-    env.DB.prepare("SELECT event_id, received_at, event_type, reported_state, error_code, metadata_json FROM device_health_events WHERE device_id = ? AND received_at >= ? ORDER BY received_at DESC LIMIT ?")
-      .bind(deviceID, since, limit).all(),
-  ]);
-  return {
-    device_id: deviceID,
-    enabled: Boolean(device.enabled),
-    since,
-    samples: (samples.results ?? []).map((sample) => ({
-      bucket_at: sample.bucket_at,
-      received_at: sample.received_at,
-      report: parseHealthJSON(sample.report_json),
-    })),
-    events: (events.results ?? []).map(formatHealthEvent),
-  };
-}
-
-function formatHealthEvent(event: SqlRow) {
-  return {
-    event_id: event.event_id,
-    received_at: event.received_at,
-    event_type: event.event_type,
-    reported_state: event.reported_state,
-    error_code: event.error_code,
-    metadata: parseMetadata(event.metadata_json),
-  };
-}
-
-function parseHealthJSON(value: unknown): StoredHealthSnapshot | null {
-  if (!isString(value)) return null;
-  try {
-    const report: unknown = JSON.parse(value);
-    if (!isRecord(report) || !["starting", "ready", "degraded", "startup_failed", "stopping"].includes(String(report.state))) return null;
-    return report as unknown as StoredHealthSnapshot;
-  } catch { return null; }
-}
-
-async function readEnrollmentRequests(env: WorkerEnvironment) {
-  const now = Date.now();
-  const result = await env.DB.prepare(
-    "SELECT r.request_id, r.device_id, r.fingerprint, r.created_at, r.last_seen_at, r.expires_at, " +
-    "CASE WHEN d.device_id IS NULL THEN 0 ELSE 1 END AS replaces_existing " +
-    "FROM enrollment_requests r LEFT JOIN devices d ON d.device_id = r.device_id " +
-    "WHERE r.status = 'pending' AND r.expires_at > ? ORDER BY r.created_at, r.device_id",
-  ).bind(now).all();
-  return (result.results ?? []).map((request) => ({
-    ...request,
-    replaces_existing: Boolean(request.replaces_existing),
-  }));
 }
 
 async function approveEnrollmentRequest(requestID: string, env: WorkerEnvironment, actorID: string) {
@@ -1405,88 +942,112 @@ async function resolveCaptureTarget(
   actorID: string,
   { preserveExistingSchedule = false }: { preserveExistingSchedule?: boolean } = {},
 ) {
-  if (hasExactKeys(input, ["capture_id"])) {
-    const existing = await env.DB.prepare(
-      "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, schedule_reviewed_at, capture_type " +
-      "FROM capture_targets WHERE capture_id = ? AND enabled = 1",
-    ).bind(input.capture_id).first();
-    if (!existing) throw new HTTPError(409, "One of the webpage captures is no longer available.");
-    if (existing.schedule_reviewed_at == null) throw new HTTPError(409, "Review and save this site's screenshot schedule before adding it to a playlist.");
-    if (existing.capture_type !== "api-dashboard") {
-      try {
-        validateCaptureTargetURL(existing.url, env.CAPTURE_ALLOWED_HOSTS);
-      } catch {
-        throw new HTTPError(409, "One of the webpage capture hosts is not on the configured capture allowlist.");
-      }
+  if (hasExactKeys(input, ["capture_id"])) return resolveExistingCaptureTarget(input, env);
+  const { url, settings } = validateNewCaptureTarget(input, env);
+  const variantKey = await captureVariantKey(url, settings);
+  const existing = await findCaptureTargetByVariant(variantKey, env);
+  if (existing) return restoreExistingCaptureTarget(existing, settings, env, actorID, preserveExistingSchedule);
+  return createCaptureTarget(variantKey, url, settings, env, actorID);
+}
+
+async function resolveExistingCaptureTarget(input: SqlRow, env: WorkerEnvironment) {
+  const existing = await env.DB.prepare(
+    "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, schedule_reviewed_at, capture_type " +
+    "FROM capture_targets WHERE capture_id = ? AND enabled = 1",
+  ).bind(input.capture_id).first();
+  if (!existing) throw new HTTPError(409, "One of the webpage captures is no longer available.");
+  if (existing.schedule_reviewed_at == null) throw new HTTPError(409, "Review and save this site's screenshot schedule before adding it to a playlist.");
+  if (existing.capture_type !== "api-dashboard") {
+    try {
+      validateCaptureTargetURL(existing.url, env.CAPTURE_ALLOWED_HOSTS);
+    } catch {
+      throw new HTTPError(409, "One of the webpage capture hosts is not on the configured capture allowlist.");
     }
-    return {
-      capture_id: existing.capture_id,
-      url: existing.url,
-      capture_interval_seconds: existing.capture_interval_seconds,
-      viewport: { width: existing.viewport_width, height: existing.viewport_height },
-      placeholder_sha256: existing.placeholder_sha256,
-      placeholder_size: existing.placeholder_size,
-      created: false,
-    };
   }
+  return captureTargetResult(existing, false);
+}
+
+function validateNewCaptureTarget(input: SqlRow, env: WorkerEnvironment) {
   if (!hasOnlyKeys(input, ["url", "capture_interval_seconds", "viewport"]) ||
       !Object.hasOwn(input ?? {}, "url") || !Object.hasOwn(input ?? {}, "viewport")) {
     throw new HTTPError(400, "A webpage capture needs a URL, capture interval and viewport.");
   }
-
-  let url;
-  let settings;
   try {
-    url = validateCaptureTargetURL(input.url, env.CAPTURE_ALLOWED_HOSTS);
+    const url = validateCaptureTargetURL(input.url, env.CAPTURE_ALLOWED_HOSTS);
     const captureSettings = { ...input };
     if (!Object.hasOwn(input, "capture_interval_seconds")) {
       captureSettings.capture_interval_seconds = DEFAULT_CAPTURE_INTERVAL_SECONDS;
     }
-    settings = validateCaptureSettings(captureSettings);
+    return { url, settings: validateCaptureSettings(captureSettings) };
   } catch (error) {
     throw new HTTPError(400, error instanceof Error ? error.message : String(error));
   }
-  const variantKey = await sha256Hex(JSON.stringify({
+}
+
+async function captureVariantKey(url: string, settings: ReturnType<typeof validateCaptureSettings>) {
+  return sha256Hex(JSON.stringify({
     url,
     viewport_width: settings.viewport_width,
     viewport_height: settings.viewport_height,
     wait_until: "domcontentloaded",
   }));
-  const existing = await env.DB.prepare(
-      "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, last_success_at, schedule_reviewed_at, enabled " +
+}
+
+async function findCaptureTargetByVariant(variantKey: string, env: WorkerEnvironment) {
+  return env.DB.prepare(
+    "SELECT capture_id, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, last_success_at, schedule_reviewed_at, enabled " +
     "FROM capture_targets WHERE variant_key = ?",
   ).bind(variantKey).first();
-  if (existing) {
-    if (!existing.enabled) {
-      await env.DB.batch([
-        env.DB.prepare("UPDATE capture_targets SET enabled = 1 WHERE capture_id = ?").bind(existing.capture_id),
-        auditStatement(env, actorID, "capture.site_restored", "capture", existing.capture_id, {}),
-      ]);
-    }
-    const interval = settings.capture_interval_seconds;
-    if (!preserveExistingSchedule && interval !== existing.capture_interval_seconds) {
-      const now = Date.now();
-      const nextDueAt = existing.last_success_at == null
-        ? now : Math.max(now, existing.last_success_at + interval * 1000);
-      await env.DB.batch([
-        env.DB.prepare("UPDATE capture_targets SET capture_interval_seconds = ?, next_due_at = ? WHERE capture_id = ?")
-          .bind(interval, nextDueAt, existing.capture_id),
-        auditStatement(env, actorID, "capture.interval_updated", "capture", existing.capture_id,
-          { capture_interval_seconds: interval }, { onlyWhenPreviousChanged: true }),
-      ]);
-    }
-    return {
-      capture_id: existing.capture_id,
-      url: existing.url,
-      capture_interval_seconds: interval,
-      viewport: { width: existing.viewport_width, height: existing.viewport_height },
-      placeholder_sha256: existing.placeholder_sha256,
-      placeholder_size: existing.placeholder_size,
-      schedule_reviewed_at: existing.schedule_reviewed_at,
-      created: false,
-    };
-  }
+}
 
+async function restoreExistingCaptureTarget(
+  existing: SqlRow,
+  settings: ReturnType<typeof validateCaptureSettings>,
+  env: WorkerEnvironment,
+  actorID: string,
+  preserveExistingSchedule: boolean,
+) {
+  if (!existing.enabled) {
+    await env.DB.batch([
+      env.DB.prepare("UPDATE capture_targets SET enabled = 1 WHERE capture_id = ?").bind(existing.capture_id),
+      auditStatement(env, actorID, "capture.site_restored", "capture", existing.capture_id, {}),
+    ]);
+  }
+  const interval = settings.capture_interval_seconds;
+  if (!preserveExistingSchedule && interval !== existing.capture_interval_seconds) {
+    const now = Date.now();
+    const nextDueAt = existing.last_success_at == null
+      ? now : Math.max(now, existing.last_success_at + interval * 1000);
+    await env.DB.batch([
+      env.DB.prepare("UPDATE capture_targets SET capture_interval_seconds = ?, next_due_at = ? WHERE capture_id = ?")
+        .bind(interval, nextDueAt, existing.capture_id),
+      auditStatement(env, actorID, "capture.interval_updated", "capture", existing.capture_id,
+        { capture_interval_seconds: interval }, { onlyWhenPreviousChanged: true }),
+    ]);
+  }
+  return captureTargetResult({ ...existing, capture_interval_seconds: interval }, false, true);
+}
+
+function captureTargetResult(target: SqlRow, created: boolean, includeScheduleReview = false) {
+  return {
+    capture_id: target.capture_id,
+    url: target.url,
+    capture_interval_seconds: target.capture_interval_seconds,
+    viewport: { width: target.viewport_width, height: target.viewport_height },
+    placeholder_sha256: target.placeholder_sha256,
+    placeholder_size: target.placeholder_size,
+    ...(includeScheduleReview ? { schedule_reviewed_at: target.schedule_reviewed_at } : {}),
+    created,
+  };
+}
+
+async function createCaptureTarget(
+  variantKey: string,
+  url: string,
+  settings: ReturnType<typeof validateCaptureSettings>,
+  env: WorkerEnvironment,
+  actorID: string,
+) {
   const placeholder = await env.ASSETS.get("admin/capture-pending.png");
   if (!placeholder) throw new HTTPError(503, "The built-in capture placeholder is unavailable. Publish the management assets and try again.");
   const placeholderBytes = new Uint8Array(await placeholder.arrayBuffer());
@@ -1518,16 +1079,7 @@ async function resolveCaptureTarget(
     "FROM capture_targets WHERE variant_key = ?",
   ).bind(variantKey).first();
   if (!target) throw new HTTPError(503, "The webpage capture could not be saved.");
-  return {
-    capture_id: target.capture_id,
-    url: target.url,
-    capture_interval_seconds: target.capture_interval_seconds,
-    viewport: { width: target.viewport_width, height: target.viewport_height },
-    placeholder_sha256: target.placeholder_sha256,
-    placeholder_size: target.placeholder_size,
-    schedule_reviewed_at: target.schedule_reviewed_at,
-    created: insertBatch[1]?.meta?.changes === 1,
-  };
+  return captureTargetResult(target, insertBatch[1]?.meta?.changes === 1, true);
 }
 
 async function createCaptureSite(request: Request, env: WorkerEnvironment, actorID: string) {
@@ -1545,163 +1097,6 @@ async function createCaptureSite(request: Request, env: WorkerEnvironment, actor
     { ...existingProperties, schedule_reviewed: site.schedule_reviewed_at != null },
     created ? 201 : 200,
   );
-}
-
-function percentile(values: number[], proportion: number): number | null {
-  if (!values.length) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.max(0, Math.ceil(sorted.length * proportion) - 1)];
-}
-
-function summarizeApiDashboardJobs(jobs: Array<Record<string, any>>) {
-  const succeeded = jobs.filter((job) => job.status === "succeeded");
-  const fetchTimes = succeeded.map((job) => Number(job.api_fetch_ms)).filter((value) => Number.isFinite(value) && value > 0);
-  const renderTimes = succeeded.map((job) => Number(job.api_render_ms)).filter((value) => Number.isFinite(value) && value > 0);
-  const totalTimes = succeeded.map((job) => Number(job.api_total_ms)).filter((value) => Number.isFinite(value) && value > 0);
-  const count = jobs.length;
-  return {
-    sample_count: count,
-    successes: succeeded.length,
-    failures: jobs.filter((job) => job.status === "failed").length,
-    completed_count: succeeded.length + jobs.filter((job) => job.status === "failed").length,
-    failure_rate: succeeded.length + jobs.filter((job) => job.status === "failed").length
-      ? jobs.filter((job) => job.status === "failed").length / (succeeded.length + jobs.filter((job) => job.status === "failed").length)
-      : null,
-    retry_attempts: jobs.reduce((sum, job) => sum + Math.max(0, Number(job.attempts ?? 0) - 1), 0),
-    partial_source_failures: jobs.filter((job) => job.api_outcome === "partial").length,
-    all_source_failures: jobs.filter((job) => job.api_outcome === "all_failed").length,
-    upstream_requests: jobs.reduce((sum, job) => sum + Number(job.api_request_count ?? 0), 0),
-    not_modified_responses: jobs.reduce((sum, job) => sum + Number(job.api_not_modified_count ?? 0), 0),
-    upstream_failed_requests: jobs.reduce((sum, job) => sum + Number(job.api_failed_request_count ?? 0), 0),
-    response_bytes: jobs.reduce((sum, job) => sum + Number(job.api_response_bytes ?? 0), 0),
-    fetch_p50_ms: percentile(fetchTimes, 0.5),
-    fetch_p90_ms: percentile(fetchTimes, 0.9),
-    render_p50_ms: percentile(renderTimes, 0.5),
-    render_p90_ms: percentile(renderTimes, 0.9),
-    total_p50_ms: percentile(totalTimes, 0.5),
-    total_p90_ms: percentile(totalTimes, 0.9),
-    render_operations: renderTimes.length,
-    render_failures: jobs.filter((job) => Number(job.api_render_failed) === 1).length,
-    content_hash_matches: succeeded.filter((job) => Number(job.api_content_hash_match) === 1).length,
-    asset_reuses: succeeded.filter((job) => Number(job.api_asset_reused) === 1).length,
-  };
-}
-
-async function readApiDashboards(env: WorkerEnvironment) {
-  const [rows, recentJobs] = await Promise.all([env.DB.prepare(
-    "SELECT t.capture_id, t.name, t.enabled, t.capture_interval_seconds, t.viewport_width, t.viewport_height, " +
-    "t.current_sha256, t.current_size, t.last_attempt_at, t.last_success_at, t.last_error, t.next_due_at, " +
-    "t.api_sources_json, t.api_status_json, t.api_last_fetch_at, t.api_last_image_at, " +
-    "(SELECT j.status FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS job_status, " +
-    "(SELECT j.retry_after_at FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS retry_after_at, " +
-    "(SELECT j.recovery_attempts FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS recovery_attempts, " +
-    "(SELECT j.api_fetch_ms FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS api_fetch_ms, " +
-    "(SELECT j.api_render_ms FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS api_render_ms, " +
-    "(SELECT j.api_total_ms FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS api_total_ms, " +
-    "(SELECT j.api_asset_reused FROM capture_jobs j WHERE j.capture_id = t.capture_id ORDER BY j.created_at DESC LIMIT 1) AS api_asset_reused " +
-    "FROM capture_targets t WHERE t.capture_type = 'api-dashboard' ORDER BY t.created_at DESC LIMIT 100",
-  ).all(), env.DB.prepare(
-    "WITH ranked AS (SELECT j.capture_id, j.status, j.attempts, j.created_at, j.api_fetch_ms, j.api_render_ms, j.api_total_ms, j.api_render_failed, j.api_asset_reused, " +
-    "j.api_request_count, j.api_not_modified_count, j.api_failed_request_count, j.api_response_bytes, j.api_content_hash_match, j.api_outcome, " +
-    "ROW_NUMBER() OVER (PARTITION BY j.capture_id ORDER BY j.created_at DESC, j.job_id DESC) AS sample_rank " +
-    "FROM capture_jobs j JOIN capture_targets t ON t.capture_id = j.capture_id " +
-    "WHERE t.capture_type = 'api-dashboard' AND j.created_at >= ?) " +
-    "SELECT capture_id, status, attempts, created_at, api_fetch_ms, api_render_ms, api_total_ms, api_render_failed, api_asset_reused, api_request_count, " +
-    "api_not_modified_count, api_failed_request_count, api_response_bytes, api_content_hash_match, api_outcome " +
-    "FROM ranked WHERE sample_rank <= 100 ORDER BY capture_id, created_at DESC",
-  ).bind(Date.now() - 30 * 24 * 60 * 60 * 1000).all()]);
-  const jobsByCapture = new Map<string, Array<Record<string, any>>>();
-  for (const job of recentJobs.results ?? []) {
-    const items = jobsByCapture.get(job.capture_id) ?? [];
-    items.push(job);
-    jobsByCapture.set(job.capture_id, items);
-  }
-  const now = Date.now();
-  return (rows.results ?? []).map((row) => ({
-    ...row,
-    stale: row.enabled === 1 && Number(row.next_due_at) < now - Number(row.capture_interval_seconds) * 1000,
-    current_image: row.current_sha256 ? `/admin/api/assets/${row.current_sha256}` : null,
-    configuration: parseMetadata(row.api_sources_json),
-    sources: parseMetadataArray(row.api_status_json),
-    recent_metrics: summarizeApiDashboardJobs(jobsByCapture.get(row.capture_id) ?? []),
-  }));
-}
-
-function validateApiDashboardInput(data: Record<string, any>, allowedHosts: string) {
-  if (typeof data.name !== "string" || !data.name.trim() || data.name.trim().length > 120 || /[\u0000-\u001f\u007f]/.test(data.name)) throw new HTTPError(400, "Dashboard name must be 1 to 120 characters on one line.");
-  const interval = data.capture_interval_seconds ?? 300;
-  if (![60, 300].includes(interval)) throw new HTTPError(400, "API dashboard interval must be 60 or 300 seconds.");
-  let config;
-  try { config = parseApiDashboardConfig({ sources: data.sources, width: data.width ?? 1920, height: data.height ?? 1080 }); }
-  catch (error) { throw new HTTPError(400, error instanceof Error ? error.message : String(error)); }
-  for (const source of config.sources) {
-    try { validateSourceConfig(source, allowedHosts); }
-    catch (error) { throw new HTTPError(400, error instanceof Error ? error.message : String(error)); }
-  }
-  return { name: data.name.trim(), interval, config };
-}
-
-async function createApiDashboard(request: Request, env: WorkerEnvironment, actorID: string) {
-  const data = await readJSON(request);
-  if (!hasOnlyKeys(data, ["name", "capture_interval_seconds", "width", "height", "sources"]) || !isRecord(data)) throw new HTTPError(400, "Dashboard configuration contains unsupported fields.");
-  const { name, interval, config } = validateApiDashboardInput(data, env.API_STATUS_ALLOWED_HOSTS ?? "");
-  const placeholder = await env.ASSETS.get("admin/capture-pending.png");
-  if (!placeholder) throw new HTTPError(503, "The built-in image is unavailable. Publish management assets and retry.");
-  const placeholderAsset = await storePngAsset(new Uint8Array(await placeholder.arrayBuffer()), env.ASSETS, { db: env.DB });
-  const captureID = crypto.randomUUID();
-  const now = Date.now();
-  const configJson = JSON.stringify(config);
-  const variantKey = `api-${captureID}`;
-  await env.DB.batch([
-    markAssetLiveStatement(env.DB, placeholderAsset.sha256, placeholderAsset.size, now),
-    env.DB.prepare(
-      "INSERT INTO capture_targets (capture_id, variant_key, url, capture_interval_seconds, viewport_width, viewport_height, placeholder_sha256, placeholder_size, created_at, next_due_at, schedule_reviewed_at, name, capture_type, api_sources_json) " +
-      "VALUES (?, ?, 'https://api-dashboard.invalid/', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'api-dashboard', ?)",
-    ).bind(captureID, variantKey, interval, config.width, config.height, placeholderAsset.sha256, placeholderAsset.size, now, now, now, name, configJson),
-    auditStatement(env, actorID, "api_dashboard.created", "capture", captureID, { capture_interval_seconds: interval, width: config.width, height: config.height, source_count: config.sources.length }),
-  ]);
-  return jsonResponse({ capture_id: captureID, name, capture_interval_seconds: interval, width: config.width, height: config.height, created: true }, 201);
-}
-
-async function updateApiDashboard(request: Request, captureID: string, env: WorkerEnvironment, actorID: string) {
-  const data = await readJSON(request);
-  if (!isRecord(data) || !hasOnlyKeys(data, ["name", "enabled", "capture_interval_seconds", "width", "height", "sources"])) throw new HTTPError(400, "Dashboard update contains unsupported fields.");
-  const existing = await env.DB.prepare("SELECT * FROM capture_targets WHERE capture_id = ? AND capture_type = 'api-dashboard'")
-    .bind(captureID).first();
-  if (!existing) throw new HTTPError(404, "API dashboard could not be found.");
-  const updates: string[] = [];
-  const values: unknown[] = [];
-  if (Object.hasOwn(data, "name")) {
-    if (typeof data.name !== "string" || !data.name.trim() || data.name.trim().length > 120 || /[\u0000-\u001f\u007f]/.test(data.name)) throw new HTTPError(400, "Dashboard name must be 1 to 120 characters on one line.");
-    updates.push("name = ?"); values.push(data.name.trim());
-  }
-  if (Object.hasOwn(data, "enabled")) {
-    if (typeof data.enabled !== "boolean") throw new HTTPError(400, "enabled must be true or false.");
-    updates.push("enabled = ?"); values.push(data.enabled ? 1 : 0);
-  }
-  if (Object.hasOwn(data, "capture_interval_seconds")) {
-    if (data.capture_interval_seconds !== 60 && data.capture_interval_seconds !== 300) throw new HTTPError(400, "API dashboard interval must be 60 or 300 seconds.");
-    updates.push("capture_interval_seconds = ?"); values.push(data.capture_interval_seconds);
-  }
-  if (Object.hasOwn(data, "sources") || Object.hasOwn(data, "width") || Object.hasOwn(data, "height")) {
-    let previous;
-    try { previous = JSON.parse(existing.api_sources_json); } catch { throw new HTTPError(409, "Stored API dashboard configuration is invalid."); }
-    const config = parseApiDashboardConfig({ sources: data.sources ?? previous.sources, width: data.width ?? previous.width, height: data.height ?? previous.height });
-    for (const source of config.sources) {
-      try { validateSourceConfig(source, env.API_STATUS_ALLOWED_HOSTS ?? ""); }
-      catch (error) { throw new HTTPError(400, error instanceof Error ? error.message : String(error)); }
-    }
-    updates.push("api_sources_json = ?", "viewport_width = ?", "viewport_height = ?");
-    values.push(JSON.stringify(config), config.width, config.height);
-  }
-  if (!updates.length) throw new HTTPError(400, "No dashboard changes were supplied.");
-  const now = Date.now();
-  updates.push("next_due_at = ?", "schedule_reviewed_at = ?"); values.push(now, now, captureID);
-  await env.DB.batch([
-    env.DB.prepare(`UPDATE capture_targets SET ${updates.join(", ")} WHERE capture_id = ? AND capture_type = 'api-dashboard'`).bind(...values),
-    auditStatement(env, actorID, "api_dashboard.updated", "capture", captureID, { fields: Object.keys(data) }),
-  ]);
-  return jsonResponse({ capture_id: captureID, updated: true });
 }
 
 async function activatePlaylist(request: Request, env: WorkerEnvironment, actorID: string) {
@@ -1820,48 +1215,6 @@ async function rotateDeviceCredential(request: Request, deviceID: string, env: W
     auditStatement(env, actorID, "device.credential_rotated", "device", deviceID, {}),
   ]);
   return jsonResponse({ device_token: deviceToken });
-}
-
-function auditStatement(
-  env: WorkerEnvironment,
-  actorID: string,
-  eventType: string,
-  subjectType: string,
-  subjectID: string,
-  metadata: unknown,
-  { onlyWhenPreviousChanged = false }: { onlyWhenPreviousChanged?: boolean } = {},
-) {
-  const insert = onlyWhenPreviousChanged
-    ? "SELECT ?, ?, ?, ?, ?, ?, ? WHERE changes() > 0"
-    : "VALUES (?, ?, ?, ?, ?, ?, ?)";
-  return env.DB.prepare(
-    "INSERT INTO audit_events (event_id, actor_id, event_type, subject_type, subject_id, occurred_at, metadata_json) " +
-    insert,
-  ).bind(crypto.randomUUID(), actorID, eventType, subjectType, subjectID, Date.now(), JSON.stringify(metadata));
-}
-
-async function readJSON(request: Request): Promise<unknown> {
-  if (request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !== "application/json") {
-    throw new HTTPError(415, "Content-Type must be application/json");
-  }
-  const bytes = await readBytes(request, MAX_JSON_BYTES);
-  return parseJSONBody(bytes);
-}
-
-function parseMetadata(value: unknown): SqlRow | null {
-  if (!isString(value)) return {};
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return isRecord(parsed) ? parsed as SqlRow : {};
-  } catch { return {}; }
-}
-
-function parseMetadataArray(value: unknown) {
-  if (!isString(value)) return [];
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch { return []; }
 }
 
 function methodNotAllowed(allowed: string) {

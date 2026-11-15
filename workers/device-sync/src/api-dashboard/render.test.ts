@@ -94,6 +94,15 @@ test("dense 720p layouts keep cards readable and center the final partial row", 
   assert.notEqual(cards[6][2], cards[1][2]);
 });
 
+test("compact cards keep the source health label and omit full-card details", () => {
+  const sources = Array.from({ length: 30 }, (_, index) => ({ ...sample, id: `source-${index}` }));
+  const svg = dashboardSVG(sources, 3840, 2160);
+
+  assert.match(svg, />Services: Unknown<\/text>/);
+  assert.doesNotMatch(svg, /Data fresh/);
+  assert.doesNotMatch(svg, /Checked 00:00 UTC/);
+});
+
 test("source health badges do not squeeze longer card titles", () => {
   const sources = Array.from({ length: 4 }, (_, index) => ({ ...sample, id: `source-${index}`, displayName: "North America services" }));
   const svg = dashboardSVG(sources);

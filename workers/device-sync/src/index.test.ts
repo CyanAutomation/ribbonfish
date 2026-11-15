@@ -230,6 +230,17 @@ test("production configuration keeps the management API disabled", async () => {
   assert.equal(response.status, 404);
 });
 
+test("public routing reserves only the admin path and reports method constraints", async () => {
+  const { env } = testEnvironment();
+  const unrelated = await fetchHandler(new Request("https://worker.test/administrator"), env);
+  assert.equal(unrelated.status, 404);
+  assert.equal(await unrelated.text(), "not found");
+
+  const wrongMethod = await fetchHandler(new Request("https://worker.test/healthz", { method: "POST" }), env);
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get("Allow"), "GET");
+});
+
 test("all enrolled devices receive the same active playlist", async () => {
   const { env, db } = testEnvironment();
   const secondToken = "another-secure-device-token-with-at-least-32-characters";
