@@ -78,6 +78,29 @@ export async function validateSkills(skillsRoot: string, { statFn = stat }: { st
       }
     }
   }
+
+  const indexFile = path.join(skillsRoot, 'README.md');
+  try {
+    const index = await readFile(indexFile, 'utf8');
+    const indexSkills = [...index.matchAll(/^\|\s*\[([^\]]+)\]\(([^)]+\/SKILL\.md)\)\s*\|([^|]*)\|/gm)]
+      .map((match) => ({ name: match[1], destination: match[2], summary: match[3].trim() }));
+    const indexedNames = new Set(indexSkills.map(({ name }) => name));
+
+    for (const { name } of indexSkills) {
+      if (!skillNames.has(name)) errors.push(`README.md: skill "${name}" does not exist`);
+    }
+    for (const { name, summary } of indexSkills) {
+      if (!summary) errors.push(`README.md: skill "${name}" must have a non-empty index summary`);
+    }
+    for (const name of skills) {
+      const matchingEntries = indexSkills.filter((entry) => entry.name === name && entry.destination === `${name}/SKILL.md`);
+      if (matchingEntries.length !== 1 || !indexedNames.has(name)) {
+        errors.push(`README.md: skill "${name}" must link to "${name}/SKILL.md" exactly once`);
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
   return errors;
 }
 

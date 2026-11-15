@@ -12,6 +12,73 @@ test('repository skills have valid metadata, sibling references, and local links
   assert.deepEqual(await validateSkills(path.join(repositoryRoot, '.github/skills')), []);
 });
 
+test('repository skills index lists every skill exactly once', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ribbonfish-skills-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, 'example'), { recursive: true });
+  await writeFile(path.join(root, 'example/SKILL.md'), [
+    '---',
+    'name: example',
+    'description: Example skill',
+    'tags: [demo]',
+    'relatedSkills: []',
+    '---',
+  ].join('\n'));
+  await writeFile(path.join(root, 'README.md'), [
+    '| Skill | Use it for |',
+    '| --- | --- |',
+    '| [example](example/SKILL.md) | Example workflow |',
+    '| [stale](stale/SKILL.md) | Removed workflow |',
+  ].join('\n'));
+
+  assert.deepEqual(await validateSkills(root), [
+    'README.md: skill "stale" does not exist',
+  ]);
+});
+
+test('reports missing skill index entries and duplicate index entries', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ribbonfish-skills-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, 'example'), { recursive: true });
+  await writeFile(path.join(root, 'example/SKILL.md'), [
+    '---',
+    'name: example',
+    'description: Example skill',
+    'tags: [demo]',
+    'relatedSkills: []',
+    '---',
+  ].join('\n'));
+  await writeFile(path.join(root, 'README.md'), [
+    '| [other](example/SKILL.md) | Wrong label |',
+    '| [example](example/SKILL.md) | Example workflow |',
+    '| [example](example/SKILL.md) | Duplicate |',
+  ].join('\n'));
+
+  assert.deepEqual(await validateSkills(root), [
+    'README.md: skill "other" does not exist',
+    'README.md: skill "example" must link to "example/SKILL.md" exactly once',
+  ]);
+});
+
+test('requires an index summary that helps route work to a skill', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ribbonfish-skills-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, 'example'), { recursive: true });
+  await writeFile(path.join(root, 'example/SKILL.md'), [
+    '---',
+    'name: example',
+    'description: Example skill',
+    'tags: [demo]',
+    'relatedSkills: []',
+    '---',
+  ].join('\n'));
+  await writeFile(path.join(root, 'README.md'), '| [example](example/SKILL.md) |  |\n');
+
+  assert.deepEqual(await validateSkills(root), [
+    'README.md: skill "example" must have a non-empty index summary',
+  ]);
+});
+
 test('reports missing metadata, mismatched names, unknown related skills, and broken links', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ribbonfish-skills-'));
   t.after(() => rm(root, { recursive: true, force: true }));
