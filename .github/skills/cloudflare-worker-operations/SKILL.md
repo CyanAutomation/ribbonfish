@@ -7,7 +7,7 @@ relatedSkills: [cloudflare-device-sync-enrollment, cloudflare-management-console
 
 # Cloudflare Worker Operations
 
-Use this skill for `workers/device-sync/wrangler*.toml`, D1 migrations, Worker bindings, secrets, deployment scripts, or GitHub Actions under `.github/workflows/` that validate or deploy Workers.
+Use this skill for `workers/device-sync/wrangler*.toml`, D1 migrations, Worker bindings, secrets, deployment scripts, or the Worker validation and deployment portions of `.github/workflows/device-sync.yml`. General CI, workflow triggers, action pinning, security checks, and agent image publishing are covered by [GitHub Actions and Image Publishing](../github-actions-release/SKILL.md).
 
 ## Environment boundaries
 
@@ -42,7 +42,6 @@ Before production changes, verify the target config, binding names, migration st
 ## References
 
 - [Worker setup and migration/deployment procedure](../../../workers/device-sync/README.md)
-- [Worker validation and deploy workflows](../../workflows/device-sync.yml)
-- [Validation and production deployment workflow](../../workflows/device-sync.yml)
+- [Worker validation and deployment workflow](../../workflows/device-sync.yml)
 - [Device sync and enrollment](../cloudflare-device-sync-enrollment/SKILL.md)
 - [Capture prerequisites](../cloudflare-capture-design/SKILL.md)

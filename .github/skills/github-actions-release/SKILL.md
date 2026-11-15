@@ -7,7 +7,7 @@ relatedSkills: [container-smoke-testing, cloudflare-worker-operations, raspberry
 
 # GitHub Actions and Image Publishing
 
-Use this skill for changes to `.github/workflows/`, CI triggers, deployment automation, or container image tags.
+Use this skill for general CI workflow changes, workflow triggers and path filters, action pinning, security checks, release automation, or container image tags. For Cloudflare Worker deployment sequencing, D1 migration readiness, and Wrangler environments, use [Cloudflare Worker Operations](../cloudflare-worker-operations/SKILL.md); this guide owns general GitHub Actions and image publishing policy.
 
 ## Workflow map
 
