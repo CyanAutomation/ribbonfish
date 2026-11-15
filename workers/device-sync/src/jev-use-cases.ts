@@ -39,30 +39,12 @@ export const captureAssessmentQuestions = Object.freeze({
 });
 
 export function buildCaptureAssessmentState(target: CaptureAssessmentTarget, now = Date.now()) {
-  const lastSuccess = typeof target.last_success_at === "number" && Number.isFinite(target.last_success_at) ? target.last_success_at : null;
-  const nextDue = Number.isFinite(target.next_due_at) ? target.next_due_at : now;
-  const durations = (target.history ?? []).filter((item) => item.browser_ms_source === "response_header")
-    .map((item) => item.browser_ms)
-    .filter((value) => Number.isFinite(value) && value >= 0).sort((a, b) => a - b);
-  const midpoint = Math.floor(durations.length / 2);
-  const medianBrowserMs = durations.length
-    ? durations.length % 2 ? durations[midpoint] : Math.round((durations[midpoint - 1] + durations[midpoint]) / 2)
-    : null;
-  const durationSummary = target.duration_summary;
-  const recentHashes = (target.history ?? []).slice(0, 10)
-    .map((item) => typeof item.sha256 === "string" ? item.sha256 : null);
-  let recentContentChangeCount = 0;
-  for (let index = 1; index < recentHashes.length; index++) {
-    if (recentHashes[index] && recentHashes[index - 1] && recentHashes[index] !== recentHashes[index - 1]) {
-      recentContentChangeCount += 1;
-    }
-  }
-  let unchangedCaptureStreak = 0;
-  if (recentHashes[0]) {
-    for (let index = 1; index < recentHashes.length && recentHashes[index] === recentHashes[0]; index++) {
-      unchangedCaptureStreak += 1;
-    }
-  }
+  const history = target.history ?? [];
+  const lastSuccess = finiteTimestamp(target.last_success_at);
+  const nextDue = finiteTimestamp(target.next_due_at) ?? now;
+  const durations = measuredDurations(history);
+  const medianBrowserMs = median(durations);
+  const [recentContentChangeCount, unchangedCaptureStreak] = summarizeRecentHashes(history);
   return JSON.stringify({
     screenshot_age_seconds: lastSuccess === null ? null : Math.max(0, Math.floor((now - lastSuccess) / 1000)),
     configured_interval_seconds: Number.isSafeInteger(target.capture_interval_seconds) ? target.capture_interval_seconds : null,
@@ -70,31 +52,84 @@ export function buildCaptureAssessmentState(target: CaptureAssessmentTarget, now
     consecutive_failures: Number.isSafeInteger(target.failure_count) ? Math.max(0, target.failure_count) : 0,
     recent_job: (target.job_status === "queued" || target.job_status === "running") ? target.job_status : "none",
     recent_error_present: Boolean(target.last_error),
-    recent_capture_count: (target.history ?? []).length,
+    recent_capture_count: history.length,
     browser_duration_sample_count: durations.length,
     median_browser_ms: medianBrowserMs,
-    capture_duration: {
-      total_samples: safeCount(durationSummary?.total_samples),
-      measured_sample_count: safeCount(durationSummary?.measured_sample_count),
-      reserve_estimated_sample_count: safeCount(durationSummary?.reserve_estimated_sample_count),
-      unknown_sample_count: safeCount(durationSummary?.unknown_sample_count),
-      failed_attempt_count: safeCount(durationSummary?.failed_attempt_count),
-      retry_attempt_count: safeCount(durationSummary?.retry_attempt_count),
-      capture_attempt_failure_rate: safeRatio(durationSummary?.capture_attempt_failure_rate),
-      retry_attempt_rate: safeRatio(durationSummary?.retry_attempt_rate),
-      measured_header_coverage: safeRatio(durationSummary?.measured_header_coverage),
-      measured_p50_ms: safeDuration(durationSummary?.measured_p50_ms),
-      measured_p90_ms: safeDuration(durationSummary?.measured_p90_ms),
-      measured_average_ms: safeDuration(durationSummary?.measured_average_ms),
-      reserve_estimated_total_ms: safeCount(durationSummary?.reserve_estimated_total_ms),
-      configured_reserve_ms: safeCount(durationSummary?.configured_reserve_ms, 60_000),
-      reserve_review: durationSummary?.reserve_review === "possible_overestimate" || durationSummary?.reserve_review === "possible_underestimate" || durationSummary?.reserve_review === "not_flagged"
-        ? durationSummary.reserve_review : "insufficient_data",
-    },
+    capture_duration: normalizeDurationSummary(target.duration_summary),
     readiness_mode: target.readiness_mode === "selector" || target.wait_for_selector ? "selector" : "domcontentloaded",
     recent_content_change_count: recentContentChangeCount,
     unchanged_capture_streak: unchangedCaptureStreak,
   });
+}
+
+function finiteTimestamp(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function measuredDurations(history: NonNullable<CaptureAssessmentTarget["history"]>) {
+  return history.filter((item) => item.browser_ms_source === "response_header")
+    .map((item) => item.browser_ms)
+    .filter((value) => Number.isFinite(value) && value >= 0)
+    .sort((a, b) => a - b);
+}
+
+function median(values: number[]) {
+  if (!values.length) return null;
+  const midpoint = Math.floor(values.length / 2);
+  return values.length % 2 ? values[midpoint] : Math.round((values[midpoint - 1] + values[midpoint]) / 2);
+}
+
+function summarizeRecentHashes(history: NonNullable<CaptureAssessmentTarget["history"]>) {
+  const hashes = history.slice(0, 10).map((item) => typeof item.sha256 === "string" ? item.sha256 : null);
+  const changes = hashes.slice(1).filter((hash, index) => hash && hashes[index] && hash !== hashes[index]).length;
+  let unchangedStreak = 0;
+  if (hashes[0]) {
+    for (let index = 1; index < hashes.length && hashes[index] === hashes[0]; index++) unchangedStreak += 1;
+  }
+  return [changes, unchangedStreak] as const;
+}
+
+function normalizeDurationSummary(summary: CaptureDurationSummary | undefined) {
+  return {
+    ...normalizeDurationCounts(summary),
+    ...normalizeDurationRates(summary),
+    ...normalizeDurationTimings(summary),
+    reserve_review: normalizeReserveReview(summary?.reserve_review),
+  };
+}
+
+function normalizeDurationCounts(summary: CaptureDurationSummary | undefined) {
+  return {
+    total_samples: safeCount(summary?.total_samples),
+    measured_sample_count: safeCount(summary?.measured_sample_count),
+    reserve_estimated_sample_count: safeCount(summary?.reserve_estimated_sample_count),
+    unknown_sample_count: safeCount(summary?.unknown_sample_count),
+    failed_attempt_count: safeCount(summary?.failed_attempt_count),
+    retry_attempt_count: safeCount(summary?.retry_attempt_count),
+    reserve_estimated_total_ms: safeCount(summary?.reserve_estimated_total_ms),
+    configured_reserve_ms: safeCount(summary?.configured_reserve_ms, 60_000),
+  };
+}
+
+function normalizeDurationRates(summary: CaptureDurationSummary | undefined) {
+  return {
+    capture_attempt_failure_rate: safeRatio(summary?.capture_attempt_failure_rate),
+    retry_attempt_rate: safeRatio(summary?.retry_attempt_rate),
+    measured_header_coverage: safeRatio(summary?.measured_header_coverage),
+  };
+}
+
+function normalizeDurationTimings(summary: CaptureDurationSummary | undefined) {
+  return {
+    measured_p50_ms: safeDuration(summary?.measured_p50_ms),
+    measured_p90_ms: safeDuration(summary?.measured_p90_ms),
+    measured_average_ms: safeDuration(summary?.measured_average_ms),
+  };
+}
+
+function normalizeReserveReview(value: unknown) {
+  return value === "possible_overestimate" || value === "possible_underestimate" || value === "not_flagged"
+    ? value : "insufficient_data";
 }
 
 export function durationReviewRecommendation(answers: unknown, durationSummary?: CaptureDurationSummary) {

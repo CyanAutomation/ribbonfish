@@ -1,12 +1,14 @@
 import { jsonResponse, privateHeaders } from "./http-response.ts";
 import { validatePlaylist } from "./playlist-validation.ts";
-import { verifyDeviceSignature, decodeBase64Url, encodeBase64Url, equalSha256Digests } from "./device-signature.ts";
+import { verifyDeviceSignature, equalSha256Digests } from "./device-signature.ts";
 import { matchesETag } from "./http-cache.ts";
 import { readRequestBody, parseJSONBody } from "./request-body.ts";
-import { randomToken, sha256Hex, sha256HexBytes } from "./crypto-primitives.ts";
+import { sha256Hex } from "./crypto-primitives.ts";
 export { sha256Hex } from "./crypto-primitives.ts";
 import { HTTPError } from "./http-error.ts";
-import { hasExactKeys, isString } from "./validation.ts";
+import { DEVICE_ID_PATTERN } from "./device-id.ts";
+import { enroll, requestDeviceEnrollment } from "./enrollment.ts";
+import { isString } from "./validation.ts";
 import { assessUpcomingCaptures } from "./capture-intelligence.ts";
 import { handleAdminRequest } from "./admin.ts";
 import { CAPTURE_DEAD_LETTER_QUEUE_NAME, cleanupExpiredCaptures, dispatchCaptureRetries, dispatchDueCaptures,
@@ -18,8 +20,6 @@ import type {
   AssignedAssetRow,
   CaptureQueueBatch,
   DeviceCredentialRow,
-  EnrollmentRequestRow,
-  EnrollmentRow,
   PlaylistAssetRow,
   WorkerEnvironment,
   WorkerExecutionContext,
@@ -37,13 +37,9 @@ type PlaylistReadResult =
   | { playlist: ActivePlaylist; etag: string; notModified: false }
   | { playlist?: undefined; etag: string; notModified: true };
 
-const MAX_ENROLLMENT_BYTES = 4 << 10;
 const MAX_TELEMETRY_BYTES = 8 << 10;
 const MAX_ASSET_BYTES = 32 << 20;
-const ENROLLMENT_REQUEST_TTL_MS = 24 * 60 * 60 * 1000;
 const LAST_SEEN_WRITE_INTERVAL_MS = 5 * 60 * 1000;
-const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const PUBLIC_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 const worker = {
   fetch(request, env, ctx) {
@@ -86,103 +82,101 @@ export async function scheduledHandler(controller: WorkerScheduledController, en
     ...(cleanHealth ? { device_health_records_cleaned: healthRecordsCleaned } : {}) };
 }
 
+type FetchRouteHandler = (request: Request, env: WorkerEnvironment, ctx?: WorkerExecutionContext) => Promise<Response>;
+type FetchRoute = { method: string; handle: FetchRouteHandler };
+
+const fetchRoutes = new Map<string, FetchRoute>([
+  ["/healthz", { method: "GET", handle: (_request, env) => healthCheck(env) }],
+  ["/v1/enroll", { method: "POST", handle: (request, env) => enroll(request, env) }],
+  ["/v1/enrollment-requests", { method: "POST", handle: (request, env) => requestDeviceEnrollment(request, env) }],
+  ["/v1/telemetry", { method: "POST", handle: (request, env) => receiveDeviceTelemetry(request, env) }],
+  ["/v2/playlist", { method: "GET", handle: (request, env, ctx) => readPlaylist(request, env, ctx) }],
+]);
+
 export async function fetchHandler(request: Request, env: WorkerEnvironment, ctx?: WorkerExecutionContext) {
-  const url = new URL(request.url);
   try {
-    if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
-      return await handleAdminRequest(request, env, ctx);
-    }
-
-    if (url.pathname === "/healthz") {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      return await healthCheck(env);
-    }
-
-    if (url.pathname === "/v1/enroll") {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      return await enroll(request, env);
-    }
-
-    if (url.pathname === "/v1/enrollment-requests") {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      return await requestDeviceEnrollment(request, env);
-    }
-
-    if (url.pathname === "/v1/telemetry") {
-      if (request.method !== "POST") return methodNotAllowed("POST");
-      const deviceID = request.headers.get("X-Ribbonfish-Device-ID") ?? "";
-      const device = await getEnabledDevice(env, deviceID);
-      let bodyBytes;
-      if (typeof device.public_key === "string" && device.public_key) {
-        bodyBytes = await readRequestBody(request, MAX_TELEMETRY_BYTES);
-        await authenticateDevice(request, deviceID, device, new Uint8Array(bodyBytes));
-      } else {
-        await authenticateDevice(request, deviceID, device);
-        bodyBytes = await readRequestBody(request, MAX_TELEMETRY_BYTES);
-      }
-      const data = parseJSONBody(bodyBytes);
-      const report = validateDeviceHealthReport(data);
-      if (!report) throw new HTTPError(400, "invalid device health report");
-      return jsonResponse(await persistDeviceHealth(env.DB, deviceID, report, Date.now()));
-    }
-
-    if (url.pathname === "/v2/playlist") {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      const deviceID = request.headers.get("X-Ribbonfish-Device-ID") ?? "";
-      await authenticate(request, env, deviceID);
-      await updateLastSeen(env, deviceID, ctx);
-      const { playlist, etag, notModified } = await readActivePlaylist(env, request.headers.get("If-None-Match"));
-      if (notModified) return new Response(null, { status: 304, headers: privateHeaders({ ETag: etag }) });
-      if (!playlist) throw new HTTPError(502, "active playlist was not available");
-      if (matchesETag(request.headers.get("If-None-Match"), etag)) {
-        return new Response(null, { status: 304, headers: privateHeaders({ ETag: etag }) });
-      }
-      return jsonResponse(playlist, 200, { ETag: etag });
-    }
-
-    const assetMatch = url.pathname.match(/^\/v2\/assets\/([a-f0-9]{64})$/);
-    if (assetMatch) {
-      if (request.method !== "GET") return methodNotAllowed("GET");
-      const digest = assetMatch[1];
-      const deviceID = request.headers.get("X-Ribbonfish-Device-ID") ?? "";
-      await authenticate(request, env, deviceID);
-      const assigned = await env.DB.prepare(
-        `SELECT pa.size FROM playlist_assets pa
-         JOIN active_playlist ap ON ap.playlist_id = pa.playlist_id AND ap.revision = pa.revision
-         WHERE pa.sha256 = ? AND ap.singleton = 1 LIMIT 1`,
-      ).bind(digest).first<AssignedAssetRow>();
-      const captureAssigned = assigned ? null : await env.DB.prepare(
-        "SELECT CASE WHEN t.current_sha256 = ? AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size " +
-        "FROM playlist_capture_items p " +
-        "JOIN active_playlist ap ON ap.playlist_id = p.playlist_id AND ap.revision = p.revision " +
-        "JOIN capture_targets t ON t.capture_id = p.capture_id " +
-        "WHERE ap.singleton = 1 AND (" +
-        "(t.current_sha256 = ? AND t.last_success_at >= ?) OR " +
-        "(t.placeholder_sha256 = ? AND (t.current_sha256 IS NULL OR t.last_success_at < ?))) LIMIT 1",
-      ).bind(digest, Date.now() - 30 * 24 * 60 * 60 * 1000, digest,
-        Date.now() - 30 * 24 * 60 * 60 * 1000, digest, Date.now() - 30 * 24 * 60 * 60 * 1000).first<AssignedAssetRow>();
-      if (!assigned && !captureAssigned) throw new HTTPError(403, "asset is not assigned to the active playlist");
-      const object = await env.ASSETS.get(`assets/${digest}`);
-      if (!object) throw new HTTPError(404, "asset not found");
-      if (object.size !== (assigned?.size ?? captureAssigned?.size) || object.size > MAX_ASSET_BYTES) {
-        throw new HTTPError(502, "stored asset metadata does not match the playlist");
-      }
-      const headers = privateHeaders({
-        "Content-Type": "application/octet-stream",
-        "Content-Length": String(object.size),
-        "X-Content-Type-Options": "nosniff",
-      });
-      if (object.httpEtag) headers.set("ETag", object.httpEtag);
-      return new Response(object.body, { status: 200, headers });
-    }
-
-    return new Response("not found", { status: 404, headers: privateHeaders() });
+    return await dispatchFetchRoute(request, env, ctx);
   } catch (error) {
-    if (error instanceof HTTPError) {
-      return jsonResponse({ error: error.message }, error.status);
-    }
+    if (error instanceof HTTPError) return jsonResponse({ error: error.message }, error.status);
     return jsonResponse({ error: "internal error" }, 500);
   }
+}
+
+async function dispatchFetchRoute(request: Request, env: WorkerEnvironment, ctx?: WorkerExecutionContext): Promise<Response> {
+  const pathname = new URL(request.url).pathname;
+  if (pathname === "/admin" || pathname.startsWith("/admin/")) return handleAdminRequest(request, env, ctx);
+  const route = matchFetchRoute(pathname);
+  if (!route) return new Response("not found", { status: 404, headers: privateHeaders() });
+  if (request.method !== route.method) return methodNotAllowed(route.method);
+  return route.handle(request, env, ctx);
+}
+
+function matchFetchRoute(pathname: string): FetchRoute | null {
+  const assetMatch = pathname.match(/^\/v2\/assets\/([a-f0-9]{64})$/);
+  if (assetMatch) return { method: "GET", handle: (request, env) => readAssignedAsset(request, env, assetMatch[1]) };
+  return fetchRoutes.get(pathname) ?? null;
+}
+
+async function receiveDeviceTelemetry(request: Request, env: WorkerEnvironment): Promise<Response> {
+  const deviceID = request.headers.get("X-Ribbonfish-Device-ID") ?? "";
+  const device = await getEnabledDevice(env, deviceID);
+  let bodyBytes;
+  if (typeof device.public_key === "string" && device.public_key) {
+    bodyBytes = await readRequestBody(request, MAX_TELEMETRY_BYTES);
+    await authenticateDevice(request, deviceID, device, new Uint8Array(bodyBytes));
+  } else {
+    await authenticateDevice(request, deviceID, device);
+    bodyBytes = await readRequestBody(request, MAX_TELEMETRY_BYTES);
+  }
+  const report = validateDeviceHealthReport(parseJSONBody(bodyBytes));
+  if (!report) throw new HTTPError(400, "invalid device health report");
+  return jsonResponse(await persistDeviceHealth(env.DB, deviceID, report, Date.now()));
+}
+
+async function readPlaylist(request: Request, env: WorkerEnvironment, ctx?: WorkerExecutionContext): Promise<Response> {
+  const deviceID = request.headers.get("X-Ribbonfish-Device-ID") ?? "";
+  await authenticate(request, env, deviceID);
+  await updateLastSeen(env, deviceID, ctx);
+  const { playlist, etag, notModified } = await readActivePlaylist(env, request.headers.get("If-None-Match"));
+  if (notModified) return new Response(null, { status: 304, headers: privateHeaders({ ETag: etag }) });
+  if (!playlist) throw new HTTPError(502, "active playlist was not available");
+  if (matchesETag(request.headers.get("If-None-Match"), etag)) {
+    return new Response(null, { status: 304, headers: privateHeaders({ ETag: etag }) });
+  }
+  return jsonResponse(playlist, 200, { ETag: etag });
+}
+
+async function readAssignedAsset(request: Request, env: WorkerEnvironment, digest: string): Promise<Response> {
+  const deviceID = request.headers.get("X-Ribbonfish-Device-ID") ?? "";
+  await authenticate(request, env, deviceID);
+  const assigned = await env.DB.prepare(
+    `SELECT pa.size FROM playlist_assets pa
+     JOIN active_playlist ap ON ap.playlist_id = pa.playlist_id AND ap.revision = pa.revision
+     WHERE pa.sha256 = ? AND ap.singleton = 1 LIMIT 1`,
+  ).bind(digest).first<AssignedAssetRow>();
+  const captureAssigned = assigned ? null : await env.DB.prepare(
+    "SELECT CASE WHEN t.current_sha256 = ? AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size " +
+    "FROM playlist_capture_items p " +
+    "JOIN active_playlist ap ON ap.playlist_id = p.playlist_id AND ap.revision = p.revision " +
+    "JOIN capture_targets t ON t.capture_id = p.capture_id " +
+    "WHERE ap.singleton = 1 AND (" +
+    "(t.current_sha256 = ? AND t.last_success_at >= ?) OR " +
+    "(t.placeholder_sha256 = ? AND (t.current_sha256 IS NULL OR t.last_success_at < ?))) LIMIT 1",
+  ).bind(digest, Date.now() - 30 * 24 * 60 * 60 * 1000, digest,
+    Date.now() - 30 * 24 * 60 * 60 * 1000, digest, Date.now() - 30 * 24 * 60 * 60 * 1000).first<AssignedAssetRow>();
+  if (!assigned && !captureAssigned) throw new HTTPError(403, "asset is not assigned to the active playlist");
+  const object = await env.ASSETS.get(`assets/${digest}`);
+  if (!object) throw new HTTPError(404, "asset not found");
+  if (object.size !== (assigned?.size ?? captureAssigned?.size) || object.size > MAX_ASSET_BYTES) {
+    throw new HTTPError(502, "stored asset metadata does not match the playlist");
+  }
+  const headers = privateHeaders({
+    "Content-Type": "application/octet-stream",
+    "Content-Length": String(object.size),
+    "X-Content-Type-Options": "nosniff",
+  });
+  if (object.httpEtag) headers.set("ETag", object.httpEtag);
+  return new Response(object.body, { status: 200, headers });
 }
 
 function updateLastSeen(env: WorkerEnvironment, deviceID: string, ctx?: WorkerExecutionContext) {
@@ -214,137 +208,13 @@ async function healthCheck(env: WorkerEnvironment) {
   }
 }
 
-async function enroll(request: Request, env: WorkerEnvironment) {
-  const data = await readJSON(request, MAX_ENROLLMENT_BYTES);
-  if (!hasExactKeys(data, ["device_id", "enrollment_code"]) ||
-      !isString(data.device_id) || !ID_PATTERN.test(data.device_id) || !isString(data.enrollment_code) ||
-      data.enrollment_code.length < 8 || data.enrollment_code.length > 512) {
-    throw new HTTPError(400, "invalid enrollment request");
-  }
-
-  const now = Date.now();
-  const codeHash = await sha256Hex(data.enrollment_code);
-  const enrollment = await env.DB.prepare(
-    "SELECT code_hash, expires_at, consumed_at FROM enrollments WHERE code_hash = ?",
-  ).bind(codeHash).first<EnrollmentRow>();
-  if (!enrollment || enrollment.consumed_at !== null || enrollment.expires_at <= now) {
-    throw new HTTPError(401, "enrollment code is invalid or expired");
-  }
-  const existing = await env.DB.prepare(
-    "SELECT device_id FROM devices WHERE device_id = ?",
-  ).bind(data.device_id).first<{ device_id: string }>();
-  if (existing) throw new HTTPError(409, "device is already enrolled");
-
-  const token = randomToken();
-  const claimID = randomToken();
-  const tokenHash = await sha256Hex(token);
-  const results = await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE enrollments SET consumed_at = ?, claim_id = ?
-       WHERE code_hash = ? AND consumed_at IS NULL AND expires_at > ?
-         AND NOT EXISTS (SELECT 1 FROM devices WHERE device_id = ?)`,
-    ).bind(now, claimID, codeHash, now, data.device_id),
-    env.DB.prepare(
-      `INSERT INTO devices (device_id, token_hash, enabled, created_at)
-       SELECT ?, ?, 1, ?
-       WHERE EXISTS (
-         SELECT 1 FROM enrollments WHERE code_hash = ? AND consumed_at = ? AND claim_id = ?
-       ) AND NOT EXISTS (SELECT 1 FROM devices WHERE device_id = ?)`,
-    ).bind(data.device_id, tokenHash, now, codeHash, now, claimID, data.device_id),
-  ]);
-  if (results[0]?.meta?.changes !== 1 || results[1]?.meta?.changes !== 1) {
-    const existingAfterClaim = await env.DB.prepare(
-      "SELECT device_id FROM devices WHERE device_id = ?",
-    ).bind(data.device_id).first<{ device_id: string }>();
-    if (existingAfterClaim) throw new HTTPError(409, "device is already enrolled");
-    throw new HTTPError(401, "enrollment code is invalid or expired");
-  }
-  return jsonResponse({ device_token: token }, 201);
-}
-
-async function requestDeviceEnrollment(request: Request, env: WorkerEnvironment) {
-  const rateLimiter = env.ENROLLMENT_RATE_LIMITER;
-  if (rateLimiter) {
-    const ipAddress = request.headers.get("CF-Connecting-IP") ?? "unknown";
-    const { success } = await rateLimiter.limit({ key: ipAddress });
-    if (!success) throw new HTTPError(429, "too many enrollment requests; retry later");
-  }
-
-  const { data, bodyBytes } = await readJSONBody(request, MAX_ENROLLMENT_BYTES);
-  if (!hasExactKeys(data, ["device_id", "public_key"]) ||
-      !isString(data.device_id) || !ID_PATTERN.test(data.device_id) ||
-      !isString(data.public_key) || !PUBLIC_KEY_PATTERN.test(data.public_key)) {
-    throw new HTTPError(400, "invalid enrollment request");
-  }
-  const publicKeyBytes = decodeBase64Url(data.public_key);
-  if (publicKeyBytes.byteLength !== 32 || encodeBase64Url(publicKeyBytes) !== data.public_key) {
-    throw new HTTPError(400, "invalid enrollment public key");
-  }
-  if (!await verifyDeviceSignature(request, data.device_id, data.public_key, bodyBytes)) {
-    throw new HTTPError(401, "device enrollment proof failed");
-  }
-
-  const requestID = await sha256HexBytes(publicKeyBytes);
-  const fingerprint = formatFingerprint(requestID);
-  const now = Date.now();
-  const existingDevice = await env.DB.prepare(
-    "SELECT device_id, public_key, enabled FROM devices WHERE device_id = ?",
-  ).bind(data.device_id).first<Pick<DeviceCredentialRow, "device_id" | "public_key" | "enabled">>();
-  if (existingDevice?.public_key === data.public_key) {
-    return jsonResponse({
-      status: existingDevice.enabled === 1 ? "approved" : "disabled",
-      fingerprint,
-      request_id: requestID,
-      expires_at: null,
-      replaces_existing: false,
-    });
-  }
-
-  await env.DB.prepare("DELETE FROM enrollment_requests WHERE expires_at <= ?").bind(now).run();
-  const existingRequest = await env.DB.prepare(
-    "SELECT request_id, device_id, public_key, fingerprint, created_at, last_seen_at, expires_at, status " +
-    "FROM enrollment_requests WHERE request_id = ?",
-  ).bind(requestID).first<EnrollmentRequestRow>();
-  if (existingRequest && (existingRequest.device_id !== data.device_id || existingRequest.public_key !== data.public_key)) {
-    throw new HTTPError(409, "enrollment request identity conflict");
-  }
-
-  await env.DB.prepare(
-    `INSERT INTO enrollment_requests
-       (request_id, device_id, public_key, fingerprint, created_at, last_seen_at, expires_at, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
-     ON CONFLICT(request_id) DO UPDATE SET last_seen_at = excluded.last_seen_at
-     WHERE enrollment_requests.status = 'pending'
-       AND enrollment_requests.device_id = excluded.device_id
-       AND enrollment_requests.public_key = excluded.public_key`,
-  ).bind(requestID, data.device_id, data.public_key, fingerprint, now, now, now + ENROLLMENT_REQUEST_TTL_MS).run();
-
-  const current = await env.DB.prepare(
-    "SELECT request_id, device_id, public_key, fingerprint, created_at, last_seen_at, expires_at, status " +
-    "FROM enrollment_requests WHERE request_id = ?",
-  ).bind(requestID).first<EnrollmentRequestRow>();
-  if (!current || current.device_id !== data.device_id || current.public_key !== data.public_key) {
-    throw new HTTPError(409, "enrollment request is no longer active");
-  }
-  if (current.status === "approved") {
-    throw new HTTPError(409, "enrollment request was superseded by another device credential");
-  }
-  return jsonResponse({
-    status: current.status,
-    fingerprint,
-    request_id: requestID,
-    expires_at: current.expires_at,
-    replaces_existing: Boolean(existingDevice),
-  });
-}
-
 async function authenticate(request: Request, env: WorkerEnvironment, deviceID: string, bodyBytes = new Uint8Array()) {
   const device = await getEnabledDevice(env, deviceID);
   return authenticateDevice(request, deviceID, device, bodyBytes);
 }
 
 async function getEnabledDevice(env: WorkerEnvironment, deviceID: string): Promise<DeviceCredentialRow> {
-  if (!ID_PATTERN.test(deviceID)) throw new HTTPError(401, "device authentication failed");
+  if (!DEVICE_ID_PATTERN.test(deviceID)) throw new HTTPError(401, "device authentication failed");
   const device = await env.DB.prepare(
     "SELECT device_id, token_hash, public_key, enabled FROM devices WHERE device_id = ?",
   ).bind(deviceID).first<DeviceCredentialRow>();
@@ -387,7 +257,7 @@ async function readActivePlaylist(env: WorkerEnvironment, ifNoneMatch: string | 
     "FROM active_playlist ap JOIN playlists p ON p.playlist_id = ap.playlist_id AND p.revision = ap.revision " +
     "WHERE ap.singleton = 1",
   ).first<ActivePlaylistRow>();
-  if (!active || !ID_PATTERN.test(active.playlist_id ?? "") || !ID_PATTERN.test(active.revision ?? "")) {
+  if (!active || !DEVICE_ID_PATTERN.test(active.playlist_id ?? "") || !DEVICE_ID_PATTERN.test(active.revision ?? "")) {
     throw new HTTPError(503, "no active playlist is configured");
   }
   const playlistRow = active;
@@ -429,19 +299,6 @@ async function readActivePlaylist(env: WorkerEnvironment, ifNoneMatch: string | 
     throw new HTTPError(502, "stored active playlist is invalid");
   }
   return { playlist, etag: `"${playlist.revision}"`, notModified: false };
-}
-
-async function readJSON(request: Request, maxBytes: number): Promise<unknown> {
-  return (await readJSONBody(request, maxBytes)).data;
-}
-
-async function readJSONBody(request: Request, maxBytes: number): Promise<{ data: unknown; bodyBytes: Uint8Array }> {
-  const bodyBytes = await readRequestBody(request, maxBytes);
-  return { data: parseJSONBody(bodyBytes), bodyBytes };
-}
-
-function formatFingerprint(requestID: string) {
-  return requestID.slice(0, 32).match(/.{4}/g)!.join("-");
 }
 
 function methodNotAllowed(allowed: string) {

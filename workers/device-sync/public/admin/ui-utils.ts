@@ -1,3 +1,7 @@
+export { formatTimestamp } from "./admin-formatters.ts";
+export { buildFleetInsights } from "./fleet-insights.ts";
+export { formatDeviceHealthDetails } from "./health-details.ts";
+import { formatTimestamp } from "./admin-formatters.ts";
 /** Coalesce concurrent requests and release the shared promise after success or failure. */
 export function createSingleFlight<T>(operation: () => Promise<T>): () => Promise<T> {
   let inFlight: Promise<T> | null = null;
@@ -29,37 +33,6 @@ type CaptureSummary = {
   viewport?: { width: number; height: number };
   wait_for_selector?: string | null;
 };
-type FleetDevice = {
-  device_id?: string;
-  enabled?: boolean | number;
-  health?: {
-    status?: string;
-    sync_status?: string;
-    applied_playlist_id?: string | null;
-    applied_revision?: string | number | null;
-    received_at?: number | null;
-  } | null;
-};
-type FleetOverview = {
-  active_playlist?: { playlist_id?: string; revision?: string | number } | null;
-  devices?: FleetDevice[];
-  asset_health?: { missing?: { sha256?: string; last_seen_at?: number }[]; integrity_issues?: { sha256?: string; last_seen_at?: number }[] };
-  capture_targets?: CaptureSummary[];
-};
-type CaptureTargetSummary = NonNullable<FleetOverview["capture_targets"]>[number];
-type FleetInsight = {
-  key: string;
-  title: string;
-  severity: "action" | "review";
-  evidence: string;
-  updatedAt: number | null;
-  action: { label: string; href: string };
-};
-type EnrollmentRequestSummary = { created_at?: number | null };
-type HealthOutput = { connector?: string; error_code?: string; last_frame_age_seconds: number | null; display_id: string; status: string };
-type HealthReport = { sync?: { last_success_age_seconds?: number | null; status?: string; applied_playlist_id?: string; applied_revision?: number }; agent_version: string; agent_uptime_seconds: number; startup_error_code?: string; outputs?: HealthOutput[]; host?: { uptime_seconds: number; temperature_millicelsius: number; memory_available_bytes: number; state_disk_free_bytes: number; load_1m: number } };
-type HealthHistory = { events?: { metadata?: { health_status?: string; previous_health_status?: string }; received_at: number; event_type: string; error_code?: string }[]; samples?: unknown[] };
-
 const AUDIT_EVENT_LABELS: Record<string, string> = {
   "asset.uploaded": "Uploaded playlist image",
   "capture.skip_once_applied": "Skipped one scheduled screenshot",
@@ -215,166 +188,6 @@ export function describeJevAnswer(key: string, answer: JevAnswerDisplay, duratio
   return null;
 }
 
-export function buildFleetInsights(overview: FleetOverview = {}, enrollmentRequests: EnrollmentRequestSummary[] = []) {
-  const devices = Array.isArray(overview.devices) ? overview.devices : [];
-  const enabledDevices = devices.filter((device) => device.enabled !== false && device.enabled !== 0);
-  const activePlaylist = overview.active_playlist;
-  const captureTargets = Array.isArray(overview.capture_targets) ? overview.capture_targets : [];
-
-  return [
-    missingPlaylistInsight(enabledDevices, activePlaylist),
-    deviceReviewInsight(enabledDevices, activePlaylist),
-    assetHealthInsight(overview),
-    failedCaptureInsight(captureTargets),
-    unreviewedScheduleInsight(captureTargets),
-    pendingEnrollmentInsight(enrollmentRequests),
-  ].filter((item): item is FleetInsight => item !== null);
-}
-
-function missingPlaylistInsight(enabledDevices: FleetDevice[], activePlaylist: FleetOverview["active_playlist"]): FleetInsight | null {
-  if (activePlaylist || !enabledDevices.length) return null;
-  return {
-    key: "playlist",
-    title: "No active playlist is assigned",
-    severity: "action",
-    evidence: `${enabledDevices.length} enabled ${enabledDevices.length === 1 ? "device is" : "devices are"} waiting for a playlist to be activated.`,
-    updatedAt: null,
-    action: { label: "Choose a playlist", href: "#playlist-section" },
-  };
-}
-
-function deviceReviewInsight(enabledDevices: FleetDevice[], activePlaylist: FleetOverview["active_playlist"]): FleetInsight | null {
-  const reviewedDevices = enabledDevices.filter((device) =>
-    ["degraded", "stale", "offline", "unknown"].includes(device.health?.status ?? "unknown") ||
-    device.health?.sync_status === "failed" ||
-    isPlaylistSyncUnknown(device, activePlaylist) ||
-    (device.health?.sync_status !== "ok" && device.health?.sync_status !== "failed") ||
-    isBehindActivePlaylist(device, activePlaylist),
-  );
-  if (!reviewedDevices.length) return null;
-  const counts = deviceReviewCounts(reviewedDevices, activePlaylist);
-  const affected = formatAffectedLabels(reviewedDevices.map((device) => device.device_id));
-  const evidence = [
-    countLabel(counts.offline, "offline device", "offline devices"),
-    countLabel(counts.degraded, "degraded device", "degraded devices"),
-    countLabel(counts.stale, "stale report"),
-    countLabel(counts.unknown, "unknown health status", "unknown health statuses"),
-    countLabel(counts.failedSync, "sync failure"),
-    countLabel(counts.syncUnknown, "sync status unavailable", "sync statuses unavailable"),
-    countLabel(counts.behind, "device behind the active playlist", "devices behind the active playlist"),
-    affected ? `Affected devices: ${affected}` : "",
-  ].filter(Boolean).join(" · ");
-  return {
-    key: "devices",
-    title: `${reviewedDevices.length} ${reviewedDevices.length === 1 ? "device needs" : "devices need"} a health or sync review`,
-    severity: counts.offline || counts.degraded || counts.failedSync || counts.behind ? "action" : "review",
-    evidence,
-    updatedAt: latestTimestamp(reviewedDevices.map((device) => device.health?.received_at)),
-    action: { label: "Review devices", href: "#device-section" },
-  };
-}
-
-function deviceReviewCounts(devices: FleetDevice[], activePlaylist: FleetOverview["active_playlist"]) {
-  const statuses = new Map<string, number>();
-  for (const device of devices) {
-    const status = device.health?.status ?? "unknown";
-    if (["degraded", "stale", "offline", "unknown"].includes(status)) statuses.set(status, (statuses.get(status) ?? 0) + 1);
-  }
-  return {
-    offline: statuses.get("offline") ?? 0,
-    degraded: statuses.get("degraded") ?? 0,
-    stale: statuses.get("stale") ?? 0,
-    unknown: statuses.get("unknown") ?? 0,
-    failedSync: devices.filter((device) => device.health?.sync_status === "failed").length,
-    syncUnknown: devices.filter((device) => device.health?.sync_status !== "ok" && device.health?.sync_status !== "failed").length,
-    behind: devices.filter((device) => isBehindActivePlaylist(device, activePlaylist)).length,
-  };
-}
-
-function assetHealthInsight(overview: FleetOverview): FleetInsight | null {
-  const missingAssets = overview.asset_health?.missing ?? [];
-  const integrityIssues = overview.asset_health?.integrity_issues ?? [];
-  const assetIssues = [...missingAssets, ...integrityIssues];
-  const uniqueAssets = new Set(assetIssues.map((asset, index) => asset.sha256 ?? `issue-${index}`));
-  if (!uniqueAssets.size) return null;
-  return {
-    key: "assets",
-    title: `${uniqueAssets.size} active playlist ${uniqueAssets.size === 1 ? "asset has" : "assets have"} issues`,
-    severity: "action",
-    evidence: [countLabel(missingAssets.length, "missing asset"), countLabel(integrityIssues.length, "integrity issue")].filter(Boolean).join(" · "),
-    updatedAt: latestTimestamp(assetIssues.map((asset) => asset.last_seen_at)),
-    action: { label: "Review playlist assets", href: "#playlist-section" },
-  };
-}
-
-function failedCaptureInsight(captureTargets: CaptureTargetSummary[]): FleetInsight | null {
-  const failedCaptures = captureTargets.filter((target) =>
-    Boolean(target.last_error) && !["queued", "running"].includes(target.job_status ?? ""));
-  if (!failedCaptures.length) return null;
-  const lastAttempt = latestTimestamp(failedCaptures.map((target) => target.last_attempt_at));
-  const affected = formatAffectedLabels(failedCaptures.map((target) => target.name || target.display_url));
-  return {
-    key: "captures",
-    title: `${failedCaptures.length} ${failedCaptures.length === 1 ? "screenshot capture failed" : "screenshot captures failed"}`,
-    severity: "action",
-    evidence: `${failedCaptures.length} ${failedCaptures.length === 1 ? "site has" : "sites have"} a failed latest capture${lastAttempt !== null ? ` · Latest failed attempt at ${formatTimestamp(lastAttempt)}` : ""}${affected ? ` · Affected sites: ${affected}` : ""}`,
-    updatedAt: lastAttempt,
-    action: { label: "Review capture sites", href: "#sites-section" },
-  };
-}
-
-function unreviewedScheduleInsight(captureTargets: CaptureTargetSummary[]): FleetInsight | null {
-  const unreviewedSchedules = captureTargets.filter((target) => target.schedule_reviewed === false || target.schedule_reviewed === 0);
-  if (!unreviewedSchedules.length) return null;
-  const affected = formatAffectedLabels(unreviewedSchedules.map((target) => target.name || target.display_url));
-  return {
-    key: "schedules",
-    title: `${unreviewedSchedules.length} ${unreviewedSchedules.length === 1 ? "capture schedule needs" : "capture schedules need"} review`,
-    severity: "review",
-    evidence: `${unreviewedSchedules.length} ${unreviewedSchedules.length === 1 ? "schedule has not been reviewed before adding its site to a playlist" : "schedules have not been reviewed before adding those sites to a playlist"}.${affected ? ` Affected sites: ${affected}.` : ""}`,
-    updatedAt: null,
-    action: { label: "Review schedules", href: "#sites-section" },
-  };
-}
-
-function pendingEnrollmentInsight(enrollmentRequests: EnrollmentRequestSummary[]): FleetInsight | null {
-  if (!enrollmentRequests.length) return null;
-  const createdAt = latestTimestamp(enrollmentRequests.map((request) => request.created_at));
-  return {
-    key: "enrollments",
-    title: `${enrollmentRequests.length} ${enrollmentRequests.length === 1 ? "device is" : "devices are"} waiting for approval`,
-    severity: "review",
-    evidence: `${countLabel(enrollmentRequests.length, "pending enrollment")} · Verify each device fingerprint before approving.`,
-    updatedAt: createdAt,
-    action: { label: "Review approvals", href: "#pending-enrollments-title" },
-  };
-}
-
-function countLabel(count: number, singular: string, plural = `${singular}s`) {
-  return count ? `${count} ${count === 1 ? singular : plural}` : "";
-}
-
-function latestTimestamp(values: unknown[]) {
-  const timestamps = values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  return timestamps.length ? Math.max(...timestamps) : null;
-}
-
-function isBehindActivePlaylist(device: FleetDevice, activePlaylist: FleetOverview["active_playlist"]) {
-  return Boolean(activePlaylist && device.health?.applied_playlist_id && device.health?.applied_revision !== undefined && device.health?.applied_revision !== null &&
-    (device.health.applied_playlist_id !== activePlaylist.playlist_id || String(device.health.applied_revision) !== String(activePlaylist.revision)));
-}
-
-function isPlaylistSyncUnknown(device: FleetDevice, activePlaylist: FleetOverview["active_playlist"]) {
-  return Boolean(activePlaylist && (!device.health?.applied_playlist_id || device.health?.applied_revision === undefined || device.health.applied_revision === null));
-}
-
-function formatAffectedLabels(labels: unknown[]) {
-  const normalized = labels.filter((label): label is string => typeof label === "string" && Boolean(label.trim())).map((label) => label.trim());
-  const visible = normalized.slice(0, 3);
-  if (normalized.length > visible.length) visible.push(`+${normalized.length - visible.length} more`);
-  return visible.join(", ");
-}
-
 export function formatCaptureInterval(seconds: number) {
   if (seconds >= 86400 && seconds % 86400 === 0) {
     const days = seconds / 86400;
@@ -389,22 +202,6 @@ export function formatCaptureInterval(seconds: number) {
     return `Every ${minutes === 1 ? "minute" : `${minutes} minutes`}`;
   }
   return `Every ${seconds} second${seconds === 1 ? "" : "s"}`;
-}
-
-export function formatTimestamp(value: string | number | null | undefined, locale?: string) {
-  if (value === null || value === undefined || value === "") return "Never seen";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Unknown time";
-  const formatted = new Intl.DateTimeFormat(locale, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    timeZone: "UTC",
-  }).format(date);
-  return `${formatted} UTC`;
 }
 
 export function formatAuditEventType(eventType: string) {
@@ -449,56 +246,6 @@ export function formatEnrollmentApprovalPrompt(request: { replaces_existing?: bo
   return `Only approve ${request.device_id} if its physical display shows the full fingerprint ${request.fingerprint}.${replacement}`;
 }
 
-export function formatDeviceHealthDetails(result: { latest?: HealthReport | null; health_status: string; received_at: number }, history: HealthHistory = {}) {
-  const report = result?.latest;
-  if (!report) return { message: "This device has not reported health yet." };
-
-  const sync = report.sync ?? {};
-  const lastSync = sync.last_success_age_seconds == null
-    ? "never"
-    : `${formatAge(sync.last_success_age_seconds)} ago`;
-  const summary = [
-    `Fleet health ${result.health_status}.`,
-    `Last report ${formatTimestamp(result.received_at)} · Agent ${report.agent_version} · Uptime ${formatAge(report.agent_uptime_seconds)}`,
-    `Sync ${sync.status ?? "unknown"} · last success ${lastSync}${sync.applied_playlist_id ? ` · ${sync.applied_playlist_id} / ${sync.applied_revision ?? "revision unknown"}` : ""}`,
-  ];
-  if (report.startup_error_code) summary.push(`Startup issue: ${report.startup_error_code}`);
-
-  const outputs = (report.outputs ?? []).map((output) => {
-    const connector = output.connector ? ` (${output.connector})` : "";
-    const issue = output.error_code ? ` · ${output.error_code}` : "";
-    const lastFrame = output.last_frame_age_seconds === null
-      ? "no successful frame yet"
-      : `last frame ${formatAge(output.last_frame_age_seconds ?? NaN)} ago`;
-    return `${output.display_id}${connector}: ${output.status} · ${lastFrame}${issue}`;
-  });
-
-  const host = [];
-  if (report.host) {
-    if (Number.isFinite(report.host.uptime_seconds)) host.push(`Host uptime ${formatAge(report.host.uptime_seconds)}`);
-    if (Number.isFinite(report.host.temperature_millicelsius)) host.push(`Temperature ${(report.host.temperature_millicelsius / 1000).toFixed(1)}°C`);
-    if (Number.isFinite(report.host.memory_available_bytes)) host.push(`Memory ${formatBytes(report.host.memory_available_bytes)} available`);
-    if (Number.isFinite(report.host.state_disk_free_bytes)) host.push(`State disk ${formatBytes(report.host.state_disk_free_bytes)} free`);
-    if (Number.isFinite(report.host.load_1m)) host.push(`1m load ${report.host.load_1m.toFixed(2)}`);
-  }
-
-  const events = (history.events ?? []).map((event) => {
-    const status = event.metadata?.health_status ? ` · ${event.metadata.health_status}` : "";
-    const transition = event.metadata?.previous_health_status
-      ? ` (${event.metadata.previous_health_status} → ${event.metadata.health_status})`
-      : "";
-    return `${formatTimestamp(event.received_at)} · ${event.event_type}${status}${transition}${event.error_code ? ` · ${event.error_code}` : ""}`;
-  });
-
-  return {
-    summary,
-    outputs,
-    host,
-    events,
-    sampleCount: history.samples?.length ?? 0,
-  };
-}
-
 export function createRetryableLoadOnce() {
   let loaded = false;
   let pending: Promise<unknown> | null = null;
@@ -518,26 +265,6 @@ export function createRetryableLoadOnce() {
       return pending as Promise<T>;
     },
   };
-}
-
-function formatAge(seconds: number) {
-  if (!Number.isFinite(seconds) || seconds < 0) return "unknown";
-  if (seconds < 60) return `${Math.floor(seconds)}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ${minutes % 60}m`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ${hours % 24}h`;
-}
-
-function formatBytes(bytes: number) {
-  if (!Number.isFinite(bytes) || bytes < 0) return "—";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let amount = bytes;
-  let unit = 0;
-  while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
-  return `${amount.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
 export function formatAuditDetails(metadata: unknown, locale?: string) {

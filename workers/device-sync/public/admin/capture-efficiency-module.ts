@@ -33,6 +33,113 @@ interface CaptureEfficiencySummary {
 const count = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0;
 const milliseconds = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 
+function buildForecastTargets(targets: CaptureTargetSummary[]): CaptureForecastTarget[] {
+  return targets.map((target) => ({
+    capture_id: target.capture_id,
+    display_label: target.name || target.display_url,
+    capture_interval_seconds: target.capture_interval_seconds,
+    active_in_playlist: target.active_in_playlist === true,
+    schedule_reviewed: target.schedule_reviewed === true,
+    average_browser_ms: typeof target.average_browser_ms === "number" ? target.average_browser_ms : null,
+    browser_ms_samples: count(target.browser_ms_samples),
+  }));
+}
+
+function renderDurationSite(target: CaptureTargetSummary, ownerDocument: Document): HTMLElement {
+  const item = node("li", undefined, "capture-duration-analysis__site", ownerDocument);
+  item.append(node("strong", target.name || target.display_url, undefined, ownerDocument));
+  const summary = target.duration_summary;
+  const readinessMode = target.wait_for_selector ? "selector gated" : "domcontentloaded";
+  if (!summary || summary.total_samples === 0) {
+    item.append(node("p", "No Browser Run duration samples yet. Current reserve: " +
+      formatRunTime(summary?.configured_reserve_ms) + " · readiness: " + readinessMode + ".", "muted", ownerDocument));
+    return item;
+  }
+
+  item.append(node(
+    "p",
+    summary.measured_sample_count + " measured samples · p50 " + formatRunTime(summary.measured_p50_ms) +
+    " · p90 " + formatRunTime(summary.measured_p90_ms) + " · " +
+    Math.round(summary.measured_header_coverage * 100) + "% measured-header coverage",
+    "muted",
+    ownerDocument,
+  ));
+  item.append(node(
+    "p",
+    summary.reserve_estimated_sample_count + " reserve-estimated samples · " +
+    formatRunTime(summary.reserve_estimated_total_ms) + " reserved · current reserve " +
+    formatRunTime(summary.configured_reserve_ms) + " · " + summary.unknown_sample_count + " unknown · " +
+    summary.failed_attempt_count + " failed capture " + (summary.failed_attempt_count === 1 ? "attempt" : "attempts") + " · " +
+    summary.retry_attempt_count + " retry " + (summary.retry_attempt_count === 1 ? "attempt" : "attempts") +
+    " · readiness: " + readinessMode,
+    "muted",
+    ownerDocument,
+  ));
+  const review = reserveReview(summary.reserve_review);
+  item.append(node("p", review.text, review.className, ownerDocument));
+  return item;
+}
+
+function reserveReview(value: CaptureDurationSummary["reserve_review"]): { text: string; className: string } {
+  if (value === "possible_overestimate") {
+    return {
+      text: "Possible reserve overestimate: measured p90 is at most half the configured reserve. Review the accounting reserve; it remains unchanged.",
+      className: "capture-duration-analysis__review",
+    };
+  }
+  if (value === "possible_underestimate") {
+    return {
+      text: "Possible reserve underestimate: measured p90 exceeds the configured reserve. Review the accounting reserve; it remains unchanged.",
+      className: "capture-duration-analysis__review",
+    };
+  }
+  if (value === "not_flagged") {
+    return {
+      text: "No possible reserve overestimate or underestimate indicated by the current measured samples.",
+      className: "muted",
+    };
+  }
+  return {
+    text: "Not enough measured samples and coverage to assess the reserve.",
+    className: "muted",
+  };
+}
+
+function renderDurationSection(targets: CaptureTargetSummary[], ownerDocument: Document): HTMLElement {
+  const section = node("section", undefined, "capture-duration-analysis", ownerDocument);
+  section.append(node("h3", "Per-site capture duration samples", undefined, ownerDocument));
+  section.append(node(
+    "p",
+    "Measured Browser Run time, reserve estimates, and screenshot readiness are separate signals. Reserve review cues identify possible overestimates or underestimates; they do not change the configured reserve.",
+    "muted",
+    ownerDocument,
+  ));
+  const list = node("ul", undefined, "capture-duration-analysis__sites", ownerDocument);
+  for (const target of targets) list.append(renderDurationSite(target, ownerDocument));
+  section.append(list);
+  return section;
+}
+
+function renderRecentOutcomes(efficiency: CaptureEfficiencySummary, ownerDocument: Document): HTMLElement {
+  const recent = efficiency.last_30_days ?? {};
+  const runTime = recent.browser_run_ms ?? {};
+  const history = node("details", undefined, "capture-outcomes-details", ownerDocument);
+  history.append(node("summary", "Last 30 days of capture outcomes", undefined, ownerDocument));
+  history.append(node(
+    "p",
+    count(recent.successful_screenshots) + " screenshots completed, " +
+    count(recent.validator_unchanged) + " unchanged validator checks skipped Browser Run, " +
+    count(recent.successful_unclassified) + " older results unclassified. Browser Run time: " +
+    formatRunTime(runTime.response_header) + " measured, " +
+    formatRunTime(runTime.reserve) + " reserve-estimated, " +
+    count(runTime.unclassified_jobs) + " older jobs unclassified. " +
+    formatJevCaptureOutcomeSummary(recent),
+    "muted",
+    ownerDocument,
+  ));
+  return history;
+}
+
 /** Compose the Browser Run forecast and recent outcomes into the standalone module region. */
 export function renderCaptureEfficiencyModule(
   container: HTMLElement,
@@ -50,92 +157,15 @@ export function renderCaptureEfficiencyModule(
     return null;
   }
 
-  const forecastTargets: CaptureForecastTarget[] = targets.map((target) => ({
-    capture_id: target.capture_id,
-    display_label: target.name || target.display_url,
-    capture_interval_seconds: target.capture_interval_seconds,
-    active_in_playlist: target.active_in_playlist === true,
-    schedule_reviewed: target.schedule_reviewed === true,
-    average_browser_ms: typeof target.average_browser_ms === "number" ? target.average_browser_ms : null,
-    browser_ms_samples: count(target.browser_ms_samples),
-  }));
   const dailyUsage = efficiency.daily_usage ?? {};
-  const forecast = renderCaptureUsageForecast(container, forecastTargets, {
+  const forecast = renderCaptureUsageForecast(container, buildForecastTargets(targets), {
     accounted_ms: milliseconds(dailyUsage.accounted_ms),
     budget_ms: milliseconds(dailyUsage.budget_ms),
     free_plan_limit_ms: dailyUsage.free_plan_limit_ms === undefined
       ? CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS
       : milliseconds(dailyUsage.free_plan_limit_ms),
   });
-
-  const durationSection = node("section", undefined, "capture-duration-analysis", ownerDocument);
-  durationSection.append(node("h3", "Per-site capture duration samples", undefined, ownerDocument));
-  durationSection.append(node(
-    "p",
-    "Measured Browser Run time, reserve estimates, and screenshot readiness are separate signals. Reserve review cues identify possible overestimates or underestimates; they do not change the configured reserve.",
-    "muted",
-    ownerDocument,
-  ));
-  const durationList = node("ul", undefined, "capture-duration-analysis__sites", ownerDocument);
-  for (const target of targets) {
-    const summary = target.duration_summary;
-    const item = node("li", undefined, "capture-duration-analysis__site", ownerDocument);
-    item.append(node("strong", target.name || target.display_url, undefined, ownerDocument));
-    const readinessMode = target.wait_for_selector ? "selector gated" : "domcontentloaded";
-    if (!summary || summary.total_samples === 0) {
-      item.append(node("p", "No Browser Run duration samples yet. Current reserve: " +
-        formatRunTime(summary?.configured_reserve_ms) + " · readiness: " + readinessMode + ".", "muted", ownerDocument));
-    } else {
-      item.append(node(
-        "p",
-        summary.measured_sample_count + " measured samples · p50 " + formatRunTime(summary.measured_p50_ms) +
-        " · p90 " + formatRunTime(summary.measured_p90_ms) + " · " +
-        Math.round(summary.measured_header_coverage * 100) + "% measured-header coverage",
-        "muted",
-        ownerDocument,
-      ));
-      item.append(node(
-        "p",
-        summary.reserve_estimated_sample_count + " reserve-estimated samples · " +
-        formatRunTime(summary.reserve_estimated_total_ms) + " reserved · current reserve " +
-        formatRunTime(summary.configured_reserve_ms) + " · " + summary.unknown_sample_count + " unknown · " +
-        summary.failed_attempt_count + " failed capture " + (summary.failed_attempt_count === 1 ? "attempt" : "attempts") + " · " +
-        summary.retry_attempt_count + " retry " + (summary.retry_attempt_count === 1 ? "attempt" : "attempts") +
-        " · readiness: " + readinessMode,
-        "muted",
-        ownerDocument,
-      ));
-      const assessment = summary.reserve_review === "possible_overestimate"
-        ? "Possible reserve overestimate: measured p90 is at most half the configured reserve. Review the accounting reserve; it remains unchanged."
-        : summary.reserve_review === "possible_underestimate"
-          ? "Possible reserve underestimate: measured p90 exceeds the configured reserve. Review the accounting reserve; it remains unchanged."
-          : summary.reserve_review === "not_flagged"
-            ? "No possible reserve overestimate or underestimate indicated by the current measured samples."
-          : "Not enough measured samples and coverage to assess the reserve.";
-      item.append(node("p", assessment,
-        summary.reserve_review === "possible_overestimate" || summary.reserve_review === "possible_underestimate" ? "capture-duration-analysis__review" : "muted", ownerDocument));
-    }
-    durationList.append(item);
-  }
-  durationSection.append(durationList);
-  container.append(durationSection);
-
-  const recent = efficiency.last_30_days ?? {};
-  const runTime = recent.browser_run_ms ?? {};
-  const history = node("details", undefined, "capture-outcomes-details", ownerDocument);
-  history.append(node("summary", "Last 30 days of capture outcomes", undefined, ownerDocument));
-  history.append(node(
-    "p",
-    count(recent.successful_screenshots) + " screenshots completed, " +
-    count(recent.validator_unchanged) + " unchanged validator checks skipped Browser Run, " +
-    count(recent.successful_unclassified) + " older results unclassified. Browser Run time: " +
-    formatRunTime(runTime.response_header) + " measured, " +
-    formatRunTime(runTime.reserve) + " reserve-estimated, " +
-    count(runTime.unclassified_jobs) + " older jobs unclassified. " +
-    formatJevCaptureOutcomeSummary(recent),
-    "muted",
-    ownerDocument,
-  ));
-  container.append(history);
+  container.append(renderDurationSection(targets, ownerDocument));
+  container.append(renderRecentOutcomes(efficiency, ownerDocument));
   return forecast;
 }

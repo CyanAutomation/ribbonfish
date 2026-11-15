@@ -1,4 +1,5 @@
-import { createSingleFlight, formatTimestamp } from "./ui-utils.ts";
+import { createSingleFlight } from "./ui-utils.ts";
+import { formatTimestamp } from "./admin-formatters.ts";
 import {
   createDefinitionList,
   linkButton,

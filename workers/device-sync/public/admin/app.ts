@@ -1,4 +1,8 @@
 import { api } from "./api.ts";
+import { formatTimestamp } from "./admin-formatters.ts";
+import { formatDeviceHealthDetails } from "./health-details.ts";
+import { deviceNeedsReview } from "./device-needs-review.ts";
+import { buildFleetInsights } from "./fleet-insights.ts";
 import { requiredElement, requiredElements, requiredFormControl } from "./dom.ts";
 import { formatCaptureObservation, formatRunTime } from "./capture-presentation.ts";
 import {
@@ -7,8 +11,6 @@ import {
   statusBadge,
   actionDisclosure,
   createDefinitionList,
-  createDisclosure,
-  metricCard,
   createFormField,
   createSettingsGroup,
   beginButtonBusy,
@@ -16,6 +18,8 @@ import {
 } from "./ui-primitives.ts";
 import { createApiDashboardSourceEditor } from "./api-dashboard-editor.ts";
 import { parseApiDashboardConfig } from "../../src/api-dashboard/config.ts";
+import { renderApiDashboards } from "./api-dashboard-view.ts";
+import { createCaptureTargetRenderer } from "./capture-sites-view.ts";
 import { renderCaptureEfficiencyModule } from "./capture-efficiency-module.ts";
 import {
   createBrandLockup,
@@ -45,16 +49,13 @@ import {
   formatAuditDetails,
   formatAuditEventType,
   formatDeviceEnabledMessage,
-  formatDeviceHealthDetails,
   formatEnrollmentApprovalPrompt,
   formatEnvironmentNotice,
   formatPlaylistState,
   playlistDeleteActionStates,
   formatScreenshotStatus,
-  formatTimestamp,
   describeJevAnswer,
   formatJevAnswerLabel,
-  buildFleetInsights,
   prioritizeCaptureTargets,
   summarizeCaptureErrors,
 } from "./ui-utils.ts";
@@ -540,7 +541,6 @@ function renderPlaylists(playlists) {
   });
 }
 
-let openCaptureID = null;
 function filterCaptureTargets() {
   const query = requiredElement(document, "#capture-search").value.trim().toLocaleLowerCase();
   const filter = requiredElement(document, "#capture-filter").value;
@@ -552,511 +552,14 @@ function filterCaptureTargets() {
 }
 requiredElement(document, "#capture-search").addEventListener("input", filterCaptureTargets);
 requiredElement(document, "#capture-filter").addEventListener("change", filterCaptureTargets);
-
-function renderCaptureTargets(targets, decisions = []) {
-  const decisionByTarget = new Map(decisions.map((decision) => [decision.capture_id, decision]));
-  const container = requiredElement(document, "#capture-target-list");
-  container.replaceChildren();
-  if (!targets.length) {
-    container.append(node("p", "No capture sites yet. Add a site above to configure its screenshot schedule.", "muted"));
-    return;
-  }
-  const repeatedErrors = summarizeCaptureErrors(targets);
-  if (repeatedErrors.length) {
-    const summary = node("section", undefined, "alert alert--warning capture-issues");
-    summary.append(node("h3", "Shared screenshot issues"));
-    const list = node("ul");
-    repeatedErrors.forEach(({ message, count }) => list.append(node("li", `${count} sites: ${message}`)));
-    summary.append(list);
-    container.append(summary);
-  }
-  prioritizeCaptureTargets(targets).forEach((target) => {
-    const card = node("article", undefined, "capture-target");
-    const siteName = target.name || target.display_url;
-    card.dataset.search = `${target.name ?? ""} ${target.display_url}`.toLocaleLowerCase();
-    card.dataset.filter = target.last_error || !target.schedule_reviewed || !target.last_success_at ? "attention" : "ready";
-    const preview = node("img", undefined, "capture-target__preview");
-    preview.src = `/admin/api/assets/${target.sha256}`;
-    preview.alt = `Latest screenshot or placeholder image for ${target.display_url}`;
-    preview.loading = "lazy";
-    preview.decoding = "async";
-    preview.addEventListener("error", () => { preview.hidden = true; }, { once: true });
-
-    const content = node("div", undefined, "capture-target__content");
-    const heading = node("div", undefined, "capture-target__heading");
-    heading.append(node("h3", siteName));
-    const screenshotStatus = formatScreenshotStatus(target.job_status, target.last_error, target.last_success_at);
-    heading.append(statusBadge(screenshotStatus.label, screenshotStatus.tone));
-    if (!target.schedule_reviewed) heading.append(statusBadge("Schedule review needed", "warning"));
-    content.append(heading);
-    content.append(node("p", target.last_success_at ? `Last successful capture ${formatTimestamp(target.last_success_at)}` : "No screenshot is ready yet.", "muted"));
-    content.append(node("p", `${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`, "muted"));
-    if (target.last_error && !repeatedErrors.some((issue) => issue.message === target.last_error)) content.append(node("p", `Screenshot error: ${target.last_error}`, "capture-target__error error-title"));
-
-    const detail = node("details", undefined, "capture-target__panel");
-    detail.open = openCaptureID === target.capture_id;
-    detail.addEventListener("toggle", () => {
-      if (detail.open) {
-        openCaptureID = target.capture_id;
-        for (const other of requiredElements<HTMLDetailsElement>(container, ".capture-target__panel[open]")) {
-          if (other !== detail) other.open = false;
-        }
-      } else if (openCaptureID === target.capture_id) openCaptureID = null;
-    });
-    detail.append(node("summary", "View details"));
-    const detailContent = node("div", undefined, "capture-target__panel-content");
-    detailContent.append(node("p", target.display_url, "capture-target__url muted"));
-    const nameSection = createSettingsGroup("Site name", {
-      headingLevel: "h4",
-      className: "capture-detail-section",
-      description: "Give this capture site a short label used in lists and forecasts.",
-      ownerDocument: document,
-    });
-    const nameInput = node("input", undefined, "field-control");
-    nameInput.type = "text"; nameInput.maxLength = 120; nameInput.value = target.name ?? "";
-    nameInput.dataset.siteName = "true";
-    const saveName = button("Save name", "secondary");
-    const nameFeedback = node("p", undefined, "inline-feedback");
-    nameFeedback.hidden = true;
-    nameFeedback.setAttribute("role", "status");
-    nameFeedback.setAttribute("aria-live", "polite");
-    const nameField = createFormField("Name (optional)", nameInput, { description: "Up to 120 characters.", ownerDocument: document });
-    saveName.addEventListener("click", async () => {
-      const finishBusy = beginButtonBusy(saveName, "Saving name…", nameFeedback);
-      try {
-        await api(`/admin/api/captures/${encodeURIComponent(target.capture_id)}/name`, {
-          method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: nameInput.value }),
-        });
-        showMessage("Site name updated.", false, "sites");
-        await refresh();
-      } catch (error) { showMessage(error.message, true, "sites"); }
-      finally { finishBusy(); }
-    });
-    nameSection.content.append(nameField.element, saveName, nameFeedback);
-    detailContent.append(nameSection.element);
-
-    const metadata = node("details", undefined, "capture-target__details");
-    metadata.append(node("summary", "Schedule and settings"));
-    metadata.append(node("p", `${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`, "muted"));
-    metadata.append(node("p", "This schedule is shared by every playlist that uses this page at the same screenshot size.", "field-hint"));
-    const intervalSelect = node("select");
-    intervalSelect.className = "field-control";
-    for (const option of intervalDefinitions?.capture.options ?? []) {
-      const item = node("option", option.label);
-      item.value = String(option.value);
-      item.selected = option.value === target.capture_interval_seconds;
-      intervalSelect.append(item);
-    }
-    const intervalField = createFormField("Screenshot interval", intervalSelect, {
-      description: "This schedule is shared by playlists using the same site and screenshot size.",
-      ownerDocument: document,
-    });
-    const saveInterval = button(target.schedule_reviewed ? "Save screenshot schedule" : "Confirm schedule", "secondary");
-    const intervalFeedback = node("p", undefined, "inline-feedback");
-    intervalFeedback.hidden = true;
-    intervalFeedback.setAttribute("role", "status");
-    intervalFeedback.setAttribute("aria-live", "polite");
-    saveInterval.addEventListener("click", async () => {
-      const finishBusy = beginButtonBusy(saveInterval, "Saving schedule…", intervalFeedback);
-      try {
-        await api(`/admin/api/captures/${encodeURIComponent(target.capture_id)}`, {
-          method: "PATCH", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ capture_interval_seconds: Number(intervalSelect.value) }),
-        });
-        showMessage(target.schedule_reviewed ? "Screenshot schedule updated." : "Screenshot schedule reviewed. This site can now be added to playlists.", false, "sites");
-        await refresh();
-      } catch (error) { showMessage(error.message, true, "sites"); }
-      finally { finishBusy(); }
-    });
-    metadata.append(intervalField.element, saveInterval, intervalFeedback);
-    const advanced = node("details", undefined, "capture-target__details");
-    advanced.append(node("summary", "Advanced readiness settings"));
-    const selectorInput = node("input");
-    selectorInput.type = "text";
-    selectorInput.maxLength = 256;
-    selectorInput.className = "field-control";
-    selectorInput.value = target.wait_for_selector ?? "";
-    const selectorField = createFormField("Wait for CSS selector", selectorInput, {
-      description: "Optional. Capture waits for this element after page load. Leave blank to use the default readiness behavior.",
-      ownerDocument: document,
-    });
-    const saveReadiness = button("Save readiness setting", "secondary");
-    const readinessFeedback = node("p", undefined, "inline-feedback");
-    readinessFeedback.hidden = true;
-    readinessFeedback.setAttribute("role", "status");
-    readinessFeedback.setAttribute("aria-live", "polite");
-    saveReadiness.addEventListener("click", async () => {
-      const finishBusy = beginButtonBusy(saveReadiness, "Saving readiness…", readinessFeedback);
-      try {
-        await api(`/admin/api/captures/${encodeURIComponent(target.capture_id)}/readiness`, {
-          method: "PATCH", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ wait_for_selector: selectorInput.value }),
-        });
-        showMessage("Capture readiness updated. The screenshot schedule is unchanged.", false, "sites");
-        await refresh();
-      } catch (error) { showMessage(error.message, true, "sites"); }
-      finally { finishBusy(); }
-    });
-    advanced.append(selectorField.element, saveReadiness, readinessFeedback);
-    if (target.last_error) detailContent.append(node("p", `Screenshot error: ${target.last_error}`, "error-title"));
-    if (Number.isSafeInteger(target.next_due_at)) detailContent.append(node("p", `Next screenshot ${formatTimestamp(target.next_due_at)}`, "muted"));
-    const backgroundDecision = decisionByTarget.get(target.capture_id);
-    if (backgroundDecision) {
-      const suggestion = backgroundDecision.action === "defer_once" ? "A later capture could be suitable" :
-        backgroundDecision.action === "error" ? "Assessment unavailable" : "Keep the scheduled capture";
-      const durationSuggestion = backgroundDecision.duration_review === "review_overestimate"
-        ? " JEV recommends an operator review for a possible reserve overestimate; no settings were changed."
-        : backgroundDecision.duration_review === "review_underestimate"
-          ? " JEV recommends an operator review for a possible reserve underestimate; no settings were changed."
-        : "";
-      metadata.dataset.assessment = `Background assessment ${formatTimestamp(backgroundDecision.assessed_at)} for ${formatTimestamp(backgroundDecision.due_at)}: ${suggestion}. ${backgroundDecision.reason} ${formatCaptureObservation(backgroundDecision)}${durationSuggestion} The schedule was unchanged.`;
-    }
-
-    detailContent.append(metadata, advanced);
-
-    const capture = button("Take screenshot now", "secondary");
-    capture.addEventListener("click", async () => {
-      capture.disabled = true;
-      try {
-        const result = await api(`/admin/api/captures/${encodeURIComponent(target.capture_id)}/run`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: "{}",
-        });
-        const status = result.status === "running" ? "has started" : "is queued";
-        showMessage(`Screenshot job ${compactIdentifier(result.job_id)} ${status}.`, false, "sites");
-        await refresh();
-      } catch (error) { showMessage(error.message, true, "sites"); }
-      finally { capture.disabled = false; }
-    });
-    const removeSite = button("Remove capture site", "danger");
-    removeSite.addEventListener("click", async () => {
-      const description = `Remove ${target.display_url} from managed capture sites? Future screenshots will stop. Existing playlist versions will keep their last saved image.`;
-      try {
-        const confirmed = await confirmBeforeAction(
-          (text) => showConfirmDialog({
-            title: "Remove capture site?",
-            description: text,
-            confirmLabel: "Remove site",
-            destructive: true,
-          }),
-          description,
-          () => api(`/admin/api/captures/${encodeURIComponent(target.capture_id)}`, { method: "DELETE" }),
-        );
-        if (!confirmed) return;
-        showMessage(`${target.display_url} was removed. Future screenshots have stopped.`, false, "sites");
-        await refresh();
-      } catch (error) { showMessage(error.message, true, "sites"); }
-    });
-    const removeActions = actionDisclosure(`More actions for ${siteName}`, [removeSite]);
-    const assessmentDisclosure = node("details", undefined, "capture-target__assessment");
-    assessmentDisclosure.append(node("summary", "Assess screenshot schedule"));
-    const assess = button("Run advisory assessment", "secondary");
-    const assessment = node("div", undefined, "jev-result-slot");
-    assess.addEventListener("click", async () => {
-      assess.disabled = true;
-      assessment.setAttribute("aria-busy", "true");
-      assessment.replaceChildren(node("p", "Assessing current screenshot signals…", "muted"));
-      try {
-        const decision = await api("/admin/api/jev/capture-assessment", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ capture_id: target.capture_id }),
-        });
-        assessment.removeAttribute("aria-busy");
-        assessment.replaceChildren(renderJevDecision(decision, "Screenshot skip assessment", { captureID: target.capture_id }));
-      } catch (error) {
-        assessment.removeAttribute("aria-busy");
-        assessment.replaceChildren(node("p", error.message, "error-title"));
-      } finally { assess.disabled = false; }
-    });
-    detailContent.prepend(createActionGroup([capture, removeActions], {
-      label: `Actions for capture site ${siteName}`,
-      className: "action-row",
-      ownerDocument: document,
-    }));
-    if (metadata.dataset.assessment) assessmentDisclosure.append(node("p", metadata.dataset.assessment, "muted"));
-    assessmentDisclosure.append(assess, assessment);
-    detailContent.append(assessmentDisclosure);
-    detail.append(detailContent);
-    content.append(detail);
-    card.append(preview, content);
-    container.append(card);
-  });
-  filterCaptureTargets();
-}
-
-function buildDashboardSourceEditor(container, sources) {
-  const host = node("div", undefined, "source-editor-list");
-  const heading = node("div");
-  heading.append(node("h4", "Status sources"), node("p", "Add the public status pages shown in this dashboard.", "field-hint"));
-  const add = button("Add source", "secondary");
-  add.dataset.addDashboardSource = "true";
-  const toolbar = createToolbar({
-    label: "Dashboard source controls",
-    className: "source-editor-toolbar",
-    groups: [
-      { label: "Status sources", items: [heading] },
-      { label: "Source actions", items: [add], alignEnd: true },
-    ],
-    ownerDocument: document,
-  });
-  const rows = node("div", undefined, "source-editor-rows");
-  rows.dataset.sourceRows = "true";
-  const error = node("p", undefined, "field-error");
-  error.dataset.sourceEditorError = "true";
-  error.hidden = true;
-  error.setAttribute("role", "alert");
-  host.append(toolbar, rows, error);
-  container.append(host);
-  const advanced = node("details", undefined, "advanced-json-editor");
-  advanced.dataset.apiDashboardAdvanced = "true";
-  advanced.append(node("summary", "Advanced source JSON"));
-  const textarea = node("textarea", undefined, "field-control") as HTMLTextAreaElement;
-  textarea.name = "sources-json";
-  textarea.rows = 8;
-  textarea.spellcheck = false;
-  const jsonField = createFormField("Sources JSON", textarea, {
-    description: "Use this editor only for source options unavailable in the standard fields.",
-    ownerDocument: document,
-  });
-  advanced.append(jsonField.element);
-  container.append(advanced);
-  return createApiDashboardSourceEditor(host, sources, textarea);
-}
-
-function formatAge(seconds) {
-  if (!Number.isFinite(seconds) || seconds < 0) return "unknown age";
-  if (seconds < 60) return `${Math.floor(seconds)} sec`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} hr ${minutes % 60} min`;
-  const days = Math.floor(hours / 24);
-  return `${days} days ${hours % 24} hr`;
-}
-
-function formatBytes(bytes) {
-  if (!Number.isFinite(Number(bytes)) || Number(bytes) < 0) return "—";
-  const units = ["B", "KB", "MB", "GB"];
-  let amount = Number(bytes);
-  let unit = 0;
-  while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
-  return `${amount.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
-}
-
-function formatMetricMs(value) { return value != null && value !== "" && Number.isFinite(Number(value)) ? `${Math.round(Number(value))} ms` : "—"; }
-
-function renderApiDashboardMetrics(dashboard) {
-  const metrics = dashboard.recent_metrics ?? {};
-  const successes = Number(metrics.successes ?? 0);
-  const failures = Number(metrics.failures ?? 0);
-  const completed = Number(metrics.completed_count ?? successes + failures);
-  const percentage = (numerator, denominator) => denominator > 0 ? `${Math.round(numerator / denominator * 100)}%` : "—";
-  const details = node("details", undefined, "api-dashboard-efficiency");
-  details.append(node("summary", `Efficiency · ${metrics.sample_count ?? 0} recent jobs (up to 30 days)`));
-  const grid = node("div", undefined, "api-dashboard-efficiency__grid");
-  grid.append(metricCard("Successful captures", completed ? `${successes} / ${completed}` : "No completed jobs", `${failures} failed · ${metrics.retry_attempts ?? 0} retries · ${percentage(failures, completed)} failure rate`));
-  grid.append(metricCard("Source outcomes", `${metrics.partial_source_failures ?? 0} partial · ${metrics.all_source_failures ?? 0} all failed`, `${(dashboard.sources ?? []).filter((source) => !source.disabled && source.freshness === "fresh").length} fresh · ${(dashboard.sources ?? []).filter((source) => !source.disabled && source.freshness === "stale").length} stale · ${(dashboard.sources ?? []).filter((source) => !source.disabled && source.freshness === "unavailable").length} unavailable now`));
-  grid.append(metricCard("Upstream traffic", `${metrics.upstream_requests ?? 0} requests`, `${metrics.not_modified_responses ?? 0} HTTP 304 · ${metrics.upstream_failed_requests ?? 0} failed · ${formatBytes(metrics.response_bytes ?? 0)} response body bytes`));
-  grid.append(metricCard("API fetch duration", `${formatMetricMs(metrics.fetch_p50_ms)} p50`, `${formatMetricMs(metrics.fetch_p90_ms)} p90 · ${metrics.completed_count ?? 0} completed-job samples`));
-  const renderFailures = Number(metrics.render_failures ?? 0);
-  grid.append(metricCard("PNG render duration", `${formatMetricMs(metrics.render_p50_ms)} p50`, `${formatMetricMs(metrics.render_p90_ms)} p90 · ${metrics.render_operations ?? 0} renders · ${renderFailures} render ${renderFailures === 1 ? "failure" : "failures"}`));
-  grid.append(metricCard("Capture work wall time", `${formatMetricMs(metrics.total_p50_ms)} p50`, `${formatMetricMs(metrics.total_p90_ms)} p90 · includes API work and asset storage, excludes final D1 update`));
-  grid.append(metricCard("Render and asset reuse", `${percentage(metrics.content_hash_matches ?? 0, successes)} render skips`, `${metrics.content_hash_matches ?? 0} content matches · ${percentage(metrics.asset_reuses ?? 0, successes)} R2 asset reuse`));
-  details.append(grid);
-  details.append(node("p", "These are application measurements from the latest 100 jobs within 30 days. Worker CPU and memory, D1 operation counts, and billed R2 operations or storage require Cloudflare Analytics; wall-clock duration is not a cost estimate. API dashboards use zero Browser Run minutes.", "field-hint"));
-  return details;
-}
-
-function renderApiDashboards(dashboards) {
-  const container = requiredElement(document, "#api-dashboard-list");
-  container.replaceChildren();
-  if (!dashboards.length) {
-    container.append(node("p", "No API dashboards yet. Add a dashboard and configure its public status sources here.", "muted"));
-    return;
-  }
-  dashboards.forEach((dashboard) => {
-    const card = node("article", undefined, "capture-target");
-    const image = node("img", undefined, "capture-target__preview");
-    image.src = dashboard.current_image ?? "/admin/capture-pending.png";
-    image.alt = dashboard.current_image ? `Latest API dashboard image for ${dashboard.name}` : `Waiting for the first API dashboard image for ${dashboard.name}`;
-    image.loading = "lazy";
-    image.addEventListener("error", () => { image.hidden = true; }, { once: true });
-    const content = node("div", undefined, "capture-target__content");
-    const heading = node("div", undefined, "capture-target__heading");
-    heading.append(node("h3", dashboard.name));
-    const retryScheduled = Number(dashboard.retry_after_at) > Date.now();
-    const dashboardStatus = !dashboard.enabled ? "Disabled" : dashboard.stale ? "Stale" : retryScheduled ? "Retry scheduled" : dashboard.job_status || "Enabled";
-    heading.append(statusBadge(dashboardStatus, dashboard.stale || dashboard.last_error || retryScheduled ? "warning" : "success"));
-    content.append(heading);
-    content.append(node("p", `${dashboard.capture_interval_seconds / 60} minute refresh · ${dashboard.viewport_width} × ${dashboard.viewport_height} px · ${dashboard.configuration?.sources?.length ?? 0} sources`, "muted"));
-    if (dashboard.last_success_at) {
-      const ageSeconds = Math.max(0, (Date.now() - Number(dashboard.last_success_at)) / 1000);
-      content.append(node("p", `Last successful capture ${formatTimestamp(dashboard.last_success_at)} · ${formatAge(ageSeconds)} ago`, "muted"));
-    }
-    if (Number(dashboard.recovery_attempts) > 0) {
-      const retryDetail = retryScheduled ? ` · next retry ${formatTimestamp(dashboard.retry_after_at)}` : "";
-      content.append(node("p", `Queue recovery attempts ${dashboard.recovery_attempts}${retryDetail}`, "muted"));
-    }
-    const latestCaptureDetails: Array<{ label: string; value: string }> = [];
-    if (dashboard.api_last_fetch_at) latestCaptureDetails.push({ label: "Last successful source fetch", value: formatTimestamp(dashboard.api_last_fetch_at) });
-    if (dashboard.api_last_image_at) latestCaptureDetails.push({ label: "Image last changed", value: formatTimestamp(dashboard.api_last_image_at) });
-    if (dashboard.current_size != null) latestCaptureDetails.push({
-      label: "Latest PNG",
-      value: `${formatBytes(dashboard.current_size)} · ${dashboard.viewport_width} × ${dashboard.viewport_height} px`,
-    });
-    if (dashboard.api_fetch_ms !== null && dashboard.api_fetch_ms !== undefined) latestCaptureDetails.push({
-      label: "Last run",
-      value: `API fetch ${dashboard.api_fetch_ms} ms · rendering ${dashboard.api_render_ms ?? 0} ms · capture work ${dashboard.api_total_ms ?? 0} ms · asset ${dashboard.api_asset_reused ? "reused" : "created"}`,
-    });
-    if (latestCaptureDetails.length) {
-      content.append(createDisclosure("Latest capture details", [createDefinitionList(latestCaptureDetails, {
-        className: "capture-target__latest-list",
-        ownerDocument: document,
-      })], {
-        className: "capture-target__latest-details",
-        contentClassName: "capture-target__latest-details-content",
-        ownerDocument: document,
-      }));
-    }
-    if (dashboard.last_error) content.append(node("p", dashboard.last_error, "capture-target__error error-title"));
-    const configuredSources = new Map<string, any>((dashboard.configuration?.sources ?? []).map((source: any): [string, any] => [source.id, source]));
-    const sourceDetails = node("details", undefined, "api-dashboard-source-health");
-    sourceDetails.append(node("summary", `Source health and cache (${(dashboard.sources ?? []).length})`));
-    const sourceList = node("div", undefined, "api-dashboard-source-health__list");
-    (dashboard.sources ?? []).forEach((source) => {
-      const configured = configuredSources.get(source.id);
-      const disabled = source.disabled === true || configured?.enabled === false;
-      const state = disabled ? "Disabled" : source.freshness === "fresh" ? "Fresh" : source.freshness === "stale" ? "Stale" : "Unavailable";
-      const row = node("article", undefined, `api-dashboard-source-health__item${disabled ? " is-disabled" : source.freshness !== "fresh" ? " is-warning" : ""}`);
-      row.append(node("strong", `${source.displayName}: ${state}`));
-      if (!disabled && source.error) row.append(node("p", source.error, "capture-target__error"));
-      const stats = source.requestStats;
-      if (stats) row.append(node("p", `Last poll: ${stats.requestCount} requests · ${stats.notModifiedCount} unchanged · ${stats.failedRequestCount} failed · ${formatBytes(stats.responseBytes)} · ${stats.durationMs} ms`, "muted"));
-      const cache: Record<string, any> = source.cache ?? {};
-      Object.entries(cache).forEach(([endpoint, metadata]) => {
-        if (!metadata) return;
-        const validators = [metadata.etag ? "ETag" : "", metadata.lastModified ? "Last-Modified" : ""].filter(Boolean).join(" + ") || "no validator";
-        const cacheControl = metadata.cacheControl ? ` · Cache-Control ${metadata.cacheControl}` : "";
-        const checked = metadata.revalidatedAt ? ` · last revalidated ${formatTimestamp(metadata.revalidatedAt)}` : "";
-        row.append(node("p", `${endpoint}: ${validators}${cacheControl} · content fetched ${formatTimestamp(metadata.contentFetchedAt)}${checked}`, "muted"));
-      });
-      sourceList.append(row);
-    });
-    sourceDetails.append(sourceList);
-    content.append(sourceDetails);
-    content.append(renderApiDashboardMetrics(dashboard));
-    const run = button("Refresh now", "secondary");
-    run.addEventListener("click", async () => {
-      run.disabled = true;
-      try { await api(`/admin/api/captures/${encodeURIComponent(dashboard.capture_id)}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); showMessage("API dashboard refresh queued.", false, "dashboards"); await refresh(); }
-      catch (error) { showMessage(error.message, true, "dashboards"); }
-      finally { run.disabled = false; }
-    });
-    const toggle = button(dashboard.enabled ? "Disable" : "Enable", "secondary");
-    toggle.addEventListener("click", async () => {
-      try { await api(`/admin/api/api-dashboards/${encodeURIComponent(dashboard.capture_id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !dashboard.enabled }) }); await refresh(); }
-      catch (error) { showMessage(error.message, true, "dashboards"); }
-    });
-    const remove = button("Remove dashboard", "danger");
-    remove.addEventListener("click", async () => {
-      try {
-        await confirmBeforeAction(
-          (text) => showConfirmDialog({ title: "Remove API dashboard?", description: text, confirmLabel: "Remove dashboard", destructive: true }),
-          `Remove ${dashboard.name}? Future API captures will stop and existing playlist revisions keep their assigned image.`,
-          () => api(`/admin/api/captures/${encodeURIComponent(dashboard.capture_id)}`, { method: "DELETE" }),
-        );
-        await refresh();
-      } catch (error) { showMessage(error.message, true, "dashboards"); }
-    });
-    const actions = createActionGroup([
-      run,
-      toggle,
-      actionDisclosure(`More actions for ${dashboard.name}`, [remove]),
-    ], {
-      label: `Actions for dashboard ${dashboard.name}`,
-      className: "form-actions dashboard-actions",
-      ownerDocument: document,
-    });
-    content.append(actions);
-    const editor = node("details", undefined, "capture-target__details");
-    editor.append(node("summary", "Edit dashboard settings"));
-    const form = node("form", undefined, "capture-detail-section api-dashboard-edit") as HTMLFormElement;
-    form.dataset.apiDashboardEdit = dashboard.capture_id;
-    const config = dashboard.configuration ?? { sources: [], width: dashboard.viewport_width, height: dashboard.viewport_height };
-    const nameInput = node("input", undefined, "field-control");
-    nameInput.name = "name";
-    nameInput.value = dashboard.name;
-    nameInput.maxLength = 120;
-    nameInput.required = true;
-    const nameField = createFormField("Dashboard name", nameInput, { ownerDocument: document });
-    const interval = node("select", undefined, "field-control");
-    interval.name = "capture_interval_seconds";
-    for (const [value, label] of [[300, "5 minutes"], [60, "1 minute"]]) {
-      const option = node("option", label) as HTMLOptionElement;
-      option.value = String(value); option.selected = Number(dashboard.capture_interval_seconds) === value; interval.append(option);
-    }
-    const intervalField = createFormField("Refresh interval", interval, { ownerDocument: document });
-    const resolution = node("fieldset", undefined, "screenshot-size-fieldset");
-    resolution.append(node("legend", "Output resolution"));
-    const width = node("input", undefined, "field-control");
-    width.name = "width"; width.type = "number"; width.min = "640"; width.max = "3840"; width.step = "1";
-    width.value = String(config.width ?? dashboard.viewport_width);
-    const height = node("input", undefined, "field-control");
-    height.name = "height"; height.type = "number"; height.min = "360"; height.max = "2160"; height.step = "1";
-    height.value = String(config.height ?? dashboard.viewport_height);
-    resolution.append(
-      createFormField("Width (pixels)", width, { ownerDocument: document }).element,
-      createFormField("Height (pixels)", height, { ownerDocument: document }).element,
-    );
-    const dashboardDetails = createSettingsGroup("Dashboard details", {
-      headingLevel: "h4",
-      description: "Set the display name, refresh schedule, and generated image size.",
-      className: "api-dashboard-edit__details",
-      ownerDocument: document,
-    });
-    dashboardDetails.content.append(nameField.element, intervalField.element, resolution);
-    form.append(dashboardDetails.element);
-    const sourceEditor = buildDashboardSourceEditor(form, config.sources ?? []);
-    const feedback = node("p", undefined, "form-feedback");
-    feedback.dataset.editFeedback = "true";
-    feedback.hidden = true;
-    feedback.setAttribute("role", "status");
-    const saveActions = node("div", undefined, "form-actions");
-    const save = button("Save dashboard settings", "secondary");
-    save.type = "submit";
-    save.dataset.saveApiDashboard = "true";
-    saveActions.append(save);
-    form.append(saveActions, feedback);
-    form.addEventListener("input", () => { form.dataset.dirty = "true"; });
-    form.addEventListener("change", () => { form.dataset.dirty = "true"; });
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      feedback.hidden = true;
-      const finishBusy = beginButtonBusy(save, "Saving dashboard…", feedback);
-      try {
-        if (!sourceEditor.validate()) throw new Error("Fix the highlighted source fields before saving.");
-        const parsed = parseApiDashboardConfig({ sources: sourceEditor.getSources(), width: Number(width.value), height: Number(height.value) });
-        await api(`/admin/api/api-dashboards/${encodeURIComponent(dashboard.capture_id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: nameInput.value, ...parsed, capture_interval_seconds: Number(interval.value) }) });
-        form.dataset.dirty = "false";
-        showMessage("API dashboard configuration saved.", false, "dashboards");
-        await refresh();
-      } catch (caught) {
-        feedback.textContent = caught instanceof Error ? caught.message : String(caught);
-        feedback.hidden = false;
-      } finally { finishBusy(); }
-    });
-    editor.append(form);
-    content.append(editor);
-    (dashboard.sources ?? []).forEach((source) => {
-      const state = node("p", `${source.displayName}: ${source.components?.length ?? 0} components · ${source.freshness}`, "muted");
-      content.append(state);
-    });
-    card.append(image, content);
-    container.append(card);
-  });
-}
+const renderCaptureTargets = createCaptureTargetRenderer({
+  getCaptureIntervalOptions: () => intervalDefinitions?.capture.options ?? [],
+  filterCaptureTargets,
+  showMessage,
+  refresh: () => refresh(),
+  showConfirmDialog,
+  renderJevDecision,
+});
 
 function renderAvailableSites(targets, selectedIDs = null) {
   const list = requiredElement(document, "#available-sites .asset-selection__list");
@@ -1263,17 +766,7 @@ function renderDevices(devices, activePlaylist) {
     cardsSelector: "#devices-mobile",
     caption: "Enrolled devices",
     records: [...devices].sort((a, b) => {
-      const needsReview = (device) => {
-        if (!device.enabled) return false;
-        const health = device.health ?? {};
-        const healthProblem = ["degraded", "stale", "offline", "unknown"].includes(health.status ?? "unknown");
-        const syncProblem = health.sync_status !== "ok";
-        const playlistUnknown = Boolean(activePlaylist && (!health.applied_playlist_id || health.applied_revision === null || health.applied_revision === undefined));
-        const playlistBehind = Boolean(activePlaylist && health.applied_playlist_id && health.applied_revision !== null && health.applied_revision !== undefined &&
-          (health.applied_playlist_id !== activePlaylist.playlist_id || String(health.applied_revision) !== String(activePlaylist.revision)));
-        return healthProblem || syncProblem || playlistUnknown || playlistBehind;
-      };
-      return Number(needsReview(b)) - Number(needsReview(a));
+      return Number(deviceNeedsReview(b, activePlaylist)) - Number(deviceNeedsReview(a, activePlaylist));
     }),
     fields: [
       { label: "Device", render: (device) => identifier(device.device_id, "device ID", "device") },
@@ -1532,7 +1025,7 @@ async function refreshData(): Promise<boolean> {
       : formatRunTime(captureForecast.total_estimated_ms) + " forecast per day"
     : "Forecast unavailable";
   renderCaptureTargets(browserTargets, captureDecisions);
-  renderApiDashboards(apiDashboards);
+  renderApiDashboards(apiDashboards, { showMessage, refresh, showConfirmDialog });
   renderAvailableSites(overview.capture_targets ?? []);
   renderDevices(overview.devices, overview.active_playlist);
   renderPendingEnrollments(enrollmentRequests);
