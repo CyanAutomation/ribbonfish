@@ -16,7 +16,6 @@ import {
   readDeviceHealthHistory,
   readEnrollmentRequests,
   readOverview,
-  summarizeDurationAggregate,
 } from "./admin-read-models.ts";
 import {
   DEFAULT_CAPTURE_INTERVAL_SECONDS,
