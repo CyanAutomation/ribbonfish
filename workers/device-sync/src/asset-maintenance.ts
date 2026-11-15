@@ -4,6 +4,14 @@ import { storePngAsset } from "./asset-store.ts";
 type AssetEnv = Pick<ManagementBindings, "DB" | "ASSETS" | "ASSET_RECONCILIATION_INTERVAL_SECONDS"> & { ASSET_RECONCILIATION_PAGE_SIZE?: string };
 type AssetReference = { sha256: string; size: number };
 type AssetSnapshot = { state: string | null; expires_at: number | null; write_lease_until: number | null; referenceSize: number | null; has_playlist: boolean; has_placeholder: boolean; has_current: boolean; has_history: boolean };
+type AssetObjectRef = Pick<R2Object, "key" | "size" | "uploaded"> & { sha256: string };
+type ObjectAction =
+  | { type: "live" | "stage"; sha256: string }
+  | { type: "claim"; sha256: string; key: string }
+  | { type: "already_claimed"; sha256: string; key: string };
+type ObjectPlan = { statement: D1PreparedStatement; action: Exclude<ObjectAction, { type: "already_claimed" }> }
+  | { action: Extract<ObjectAction, { type: "already_claimed" }> }
+  | null;
 type SnapshotRow = { sha256: string; state: string | null; expires_at: number | null; write_lease_until: number | null; kind: "playlist" | "placeholder" | "current" | "history" | null; size: number | null };
 
 export const ASSET_RECONCILIATION_PAGE_SIZE = 40;
@@ -170,60 +178,18 @@ async function claimOrphanedAssetRecords(db: D1Database, limit: number, now: num
 }
 
 async function inspectObjectPage(env: AssetEnv, objects: R2Object[], now: number) {
-  const invalidKeys = [];
-  const validObjects = [];
-  for (const object of objects) {
-    const match = typeof object.key === "string" ? object.key.match(ASSET_KEY_PATTERN) : null;
-    if (match) validObjects.push({ ...object, sha256: match[1] });
-    else if (typeof object.key === "string" && object.key.startsWith("assets/")) invalidKeys.push(object.key);
-  }
-
+  const { invalidKeys, validObjects } = partitionAssetObjects(objects);
   const snapshots = await readAssetSnapshots(env.DB, validObjects.map((object) => object.sha256));
-  const statements = [];
-  const statementActions = [];
-  const candidateActions = [];
+  const statements: D1PreparedStatement[] = [];
+  const statementActions: Exclude<ObjectAction, { type: "already_claimed" }>[] = [];
+  const candidateActions: Extract<ObjectAction, { type: "already_claimed" }>[] = [];
   for (const object of validObjects) {
-    const snapshot = snapshots.get(object.sha256);
-    if (hasReferences(snapshot)) {
-      if (snapshot?.state !== "pending" || Number(snapshot.write_lease_until) <= now) {
-        statements.push(markAssetLiveStatement(env.DB, object.sha256, snapshot?.referenceSize ?? object.size, now));
-        statementActions.push({ type: "live", sha256: object.sha256 });
-      }
-      continue;
-    }
-    if (snapshot?.state === "deleting") {
-      candidateActions.push({ type: "already_claimed", sha256: object.sha256, key: object.key });
-      continue;
-    }
-    if (snapshot && Number(snapshot.write_lease_until) > now) {
-      continue;
-    }
-    if (snapshot && snapshot.state !== "live" && Number(snapshot.expires_at) > now) {
-      continue;
-    }
-
-    const uploadedAt = timestamp(object.uploaded);
-    const orphanDeadline = uploadedAt === null ? now + LEGACY_ORPHAN_GRACE_MS : uploadedAt + LEGACY_ORPHAN_GRACE_MS;
-    if (!snapshot?.state && orphanDeadline > now) {
-      statements.push(env.DB.prepare(
-        `INSERT OR IGNORE INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
-         SELECT ?, ?, 'staged', ?, NULL, ?
-         WHERE ${NOT_REFERENCED_SQL}`,
-      ).bind(object.sha256, object.size, orphanDeadline, now,
-        object.sha256, object.sha256, object.sha256, object.sha256));
-      statementActions.push({ type: "stage", sha256: object.sha256 });
-      continue;
-    }
-    if (snapshot?.state) {
-      statements.push(claimAssetDeletionStatement(env.DB, object.sha256, now));
-      statementActions.push({ type: "claim", sha256: object.sha256, key: object.key });
-    } else {
-      statements.push(env.DB.prepare(
-        `INSERT OR IGNORE INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
-         SELECT ?, ?, 'deleting', NULL, NULL, ?
-         WHERE ${NOT_REFERENCED_SQL}`,
-      ).bind(object.sha256, object.size, now, object.sha256, object.sha256, object.sha256, object.sha256));
-      statementActions.push({ type: "claim", sha256: object.sha256, key: object.key });
+    const plan = planObjectAction(env, object, snapshots.get(object.sha256), now);
+    if (!plan) continue;
+    if (!("statement" in plan)) candidateActions.push(plan.action);
+    else {
+      statements.push(plan.statement);
+      statementActions.push(plan.action);
     }
   }
 
@@ -236,8 +202,69 @@ async function inspectObjectPage(env: AssetEnv, objects: R2Object[], now: number
     }
   }
 
-  let deleted = 0;
-  if (claimed.length) deleted += await deleteClaimedAssets(env, claimed.map((item) => item.sha256), now);
+  const deleted = await deleteInvalidAndClaimedObjects(env, claimed, invalidKeys, now);
+  return { deleted };
+}
+
+function partitionAssetObjects(objects: R2Object[]) {
+  const invalidKeys: string[] = [];
+  const validObjects: AssetObjectRef[] = [];
+  for (const object of objects) {
+    const match = typeof object.key === "string" ? object.key.match(ASSET_KEY_PATTERN) : null;
+    if (match) validObjects.push({ ...object, sha256: match[1] });
+    else if (typeof object.key === "string" && object.key.startsWith("assets/")) invalidKeys.push(object.key);
+  }
+  return { invalidKeys, validObjects };
+}
+
+function planObjectAction(env: AssetEnv, object: AssetObjectRef, snapshot: AssetSnapshot | undefined, now: number): ObjectPlan {
+  if (hasReferences(snapshot)) {
+    if (snapshot?.state !== "pending" || Number(snapshot.write_lease_until) <= now) {
+      return {
+        statement: markAssetLiveStatement(env.DB, object.sha256, snapshot?.referenceSize ?? object.size, now),
+        action: { type: "live" as const, sha256: object.sha256 },
+      };
+    }
+    return null;
+  }
+  if (snapshot?.state === "deleting") {
+    return { action: { type: "already_claimed" as const, sha256: object.sha256, key: object.key } };
+  }
+  if (snapshot && Number(snapshot.write_lease_until) > now) return null;
+  if (snapshot && snapshot.state !== "live" && Number(snapshot.expires_at) > now) return null;
+
+  const uploadedAt = timestamp(object.uploaded);
+  const orphanDeadline = uploadedAt === null ? now + LEGACY_ORPHAN_GRACE_MS : uploadedAt + LEGACY_ORPHAN_GRACE_MS;
+  if (!snapshot?.state && orphanDeadline > now) {
+    return {
+      statement: env.DB.prepare(
+        `INSERT OR IGNORE INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
+         SELECT ?, ?, 'staged', ?, NULL, ?
+         WHERE ${NOT_REFERENCED_SQL}`,
+      ).bind(object.sha256, object.size, orphanDeadline, now,
+        object.sha256, object.sha256, object.sha256, object.sha256),
+      action: { type: "stage" as const, sha256: object.sha256 },
+    };
+  }
+  return {
+    statement: snapshot?.state
+      ? claimAssetDeletionStatement(env.DB, object.sha256, now)
+      : env.DB.prepare(
+        `INSERT OR IGNORE INTO managed_assets (sha256, size, state, expires_at, write_lease_until, updated_at)
+         SELECT ?, ?, 'deleting', NULL, NULL, ?
+         WHERE ${NOT_REFERENCED_SQL}`,
+      ).bind(object.sha256, object.size, now, object.sha256, object.sha256, object.sha256, object.sha256),
+    action: { type: "claim" as const, sha256: object.sha256, key: object.key },
+  };
+}
+
+async function deleteInvalidAndClaimedObjects(
+  env: AssetEnv,
+  claimed: Array<{ sha256: string }>,
+  invalidKeys: string[],
+  now: number,
+) {
+  let deleted = claimed.length ? await deleteClaimedAssets(env, claimed.map((item) => item.sha256), now) : 0;
   if (invalidKeys.length) {
     try {
       await env.ASSETS.delete(invalidKeys);
@@ -246,7 +273,7 @@ async function inspectObjectPage(env: AssetEnv, objects: R2Object[], now: number
       console.warn("asset_reconciliation_invalid_key_delete_failed", { count: invalidKeys.length, error: safeMessage(error) });
     }
   }
-  return { deleted };
+  return deleted;
 }
 
 async function readAssetSnapshots(db: D1Database, sha256s: string[]) {

@@ -123,27 +123,41 @@ function normalizeAnswers(answers: Record<string, Answer>, questions: Questions)
 function validateAnswer(answer: unknown, question: Question) {
   if (!isRecord(answer) || answer.type !== question.type) return false;
   if (question.type === "noul") {
-    return typeof answer.noul === "number" && Number.isFinite(answer.noul) && answer.noul >= 0 && answer.noul <= 1 &&
-      (answer.confidence === undefined || isProbability(answer.confidence));
+    return validateNoulAnswer(answer);
   }
-  const choices = question.type === "choice" ? Object.keys(question.criteria) : question.criteria.map((_, index) => String(index));
-  const value = question.type === "choice" ? answer.choice : answer.score;
-  if ((typeof value !== "number" || !Number.isFinite(value)) && question.type === "score") return false;
-  if (question.type === "choice" && (typeof value !== "string" || !choices.includes(value))) return false;
-  if (question.type === "score" && (typeof value !== "number" || value < 0 || value > choices.length - 1)) return false;
-  if (!isProbability(answer.confidence)) return false;
-  if (answer.probabilities !== undefined) {
-    const probabilities = answer.probabilities;
-    if (!isRecord(probabilities)) return false;
-    if (Object.keys(probabilities).sort().join("\0") !== choices.sort().join("\0")) return false;
-    const values = Object.values(probabilities);
-    if (!values.every(isProbability) || Math.abs(values.reduce<number>((sum, item) => sum + (typeof item === "number" ? item : 0), 0) - 1) > 0.02) return false;
-  } else return false;
-  if (question.type === "score") {
-    const expectedLegend = Object.fromEntries(question.criteria.map((label, index) => [String(index), label]));
-    if (!answer.legend || JSON.stringify(answer.legend) !== JSON.stringify(expectedLegend)) return false;
-  }
-  return true;
+  return question.type === "choice"
+    ? validateChoiceAnswer(answer, question)
+    : validateScoreAnswer(answer, question);
+}
+
+function validateNoulAnswer(answer: Record<string, any>) {
+  return typeof answer.noul === "number" && Number.isFinite(answer.noul) && answer.noul >= 0 && answer.noul <= 1 &&
+    (answer.confidence === undefined || isProbability(answer.confidence));
+}
+
+function validateChoiceAnswer(answer: Record<string, any>, question: Extract<Question, { type: "choice" }>) {
+  const choices = Object.keys(question.criteria);
+  return typeof answer.choice === "string" && choices.includes(answer.choice) &&
+    validateAnswerEvidence(answer, choices);
+}
+
+function validateScoreAnswer(answer: Record<string, any>, question: Extract<Question, { type: "score" }>) {
+  const choices = question.criteria.map((_, index) => String(index));
+  if (typeof answer.score !== "number" || !Number.isFinite(answer.score) || answer.score < 0 || answer.score > choices.length - 1) return false;
+  const expectedLegend = Object.fromEntries(question.criteria.map((label, index) => [String(index), label]));
+  return JSON.stringify(answer.legend) === JSON.stringify(expectedLegend) && validateAnswerEvidence(answer, choices);
+}
+
+function validateAnswerEvidence(answer: Record<string, any>, choices: string[]) {
+  return isProbability(answer.confidence) && validateProbabilities(answer.probabilities, choices);
+}
+
+function validateProbabilities(probabilities: unknown, choices: string[]) {
+  if (!isRecord(probabilities)) return false;
+  if (Object.keys(probabilities).sort().join("\0") !== [...choices].sort().join("\0")) return false;
+  const values = Object.values(probabilities);
+  return values.every(isProbability) &&
+    Math.abs(values.reduce<number>((sum, item) => sum + (typeof item === "number" ? item : 0), 0) - 1) <= 0.02;
 }
 
 function isQuestionSchema(questions: unknown): questions is Questions {

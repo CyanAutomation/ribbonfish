@@ -48,13 +48,14 @@ const overviewFixture = () => ({
   },
 });
 
-function openConsole(initialDashboards = [], { smallScreen = false } = {}) {
+function openConsole(initialDashboards = [], { smallScreen = false, initialDecisions = [] } = {}) {
   const dom = new JSDOM(html, { url: "https://example.test/admin/", runScripts: "outside-only" });
   const { window } = dom;
   const calls = [];
   const requests = [];
   const overview = overviewFixture();
   let apiDashboards = initialDashboards;
+  const captureDecisions = initialDecisions;
   let fail = false;
   window.matchMedia = (query) => ({
     matches: smallScreen && query === "(max-width: 56rem)",
@@ -73,7 +74,8 @@ function openConsole(initialDashboards = [], { smallScreen = false } = {}) {
     const body = fail ? { error: "Refresh failed" } :
       path === "/admin/api/capture-sites" ? { schedule_reviewed: false } :
       path === "/admin/api/playlists" ? { revision: "revision-1", capture_count: 2 } :
-      path === "/admin/api/overview" ? overview : path === "/admin/api/api-dashboards" ? apiDashboards : path === "/admin/api/intervals" ? {
+      path === "/admin/api/overview" ? overview : path === "/admin/api/api-dashboards" ? apiDashboards :
+      path === "/admin/api/capture-decisions" ? captureDecisions : path === "/admin/api/intervals" ? {
         capture: { default: 86400, options: [
           { value: 900, label: "15 minutes" }, { value: 1800, label: "30 minutes" },
           { value: 3600, label: "1 hour" }, { value: 10800, label: "3 hours" },
@@ -97,6 +99,27 @@ function openConsole(initialDashboards = [], { smallScreen = false } = {}) {
     setDashboards(value) { apiDashboards = value; },
   };
 }
+
+test("capture site background assessment is shown once", async () => {
+  const decision = {
+    capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    action: "defer_once",
+    assessed_at: 1_700_000_100_000,
+    due_at: 1_700_000_200_000,
+    reason: "Recent screenshots were stable.",
+    observed_result: null,
+  };
+  const { dom, window } = openConsole([], { initialDecisions: [decision] });
+  try {
+    await settle();
+    const card = [...window.document.querySelectorAll(".capture-target")]
+      .find((item) => item.dataset.search.includes("status.example"));
+    const disclosure = card.querySelector(".capture-target__assessment");
+    assert.equal((disclosure.textContent.match(/Background assessment/g) ?? []).length, 1, disclosure.textContent);
+  } finally {
+    dom.window.close();
+  }
+});
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
