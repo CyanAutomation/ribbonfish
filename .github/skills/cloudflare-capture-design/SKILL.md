@@ -7,7 +7,7 @@ relatedSkills: [cloudflare-worker-operations, cloudflare-management-console, clo
 
 # Cloudflare Capture Design
 
-Use this skill when implementing, reviewing, or planning the management Worker's screenshot scheduler, Browser Run Quick Actions, queues, or capture publication flow. Capture code is implemented but has not been deployed to production; production activation requires prerequisites documented in the Worker guide. Device sync and the Access-protected management UI/API are implemented separately. Confirm current Cloudflare product limits and API behavior before treating configured limits as provider guarantees.
+Use this skill when implementing, reviewing, or planning the management Worker's browser screenshot scheduler, Browser Run Quick Actions, queues, or screenshot publication flow. API status dashboards use the shared queue but have a separate provider polling and rendering boundary; use [API Status Dashboards](../api-status-dashboard/SKILL.md) for that work. Use [Capture Intelligence Evaluation](../capture-intelligence-evaluation/SKILL.md) for duration evidence and JEV evaluation. Capture code is implemented but has not been deployed to production; production activation requires prerequisites documented in the Worker guide. Device sync and the Access-protected management UI/API are implemented separately. Confirm current Cloudflare product limits and API behavior before treating configured limits as provider guarantees.
 
 ## Non-negotiable architecture constraints
 
