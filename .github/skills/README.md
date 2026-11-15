@@ -15,6 +15,8 @@ These focused instructions describe current repository workflows and implementat
 | [cloudflare-worker-operations](cloudflare-worker-operations/SKILL.md) | Wrangler environments, D1 migrations, secrets, and Worker rollout |
 | [cloudflare-asset-lifecycle](cloudflare-asset-lifecycle/SKILL.md) | Private R2 assets, D1 references, retention, and reconciliation |
 | [cloudflare-capture-design](cloudflare-capture-design/SKILL.md) | Capture scheduling, publication constraints, implementation review, and future design |
+| [api-status-dashboard](api-status-dashboard/SKILL.md) | Public status API polling, dashboard data rules, and deterministic rendering |
+| [capture-intelligence-evaluation](capture-intelligence-evaluation/SKILL.md) | Duration evidence, JEV shadow evaluation, and safe tuning criteria |
 | [fallow](fallow/SKILL.md) | Fallow audits, TypeScript cleanup, duplication, and complexity health in the Worker project |
 | [device-contract-changes](device-contract-changes/SKILL.md) | Changes crossing the Go agent and Worker API/data boundary |
 | [device-fleet-operations](device-fleet-operations/SKILL.md) | Enrollment approval, health triage, credential lifecycle, and device recovery |
@@ -27,7 +29,8 @@ These focused instructions describe current repository workflows and implementat
 - Device identity, enrollment, and health endpoints: use **cloudflare-device-sync-enrollment**. For operator triage, use **device-fleet-operations**.
 - Management UI/API changes: use **cloudflare-management-console**. For Worker configuration, migrations, and rollout, use **cloudflare-worker-operations**.
 - Asset publication, deletion, or reconciliation: use **cloudflare-asset-lifecycle**.
-- Capture implementation: use **cloudflare-capture-design** and the relevant Worker guides. Capture code exists but is not production-deployed.
+- Browser screenshot capture: use **cloudflare-capture-design** and the relevant Worker guides. API status dashboards have separate polling and rendering rules in **api-status-dashboard**.
+- Capture duration analysis or JEV evaluation: use **capture-intelligence-evaluation**. Keep shadow evidence distinct from reviewed screenshot quality and production policy changes.
 - CI, image publishing, or workflow changes: use **github-actions-release**; use **container-smoke-testing** for simulator/ARM evidence.
 - Pi deployment and physical display questions: use **raspberry-pi-deployment**. Keep QEMU/simulator results separate from hardware acceptance.
 
@@ -42,4 +45,4 @@ node --test .github/scripts/tests/validate-skills.test.mts
 node .github/scripts/validate-skills.mts
 ```
 
-The validator checks required metadata, directory/name agreement, related-skill targets, and local links. See [Copilot repository instructions](../copilot-instructions.md) for shared project constraints.
+The validator checks required metadata, directory/name agreement, related-skill targets, local links, and that every skill appears exactly once in this index. Descriptions and index summaries should name each skill's task and scope; automated validation checks that both are present, while reviewers verify that the wording matches the guide. See [Copilot repository instructions](../copilot-instructions.md) for shared project constraints.
