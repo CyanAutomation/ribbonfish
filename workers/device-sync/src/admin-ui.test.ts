@@ -103,7 +103,7 @@ test("shared page headers and toolbars wrap without hiding page controls", async
 
   let narrowHeaderStacks = false;
   stylesheet.walkAtRules("media", (media) => {
-    if (!/max-width:\s*700px/.test(media.params)) return;
+    if (!/max-width:\s*43\.75rem/.test(media.params)) return;
     media.walkRules(".page-header", (rule) => {
       narrowHeaderStacks ||= rule.nodes.some((node) => node.type === "decl" && node.prop === "flex-direction" && node.value === "column");
     });
@@ -374,7 +374,7 @@ test("management records switch to cards on narrow screens", async () => {
   const stylesheet = postcss.parse(styles);
   const responsiveRules = [];
   stylesheet.walkAtRules("media", (rule) => {
-    if (/max-width\s*:\s*850px/.test(rule.params)) responsiveRules.push(rule);
+    if (/max-width\s*:\s*53\.125rem/.test(rule.params)) responsiveRules.push(rule);
   });
   const declarationsFor = (selector) => {
     const declarations = [];
@@ -882,7 +882,7 @@ test("management shell provides grouped persistent navigation and an on-demand s
   assert.ok(shell, "the console content uses a shared application shell");
   const nav = byID(nodes, "module-navigation");
   assert.ok(nav);
-  assert.equal(attribute(nav, "aria-label"), "Management modules");
+  assert.equal(attribute(nav, "aria-label"), "Management navigation");
   assert.equal(attribute(nav, "class")?.includes("management-sidebar"), true);
   assert.equal(attribute(nav, "id"), attribute(byID(nodes, "module-navigation-toggle"), "aria-controls"));
   assert.equal(attribute(byID(nodes, "module-navigation-toggle"), "aria-expanded"), "true");
