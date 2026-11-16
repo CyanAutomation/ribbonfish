@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { dashboardSVG, renderDashboardPNG } from "./render.ts";
-import { svgCheckHistory, svgEventPanel, svgFreshnessBadge, svgGroupSummary, svgHealthLegend, svgHealthOverview, svgPanel, svgServiceRow, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
+import { svgCheckHistory, svgEventPanel, svgFreshnessBadge, svgGroupSummary, svgHealthLegend, svgHealthOverview, svgPanel, svgServiceRow, svgSourceNotice, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
 import type { DashboardSource } from "./model.ts";
 
 const sample: DashboardSource = { id: "source-1", provider: "uptime-kuma", displayName: "<SCRIPT>alert('x')</SCRIPT>", fetchedAt: "2026-01-01T00:00:00.000Z", freshness: "fresh", status: "operational", statusDescription: "All systems operational", incidents: [], maintenance: [], components: [
@@ -23,10 +23,10 @@ test("disabled sources are labelled separately and do not make active sources st
   const svg = dashboardSVG([sample, disabled]);
   assert.match(svg, />Disabled<\/text>/);
   assert.match(svg, /Source is disabled and not polled/);
-  assert.match(svg, /2 configured sources · 2 active services · 1 disabled source/);
+  assert.match(svg, /2 configured sources · 2 monitored services · 1 disabled source/);
   assert.match(svg, /1 unknown/);
   assert.doesNotMatch(svg, /0 stale|0 pending/);
-  assert.doesNotMatch(svg, /One or more sources unavailable or stale/);
+  assert.doesNotMatch(svg, /Monitoring data unavailable|Monitoring data delayed/);
 });
 
 test("overflow and active event footer labels occupy separate rows", () => {
@@ -110,10 +110,22 @@ test("source health badges do not squeeze longer card titles", () => {
   assert.match(svg, />Services: Unknown<\/text>/);
 });
 
+test("narrow source cards put freshness on its own line so hostnames remain readable", () => {
+  const sources = Array.from({ length: 4 }, (_, index) => ({
+    ...sample,
+    id: `source-${index}`,
+    displayName: `Source ${index + 1}`,
+    hostname: `monitor-${index + 1}.example.org`,
+  }));
+  const svg = dashboardSVG(sources);
+  for (const source of sources) assert.match(svg, new RegExp(source.hostname!.replaceAll(".", "\\.")));
+});
+
 test("shared SVG primitives escape text and render status panels, dots, and badges", () => {
   assert.equal(svgText("<service & 'status'>"), "&lt;service &amp; &apos;status&apos;&gt;");
   assert.equal(truncateText("long-name", 6), "lon...");
   assert.match(svgPanel(1, 2, 30, 40, 1, "#20c997"), /stroke="#344a66"/);
+  assert.match(svgSourceNotice({ x: 0, y: 0, width: 320, scale: 1, title: "Feed unavailable", detail: "HTTP 403 & blocked", color: "#ff647c", unavailable: true }), /HTTP 403 &amp; blocked/);
   assert.match(svgStatusDot(4, 5, 6, "#ff647c"), /<circle cx="4" cy="5" r="6" fill="#ff647c"\/>/);
   assert.match(svgStatusBadge(0, 0, 200, 50, 1, "Down", "#ff647c"), />Down<\/text>/);
   assert.match(svgHealthOverview(10, 20, 1000, 1, [{ label: "Operational", count: 2, color: "#20c997" }, { label: "Down", count: 1, color: "#ff647c" }]), />2 Operational<\/text>/);
@@ -248,8 +260,9 @@ test("source and event freshness labels distinguish updates from failed checks",
   const svg = dashboardSVG([source]);
   assert.match(svg, /Checked 12:34 UTC/);
   assert.match(svg, /Updated 12:20 UTC/);
-  assert.match(svg, /Services: Unknown/);
-  assert.match(svg, /Data stale/);
+  assert.match(svg, /Service data stale/);
+  assert.match(svg, /Service status unknown/);
+  assert.doesNotMatch(svg, /1 service operational/);
 });
 
 test("Statuspage provider status and dashboard feed freshness have separate labels", () => {
@@ -268,7 +281,7 @@ test("Statuspage provider status and dashboard feed freshness have separate labe
   assert.match(svg, /Data fresh/);
   assert.match(svg, /Checked 12:34 UTC/);
   assert.match(svg, /All Systems Operational/);
-  assert.match(svg, /1 configured source · 1 active service · 1 service operational/);
+  assert.match(svg, /1 configured source · 1 monitored service · 1 service operational/);
 });
 
 test("unavailable feeds do not summarize old component data as operational", () => {
@@ -280,14 +293,46 @@ test("unavailable feeds do not summarize old component data as operational", () 
     statusDescription: "Status source unavailable",
     hostname: "status.example.com",
     error: "Status API request failed.",
+    cache: { statusPage: { contentFetchedAt: "2026-01-01T12:00:00.000Z" } },
   };
   const svg = dashboardSVG([unavailable]);
-  assert.match(svg, /1 stale or unavailable source/);
+  assert.match(svg, /1 unavailable feed/);
   assert.match(svg, /Feed unavailable/);
+  assert.match(svg, /Monitoring data unavailable/);
+  assert.match(svg, /1 unavailable feed/);
+  assert.match(svg, /Service status cannot be confirmed/);
+  assert.match(svg, /Last known: Operational/);
+  assert.match(svg, /Monitoring feed unavailable"><rect x="[^"]+" y="[^"]+" width="[^"]+" height="[^"]+" rx="[^"]+" fill="#202d40" stroke="#fb923c"/);
+  assert.doesNotMatch(svg, /Services: Unknown/);
   assert.doesNotMatch(svg, /2 active services · 2 services operational/);
   const descriptionY = Number(svg.match(/<text x="[^"]+" y="([\d.]+)"[^>]*>Statuspage: Status source unavailable<\/text>/)?.[1]);
-  const errorY = Number(svg.match(/<text x="[^"]+" y="([\d.]+)"[^>]*>Status API request failed\.<\/text>/)?.[1]);
-  assert.ok(errorY > descriptionY, "source errors should sit below the source details");
+  assert.match(svg, /Status API request failed\./);
+  assert.match(svg, /Last successful feed data 12:00 UTC/);
+  const noticeY = Number(svg.match(/<g role="group" aria-label="Monitoring feed unavailable"><rect x="[^"]+" y="([\d.]+)"/)?.[1]);
+  assert.ok(noticeY > descriptionY, "source errors should sit below the source details");
+});
+
+test("stale service data is described separately from service outages and includes its age", () => {
+  const stale: DashboardSource = {
+    ...sample,
+    fetchedAt: "2026-01-01T10:40:00.000Z",
+    freshness: "stale",
+    status: "stale",
+    components: [{ ...sample.components[0], status: "stale", sampledAt: "2026-01-01T03:13:00.000Z" }],
+  };
+  const svg = dashboardSVG([stale]);
+  assert.match(svg, /Monitoring data delayed/);
+  assert.match(svg, /1 service with stale data/);
+  assert.match(svg, /1 stale feed/);
+  assert.match(svg, /Stale · Last check 03:13 UTC · 7h 27m old/);
+  assert.match(svg, /Service data is stale; health unconfirmed/);
+  assert.doesNotMatch(svg, /1 down/);
+  const narrow = dashboardSVG(Array.from({ length: 4 }, (_, index) => ({
+    ...stale,
+    id: `stale-${index}`,
+    components: [{ ...stale.components[0], history: [{ at: "2026-01-01T03:13:00.000Z", status: "operational" as const }] }],
+  })));
+  assert.match(narrow, /Last: Operational · 7h27m/);
 });
 
 test("Statuspage incidents and scheduled maintenance use a prominent event panel", () => {
