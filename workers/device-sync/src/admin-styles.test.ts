@@ -21,6 +21,29 @@ function rulesFor(root: postcss.Root, selector: string) {
   return rules;
 }
 
+function declarationsFor(root: postcss.Root, selector: string) {
+  const declarations: postcss.Declaration[] = [];
+  for (const rule of rulesFor(root, selector)) rule.walkDecls((declaration) => declarations.push(declaration));
+  return declarations;
+}
+
+function tokenValue(root: postcss.Root, name: string) {
+  const declaration = declarationsFor(root, ":root").find((item) => item.prop === name);
+  assert.ok(declaration, `${name} is declared in :root`);
+  return declaration.value;
+}
+
+function contrast(first: string, second: string) {
+  const luminance = (hex: string) => {
+    const rgb = hex.match(/[\da-f]{2}/gi)?.map((channel) => parseInt(channel, 16) / 255) ?? [];
+    assert.equal(rgb.length, 3, `${hex} is a 6-digit hex colour`);
+    const linear = rgb.map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+    return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+  };
+  const values = [luminance(first), luminance(second)].sort((a, b) => b - a);
+  return (values[0] + 0.05) / (values[1] + 0.05);
+}
+
 test("admin stylesheet drops selectors with no markup or module references", async () => {
   const { cssText } = await readAdminAssets();
   for (const selector of [".section-nav", ".section-nav__more", ".child-tiles", ".dashboard-home"]) {
@@ -70,4 +93,49 @@ test("sidebar and home navigation have distinct accessible names", async () => {
   const { html } = await readAdminAssets();
   const labels = [...html.matchAll(/<nav\b[^>]*aria-label="([^"]+)"/g)].map((match) => match[1]);
   assert.equal(new Set(labels).size, labels.length);
+});
+
+test("admin type scale and desktop controls stay dense while touch controls stay large", async () => {
+  const { css } = await readAdminAssets();
+  assert.equal(tokenValue(css, "--font-size-body"), "1rem");
+  assert.equal(tokenValue(css, "--font-size-small"), ".875rem");
+  assert.equal(tokenValue(css, "--control-height"), "2.25rem");
+  assert.ok(declarationsFor(css, ".button").some((item) => item.prop === "padding" && item.value === ".4rem .85rem"));
+  assert.ok(declarationsFor(css, ".field-control").some((item) => item.prop === "padding" && item.value === ".4rem .65rem"));
+  for (const selector of [".data-table", ".data-card", "label", ".field-hint"]) {
+    assert.ok(declarationsFor(css, selector).some((item) => item.prop === "font-size" && item.value === "var(--font-size-small)"),
+      `${selector} uses the dense text size`);
+  }
+  let touchControlSize = false;
+  css.walkAtRules("media", (media) => {
+    if (!/pointer:\s*coarse|max-width:\s*43\.75rem/.test(media.params)) return;
+    media.walkRules(":root", (rule) => {
+      touchControlSize ||= rule.nodes.some((node) => node.type === "decl" && node.prop === "--control-height" && node.value === "2.75rem");
+    });
+  });
+  assert.ok(touchControlSize, "coarse pointer and narrow layouts retain the larger target size");
+});
+
+test("header navigation toggle has an icon, accessible name, tooltip and controls", async () => {
+  const { html, css } = await readAdminAssets();
+  const toggle = html.match(/<button\b[^>]*id="module-navigation-toggle"[^>]*>([\s\S]*?)<\/button>/)?.[0];
+  assert.ok(toggle);
+  assert.match(toggle, /aria-label="Toggle navigation"/);
+  assert.match(toggle, /title="Toggle navigation"/);
+  assert.match(toggle, /aria-controls="module-navigation"/);
+  assert.match(toggle, /aria-expanded="true"/);
+  assert.match(toggle, /<svg\b[^>]*aria-hidden="true"/);
+  assert.match(toggle, /class="[^"]*button--header/);
+  assert.ok(rulesFor(css, ".button--header").length > 0);
+});
+
+test("destructive actions are outlined outside confirmation and contrast clears the reported thresholds", async () => {
+  const { css } = await readAdminAssets();
+  const action = declarationsFor(css, ".button--danger");
+  assert.ok(action.some((item) => item.prop === "background" && item.value === "var(--color-surface)"));
+  assert.ok(action.some((item) => item.prop === "color" && item.value === "var(--color-danger)"));
+  assert.ok(declarationsFor(css, ".confirm-dialog .button--danger")
+    .some((item) => item.prop === "background" && item.value === "var(--color-danger)"));
+  assert.ok(contrast("#ffffff", tokenValue(css, "--color-tile-teal-end")) >= 4.5);
+  assert.ok(contrast(tokenValue(css, "--color-brand-border-muted"), tokenValue(css, "--color-brand-dark")) >= 3);
 });
