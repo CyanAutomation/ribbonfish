@@ -190,7 +190,7 @@ test("management navigation starts collapsed on narrow screens and can be expand
     const toggle = window.document.querySelector("#module-navigation-toggle");
     assert.equal(navigation.hidden, true);
     assert.equal(toggle.getAttribute("aria-expanded"), "false");
-    assert.equal(window.document.querySelector("#dashboard-tiles").hidden, false);
+    assert.ok(window.document.querySelector("#overview-section"), "the overview replaces the removed home tiles");
     toggle.click();
     assert.equal(navigation.hidden, false);
     assert.equal(toggle.getAttribute("aria-expanded"), "true");
@@ -204,7 +204,7 @@ test("management modules share page headers and labeled control toolbars", { tim
   try {
     await settle();
     for (const [sectionID, titleID, title] of [
-      ["overview-section", "overview-title", "Fleet snapshot"],
+      ["overview-section", "overview-title", "Fleet overview"],
       ["sites-section", "sites-title", "Capture sites"],
       ["dashboards-section", "dashboards-title", "Capture dashboards"],
       ["capture-efficiency-section", "capture-efficiency-title", "Capture efficiency and Browser Run usage"],
@@ -272,15 +272,14 @@ test("management modules share page headers and labeled control toolbars", { tim
   }
 });
 
-test("dashboard navigation renders capture efficiency and fleet findings", { timeout: 5000 }, async () => {
+test("overview navigation renders the fleet landing page, capture efficiency and deep linked findings", { timeout: 5000 }, async () => {
   const { dom, window } = openConsole();
   try {
     await settle();
-    const efficiencyTile = window.document.querySelector('#dashboard-tiles a[href="#capture-efficiency-section"]');
-    assert.ok(efficiencyTile);
-    await navigate(window, () => efficiencyTile.click());
+    assert.equal(window.document.querySelector("#overview-section").hidden, false);
+    assert.equal(window.document.querySelector("#dashboard-tiles"), null);
+    await navigate(window, () => window.document.querySelector('#module-navigation a[href="#capture-efficiency-section"]').click());
     assert.equal(window.document.querySelector("#capture-efficiency-section").hidden, false);
-    assert.equal(window.document.querySelector("#dashboard-tiles").hidden, true);
     assert.equal(window.document.activeElement.id, "capture-efficiency-title");
     assert.equal(window.document.querySelector('#module-navigation a[href="#capture-efficiency-section"]').getAttribute("aria-current"), "page");
     assert.equal(window.document.querySelectorAll("#capture-efficiency-section .metric-card").length, 2);
@@ -292,13 +291,10 @@ test("dashboard navigation renders capture efficiency and fleet findings", { tim
     assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /8m 0s measured, 2m 0s reserve-estimated/);
     assert.doesNotMatch(window.document.querySelector("#capture-target-list").textContent, /Capture efficiency and Browser Run usage/);
 
-    await navigate(window, () => window.document.querySelector('#module-navigation a[href="#dashboard"]').click());
-    const insightsLink = window.document.querySelector('#module-navigation a[href="#fleet-insights"]');
-    await navigate(window, () => insightsLink.click());
-    assert.equal(window.document.querySelector("#dashboard-tiles").hidden, true);
+    await navigate(window, () => { window.location.hash = "#fleet-insights"; });
     assert.equal(window.document.querySelector("#overview-section").hidden, false);
     assert.equal(window.document.activeElement.id, "fleet-insights-title");
-    assert.equal(insightsLink.getAttribute("aria-current"), "page");
+    assert.equal(window.document.querySelector('#module-navigation a[href="#overview-section"]').getAttribute("aria-current"), "page");
     assert.match(window.document.querySelector("#fleet-attention").textContent, /schedule needs review/);
     assert.match(window.document.querySelector("#fleet-data-as-of").textContent, /Data as of/);
     await navigate(window, () => window.document.querySelector('#fleet-attention a[href="#sites-section"]').click());

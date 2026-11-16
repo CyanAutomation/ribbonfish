@@ -74,9 +74,6 @@ test("capture efficiency analysis has dedicated layout rules", async () => {
 test("tile, chart, and brand glow colours are defined by CSS tokens", async () => {
   const { css, cssText } = await readAdminAssets();
   const tokenNames = [
-    "--color-tile-blue-start", "--color-tile-blue-end",
-    "--color-tile-teal-start", "--color-tile-teal-end",
-    "--color-tile-plum-start", "--color-tile-plum-end",
     "--color-brand-glow-start", "--color-brand-glow-end",
     "--color-chart-0", "--color-chart-1", "--color-chart-2",
     "--color-chart-3", "--color-chart-4", "--color-chart-5",
@@ -84,7 +81,7 @@ test("tile, chart, and brand glow colours are defined by CSS tokens", async () =
   const rootTokens = new Set<string>();
   css.walkRules(":root", (rule) => rule.walkDecls((decl) => rootTokens.add(decl.prop)));
   for (const token of tokenNames) assert.ok(rootTokens.has(token), `${token} is declared in :root`);
-  assert.doesNotMatch(cssText, /\.module-tile[^{}]*\{[^}]*#[\da-f]{3,8}/i);
+  assert.doesNotMatch(cssText, /\.module-tile|#168d9b/i);
   assert.doesNotMatch(cssText, /\.browser-usage-chart__segment--\d+\s*\{[^}]*#[\da-f]{3,8}/i);
   assert.doesNotMatch(cssText, /\.brand-lockup__name::after\s*\{[^}]*#[\da-f]{3,8}/i);
 });
@@ -129,6 +126,19 @@ test("header navigation toggle has an icon, accessible name, tooltip and control
   assert.ok(rulesFor(css, ".button--header").length > 0);
 });
 
+test("header, sidebar, and main share the wide layout grid and environment warnings are prominent", async () => {
+  const { css } = await readAdminAssets();
+  const shellColumns = declarationsFor(css, ".management-shell")
+    .find((item) => item.prop === "grid-template-columns")?.value;
+  const headerColumns = declarationsFor(css, ".app-header")
+    .find((item) => item.prop === "grid-template-columns")?.value;
+  assert.equal(headerColumns, shellColumns);
+  assert.ok(declarationsFor(css, "main").some((item) => item.prop === "width" && item.value === "min(1400px, calc(100% - 1rem))"));
+  assert.ok(declarationsFor(css, ".overview-metrics").some((item) => item.prop === "display" && item.value === "grid"));
+  assert.ok(declarationsFor(css, ".environment-tag--warning").some((item) => item.prop === "background" && item.value === "var(--color-danger)"));
+  assert.ok(declarationsFor(css, ".environment-notice").some((item) => item.prop === "border-inline-start" && item.value.includes("var(--color-danger)")));
+});
+
 test("destructive actions are outlined outside confirmation and contrast clears the reported thresholds", async () => {
   const { css } = await readAdminAssets();
   const action = declarationsFor(css, ".button--danger");
@@ -136,6 +146,6 @@ test("destructive actions are outlined outside confirmation and contrast clears 
   assert.ok(action.some((item) => item.prop === "color" && item.value === "var(--color-danger)"));
   assert.ok(declarationsFor(css, ".confirm-dialog .button--danger")
     .some((item) => item.prop === "background" && item.value === "var(--color-danger)"));
-  assert.ok(contrast("#ffffff", tokenValue(css, "--color-tile-teal-end")) >= 4.5);
+  assert.ok(contrast("#ffffff", "#13717f") >= 4.5);
   assert.ok(contrast(tokenValue(css, "--color-brand-border-muted"), tokenValue(css, "--color-brand-dark")) >= 3);
 });

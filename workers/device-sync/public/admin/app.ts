@@ -21,6 +21,7 @@ import { parseApiDashboardConfig } from "../../src/api-dashboard/config.ts";
 import { renderApiDashboards } from "./api-dashboard-view.ts";
 import { createCaptureTargetRenderer } from "./capture-sites-view.ts";
 import { renderCaptureEfficiencyModule } from "./capture-efficiency-module.ts";
+import { renderFleetOverviewMetrics } from "./fleet-overview.ts";
 import {
   createBrandLockup,
   createActionGroup,
@@ -33,11 +34,6 @@ import {
   type RefreshMode,
 } from "./ui-components.ts";
 import { initModuleNavigation } from "./module-navigation.ts";
-import {
-  createFleetOpenUI,
-  OPENUI_STARTER_SOURCE,
-  renderOpenUIElement,
-} from "./openui-core.ts";
 import {
   compactIdentifier,
   confirmAction,
@@ -81,15 +77,10 @@ const apiDashboardCreateEditor = createApiDashboardSourceEditor(
   requiredFormControl<HTMLTextAreaElement>(apiDashboardCreateForm, "sources-json"),
 );
 let latestOverview: any = null;
-let fleetSummaryInitialized = false;
 let pendingEnrollmentsLoaded = false;
 let pendingEnrollmentIDs = new Set<string>();
 let playlistEditSource: { playlist_id: string; revision: string } | null = null;
 let intervalDefinitions: any = null;
-const fleetViewRuntime = createFleetOpenUI({ getOverview: async () => latestOverview });
-
-fleetViewRuntime.subscribe(renderFleetSummary);
-
 const feedbackSlots = new Map([...requiredElements(document, "[data-feedback-slot]")].map((element) => {
   const slot = {
     element,
@@ -1006,36 +997,22 @@ async function refreshData(): Promise<boolean> {
   setPageHeaderMetadata(requiredElement(document, "#activity-section > .page-header"), [
     `${overview.audit.length} recent events`,
   ]);
-  requiredElement(document, "#sites-tile-status").textContent = `${browserTargets.length} screenshot sites`;
-  requiredElement(document, "#dashboards-tile-status").textContent = `${apiDashboards.length} API dashboards`;
-  requiredElement(document, "#playlists-tile-status").textContent = `${overview.playlists.length} playlist versions`;
-  requiredElement(document, "#devices-tile-status").textContent = `${overview.devices.length} devices · ${enrollmentRequests.length} awaiting approval`;
   renderEnvironment(overview.environment);
   renderHealth(overview.asset_health);
   renderFleetAttention(overview, enrollmentRequests);
+  renderFleetOverviewMetrics(fleetSummary, overview, enrollmentRequests);
   renderPlaylists(overview.playlists);
-  const captureForecast = renderCaptureEfficiencyModule(
+  renderCaptureEfficiencyModule(
     requiredElement(document, "#capture-efficiency-content"),
     browserTargets,
     overview.capture_efficiency,
   );
-  requiredElement(document, "#capture-efficiency-tile-status").textContent = captureForecast
-    ? captureForecast.total_estimated_ms === null
-      ? "Waiting for active runtime samples"
-      : formatRunTime(captureForecast.total_estimated_ms) + " forecast per day"
-    : "Forecast unavailable";
   renderCaptureTargets(browserTargets, captureDecisions);
   renderApiDashboards(apiDashboards, { showMessage, refresh, showConfirmDialog });
   renderAvailableSites(overview.capture_targets ?? []);
   renderDevices(overview.devices, overview.active_playlist);
   renderPendingEnrollments(enrollmentRequests);
   renderAudit(overview.audit);
-  if (!fleetSummaryInitialized) {
-    fleetViewRuntime.renderProgram(OPENUI_STARTER_SOURCE);
-    fleetSummaryInitialized = true;
-  } else {
-    fleetViewRuntime.refresh();
-  }
   return true;
 }
 
@@ -1059,32 +1036,22 @@ function resetIntervalSelections(form) {
 function renderEnvironment(environment) {
   const status = formatEnvironmentNotice(environment);
   environmentTag.textContent = status.label;
+  environmentTag.classList.toggle("environment-tag--warning", !status.production);
   environmentNotice.classList.toggle("alert--warning", !status.production);
-  environmentNotice.classList.toggle("alert--info", status.production);
-  environmentNotice.replaceChildren();
-  const lead = node("strong", status.heading);
-  const detail = node("span", ` ${status.detail}`);
-  environmentNotice.append(lead, detail);
+  environmentNotice.classList.remove("alert--info");
+  if (status.production) {
+    environmentNotice.hidden = true;
+    environmentNotice.replaceChildren();
+    delete environmentNotice.dataset.message;
+    return;
+  }
+  const message = `${status.heading} ${status.detail}`.trim();
+  if (environmentNotice.dataset.message !== message) {
+    environmentNotice.replaceChildren();
+    environmentNotice.append(node("strong", status.heading), node("span", ` ${status.detail}`));
+    environmentNotice.dataset.message = message;
+  }
   environmentNotice.hidden = false;
-}
-
-function renderFleetSummary(view) {
-  if (!view) return;
-  if (view.loading) {
-    fleetSummary.setAttribute("aria-busy", "true");
-    fleetSummary.replaceChildren(node("p", "Loading fleet summary…", "muted"));
-    return;
-  }
-  fleetSummary.removeAttribute("aria-busy");
-  if (view.errors.length) {
-    fleetSummary.replaceChildren(node("p", view.errors.map((error) => error.message).join(" "), "error-title"));
-    return;
-  }
-  try {
-    fleetSummary.replaceChildren(renderOpenUIElement(view.root));
-  } catch (error) {
-    fleetSummary.replaceChildren(node("p", error.message, "error-title"));
-  }
 }
 
 function renderJevDecision(

@@ -216,9 +216,7 @@ export function formatEnvironmentNotice(environment: string) {
     production,
     label: production ? "Production" : "Development",
     heading: production ? "Production environment." : "Development environment.",
-    detail: production
-      ? "Your session is verified through Cloudflare Access."
-      : "Administrator sign-in is not configured for this deployment.",
+    detail: production ? "" : "Administrator sign-in is not configured for this deployment.",
   };
 }
 

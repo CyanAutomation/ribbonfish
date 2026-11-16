@@ -66,7 +66,7 @@ test("management page exposes accessible fleet and playlist sections", async () 
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const nodes = parseHTML(html);
   for (const [id, label] of [
-    ["fleet-summary", "Fleet snapshot"],
+    ["fleet-summary", "Fleet overview metrics"],
     ["devices", "Enrolled devices"],
     ["playlists", "Playlist versions"],
   ]) {
@@ -352,7 +352,7 @@ test("fleet insights live in the overview and no longer open in a modal", async 
   const overview = byID(nodes, "overview-section");
   const findings = byID(nodes, "fleet-attention");
   assert.ok(overview && descendants(overview).includes(findings));
-  assert.ok(nodes.some((node) => node.tagName === "a" && attribute(node, "href") === "#fleet-insights"));
+  assert.ok(byID(nodes, "fleet-insights"), "the fleet findings deep link remains available");
   assert.equal(byID(nodes, "analysis-dialog"), undefined);
   assert.equal(byID(nodes, "run-fleet-analysis"), undefined);
 });
@@ -756,10 +756,10 @@ test("audit events and metadata are presented as readable labels", () => {
   ]);
 });
 
-test("management environment copy accurately describes Access and local sign-in", () => {
+test("management environment copy shows attention on development and stays quiet for verified production", () => {
   const production = formatEnvironmentNotice("production");
   assert.equal(production.production, true);
-  assert.match(production.detail, /Cloudflare Access/i);
+  assert.equal(production.detail, "");
 
   const development = formatEnvironmentNotice("development");
   assert.equal(development.production, false);
@@ -888,14 +888,14 @@ test("management shell provides grouped persistent navigation and an on-demand s
   assert.equal(attribute(byID(nodes, "module-navigation-toggle"), "aria-expanded"), "true");
   assert.equal(attribute(byID(nodes, "module-navigation-toggle"), "hidden"), "");
   const links = descendants(nav).filter((item) => item.tagName === "a");
-  for (const id of ["dashboard", "overview-section", "sites-section", "capture-efficiency-section", "playlist-section", "device-section", "activity-section", "fleet-insights"]) {
+  for (const id of ["overview-section", "sites-section", "capture-efficiency-section", "playlist-section", "device-section", "activity-section"]) {
     assert.ok(links.some((link) => attribute(link, "href") === `#${id}`), `${id} is reachable`);
   }
+  assert.equal(links.some((link) => attribute(link, "href") === "#fleet-insights"), false);
   assert.deepEqual(descendants(nav).filter((item) => item.tagName === "h2").map((item) => item.childNodes[0]?.value),
     ["Overview", "Capture", "Fleet"]);
-  const efficiencyTile = descendants(byID(nodes, "dashboard-tiles")).find((item) =>
-    item.tagName === "a" && attribute(item, "href") === "#capture-efficiency-section");
-  assert.ok(efficiencyTile, "capture efficiency has its own dashboard tile");
+  assert.equal(byID(nodes, "dashboard-tiles"), undefined);
+  assert.ok(links.some((link) => attribute(link, "href") === "#capture-efficiency-section"), "capture efficiency has a sidebar destination");
   assert.equal(attribute(byID(nodes, "capture-efficiency-section"), "aria-labelledby"), "capture-efficiency-title");
   const siteEditor = byID(nodes, "capture-site-editor");
   assert.equal(siteEditor.tagName, "details");
@@ -932,13 +932,12 @@ test("configuration forms separate dashboard details, sources, and playlist cont
     item.tagName === "fieldset" && attribute(item, "id") === "available-sites"));
 });
 
-test("capture sites and API dashboards are separate modules with their own home tiles", async () => {
+test("capture sites and API dashboards are separate sidebar modules", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const nodes = parseHTML(html);
   const nav = descendants(byID(nodes, "module-navigation"));
-  const tiles = descendants(byID(nodes, "dashboard-tiles"));
   assert.ok(nav.some((item) => item.tagName === "a" && attribute(item, "href") === "#dashboards-section"));
-  assert.ok(tiles.some((item) => item.tagName === "a" && attribute(item, "href") === "#dashboards-section"));
+  assert.equal(byID(nodes, "dashboard-tiles"), undefined);
   assert.ok(byID(nodes, "dashboards-section"));
   assert.equal(byID(nodes, "api-dashboard-form").parentNode?.parentNode?.parentNode?.attrs?.some((item) => item.name === "id" && item.value === "sites-section"), false);
   assert.ok(descendants(byID(nodes, "dashboards-section")).some((item) => attribute(item, "id") === "api-dashboard-form"));
@@ -956,17 +955,53 @@ test("API dashboard configuration defaults to structured source controls with op
   assert.ok(descendants(advanced).some((item) => item.tagName === "textarea" && attribute(item, "name") === "sources-json"));
 });
 
-test("fleet insights have a dashboard tile with a direct link to findings", async () => {
+test("fleet findings retain a direct deep link without a duplicate sidebar item", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const nodes = parseHTML(html);
-  const tiles = byID(nodes, "dashboard-tiles");
-  assert.ok(tiles, "dashboard-tiles container exists");
-  const tile = descendants(tiles).find((item) =>
-    item.tagName === "a" && attribute(item, "href") === "#fleet-insights");
-  assert.ok(tile, "fleet insights are reachable from the dashboard tiles");
-  const tileText = descendants(tile).filter((item) => item.nodeName === "#text").map((item) => item.value).join(" ");
-  assert.match(tileText, /Fleet insights/);
-  assert.match(tileText, /Prioritized findings and recommended actions/);
+  assert.ok(byID(nodes, "fleet-insights"), "the existing fleet findings anchor remains available");
+  const nav = descendants(byID(nodes, "module-navigation"));
+  assert.equal(nav.filter((item) => item.tagName === "a" && attribute(item, "href") === "#overview-section").length, 1);
+  assert.equal(nav.some((item) => item.tagName === "a" && attribute(item, "href") === "#fleet-insights"), false);
+});
+
+test("fleet landing page puts findings first, replaces module tiles, and keeps one overview destination", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const nodes = parseHTML(html);
+  const header = descendants(byID(nodes, "management-shell")).find((item) => item.tagName === "header");
+  const heading = descendants(header).find((item) => item.tagName === "h1");
+  assert.equal(descendants(heading).some((item) => attribute(item, "id") === "brand-lockup"), true);
+  assert.equal(descendants(heading).find((item) => attribute(item, "class")?.split(/\s+/).includes("brand-lockup__name"))?.childNodes[0]?.value, "Ribbonfish");
+  assert.equal(byID(nodes, "dashboard-tiles"), undefined);
+
+  const overviewSection = byID(nodes, "overview-section");
+  const findingsIndex = descendants(overviewSection).findIndex((item) => attribute(item, "id") === "fleet-insights");
+  const metricsIndex = descendants(overviewSection).findIndex((item) => attribute(item, "id") === "fleet-summary");
+  assert.ok(findingsIndex >= 0 && metricsIndex > findingsIndex, "findings come before the live metrics");
+  assert.equal(byID(nodes, "overview-title")?.childNodes[0]?.value, "Fleet overview");
+
+  const links = descendants(byID(nodes, "module-navigation")).filter((item) => item.tagName === "a");
+  assert.equal(links.filter((link) => attribute(link, "href") === "#overview-section").length, 1);
+  assert.equal(links.some((link) => attribute(link, "href") === "#fleet-insights"), false);
+  assert.equal(links.some((link) => attribute(link, "href") === "#dashboard"), false);
+  assert.ok(byID(nodes, "fleet-insights"), "the existing findings deep link remains available");
+  for (const sectionID of ["overview-section", "sites-section", "dashboards-section", "capture-efficiency-section", "playlist-section", "device-section", "activity-section"]) {
+    const section = byID(nodes, sectionID);
+    const heading = descendants(section).find((item) => attribute(item, "class")?.includes("section-heading"));
+    assert.equal(descendants(heading).some((item) => attribute(item, "class")?.split(/\s+/).includes("eyebrow")), false,
+      `${sectionID} uses its heading as the only page title`);
+  }
+});
+
+test("environment status lives in the header and production has no success notice", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const nodes = parseHTML(html);
+  const header = descendants(byID(nodes, "management-shell")).find((item) => item.tagName === "header");
+  assert.ok(descendants(header).some((item) => attribute(item, "id") === "environment-tag"));
+  const notice = descendants(header).find((item) => attribute(item, "id") === "environment-notice");
+  assert.ok(notice);
+  assert.equal(attribute(notice, "role"), "alert");
+  assert.equal(attribute(notice, "hidden"), "");
+  assert.equal(byID(nodes, "main-content")?.childNodes.some((item) => attribute(item, "id") === "environment-notice"), false);
 });
 
 
