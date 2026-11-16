@@ -335,6 +335,22 @@ test("stale service data is described separately from service outages and includ
   assert.match(narrow, /Last: Operational · 7h27m/);
 });
 
+test("unexpected cached statuses use the Unknown label in wide and narrow cards", () => {
+  const invalid: DashboardSource = {
+    ...sample,
+    freshness: "unavailable",
+    fetchedAt: "2026-01-01T10:40:00.000Z",
+    components: [{ ...sample.components[0], status: "future-status" as DashboardSource["components"][number]["status"], sampledAt: "2026-01-01T10:40:00.000Z" }],
+  };
+  const wide = dashboardSVG([invalid]);
+  assert.match(wide, /Last known: Unknown/);
+  assert.doesNotMatch(wide, /Last known: undefined/);
+
+  const narrow = dashboardSVG(Array.from({ length: 4 }, (_, index) => ({ ...invalid, id: `invalid-${index}` })));
+  assert.match(narrow, /Last: Unknown · 0m/);
+  assert.doesNotMatch(narrow, /Last: undefined/);
+});
+
 test("Statuspage incidents and scheduled maintenance use a prominent event panel", () => {
   const source: DashboardSource = {
     ...sample,

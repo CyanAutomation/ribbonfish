@@ -286,6 +286,7 @@ function renderServiceDisplayRow(row: ServiceDisplayRow, layout: CardLayout, row
   const stateChangeTime = changedTime && ["down", "degraded", "maintenance"].includes(status) ? changedTime : undefined;
   const staleReading = status === "stale";
   const lastKnown = staleReading || unconfirmed ? [...(row.component.history ?? [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).find((beat) => beat.status !== "stale")?.status ?? (unconfirmed ? status : undefined) : undefined;
+  const lastKnownLabel = lastKnown ? healthLabel[lastKnown] ?? healthLabel.unknown : undefined;
   const sampledAge = staleReading || unconfirmed ? formatAge(row.component.sampledAt, source.fetchedAt) : undefined;
   const conciseUnconfirmed = (staleReading || unconfirmed) && width < s(520);
   const statusMeta = conciseUnconfirmed ? undefined : [
@@ -295,8 +296,8 @@ function renderServiceDisplayRow(row: ServiceDisplayRow, layout: CardLayout, row
   ].filter(Boolean).join(" · ") || undefined;
   const conciseAge = sampledAge?.replace(/(\d+)h (\d+)m old/, "$1h$2m").replace(/(\d+)m old/, "$1m");
   const displayStatus = conciseUnconfirmed
-    ? lastKnown ? `Last: ${healthLabel[lastKnown]} · ${conciseAge ?? "stale"}` : `${staleReading ? "Stale" : "Unconfirmed"} · ${conciseAge ?? ""}`.trim()
-    : (staleReading || unconfirmed) && lastKnown ? `Last known: ${healthLabel[lastKnown]}` : staleReading ? "Stale" : unconfirmed ? "Unconfirmed" : statusText;
+    ? lastKnownLabel ? `Last: ${lastKnownLabel} · ${conciseAge ?? "stale"}` : `${staleReading ? "Stale" : "Unconfirmed"} · ${conciseAge ?? ""}`.trim()
+    : lastKnownLabel ? `Last known: ${lastKnownLabel}` : staleReading ? "Stale" : unconfirmed ? "Unconfirmed" : statusText;
   return svgServiceRow({ x: left, y: rowY, right: x + width - pad, scale, name, status: displayStatus, color, statusMeta, compact, showStatus: true });
 }
 
