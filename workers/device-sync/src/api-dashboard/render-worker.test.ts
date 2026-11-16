@@ -61,10 +61,16 @@ function visualScenarios(base: { width: number; height: number; sources: any[] }
   maintenance.sources[1].components[0].status = "maintenance";
   scenarios.push({ name: "scheduled-maintenance", value: maintenance });
   const partial = clone();
-  Object.assign(partial.sources.at(-1), { freshness: "unavailable", status: "stale", statusDescription: "Status source unavailable", error: "Status API request timed out.", groups: [], components: [], incidents: [], maintenance: [] });
+  Object.assign(partial.sources.at(-1), { freshness: "unavailable", status: "stale", statusDescription: "Status source unavailable", error: "Status API request timed out.", cache: { summary: { contentFetchedAt: "2026-11-05T11:40:00.000Z" } }, groups: [], components: [], incidents: [], maintenance: [] });
   scenarios.push({ name: "partial-source-failure", value: partial });
+  const staleData = clone();
+  Object.assign(staleData.sources[0], { freshness: "stale", status: "stale", fetchedAt: "2026-11-05T12:10:00.000Z" });
+  for (const component of staleData.sources[0].components) if (!component.isGroup) Object.assign(component, {
+    status: "stale", sampledAt: "2026-11-05T11:50:00.000Z", history: [{ at: "2026-11-05T11:50:00.000Z", status: "operational" }],
+  });
+  scenarios.push({ name: "stale-monitor-data", value: staleData });
   const unavailable = clone();
-  for (const source of unavailable.sources) Object.assign(source, { freshness: "unavailable", status: "stale", statusDescription: "Status source unavailable", error: "Status API request timed out.", groups: [], components: [], incidents: [], maintenance: [] });
+  for (const source of unavailable.sources) Object.assign(source, { freshness: "unavailable", status: "stale", statusDescription: "Status source unavailable", error: "Status API request timed out.", cache: { summary: { contentFetchedAt: "2026-11-05T11:40:00.000Z" } }, groups: [], components: [], incidents: [], maintenance: [] });
   scenarios.push({ name: "all-sources-unavailable", value: unavailable });
   const largeGroup = clone();
   largeGroup.sources = [largeGroup.sources[0]];
@@ -119,5 +125,5 @@ test("resvg WebAssembly and bundled font render under the Cloudflare Workers run
     await writeFile(join(outputDirectory, `${scenario.name}.png`), bytes);
     if (scenario.name === "realistic-seven-source") await writeFile(join(root, "../../examples/api-dashboard/status-dashboard.png"), bytes);
   }
-  assert.equal(scenarios.length, 11);
+  assert.equal(scenarios.length, 12);
 });
