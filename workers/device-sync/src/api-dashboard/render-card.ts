@@ -5,6 +5,7 @@ import {
   svgGroupSummary,
   svgPanel,
   svgServiceRow,
+  svgSourceNotice,
   svgStatusDot,
   svgText,
   truncateText,
@@ -62,16 +63,35 @@ function formatFetched(value: string): string | undefined {
   return time ? `Checked ${time}` : undefined;
 }
 
+function lastSuccessfulUpdate(source: DashboardSource): string | undefined {
+  const timestamps = Object.values(source.cache ?? {}).map((metadata) => metadata?.contentFetchedAt)
+    .filter((value): value is string => Boolean(value) && Number.isFinite(Date.parse(value)));
+  if (!timestamps.length) return undefined;
+  return formatClock(timestamps.sort((a, b) => Date.parse(b) - Date.parse(a))[0]);
+}
+
+function formatAge(sampledAt: string | null | undefined, fetchedAt: string): string | undefined {
+  if (!sampledAt) return undefined;
+  const ageMinutes = Math.max(0, Math.round((Date.parse(fetchedAt) - Date.parse(sampledAt)) / 60_000));
+  if (!Number.isFinite(ageMinutes)) return undefined;
+  const hours = Math.floor(ageMinutes / 60);
+  const minutes = ageMinutes % 60;
+  if (hours && minutes) return `${hours}h ${minutes}m old`;
+  if (hours) return `${hours}h old`;
+  return `${minutes}m old`;
+}
+
 function freshnessDescription(source: DashboardSource): string {
+  if (source.disabled) return "Not polled";
   if (source.freshness === "fresh") return "Data fresh";
-  if (source.freshness === "stale") return "Data stale";
+  if (source.freshness === "stale") return "Service data stale";
   return "Feed unavailable";
 }
 
 function freshnessColor(source: DashboardSource): string {
+  if (source.disabled) return colors.unknown;
   if (source.freshness === "fresh") return colors.operational;
-  if (source.freshness === "stale") return colors.stale;
-  return colors.down;
+  return colors.stale;
 }
 
 function recentGroupChecks(components: DashboardSource["components"], fetchedAt: string): string[] {
@@ -99,6 +119,10 @@ function addGroupRows(
   if (groupHeader) rows.push({ kind: "group", name });
   if (!components.length) {
     rows.push({ kind: "empty", name });
+    return;
+  }
+  if (source.freshness !== "fresh") {
+    for (const component of components) rows.push({ kind: "service", component });
     return;
   }
   const issues = components.filter((component) => component.status !== "operational");
@@ -182,7 +206,7 @@ function buildCardLayout(props: CardProps): CardLayout {
   const visibleEvents = events.slice(0, 3);
   const eventAreaHeight = visibleEvents.length ? s(18 + visibleEvents.length * 54) : 0;
   const hasDetails = serviceRows.some((row) => row.kind === "service" || row.kind === "empty" || row.kind === "summary");
-  const contentOffset = compact ? 60 : source.error ? 140 : 120;
+  const contentOffset = compact ? 60 : source.freshness === "unavailable" ? (lastSuccessfulUpdate(source) ? 230 : 210) : source.freshness === "stale" ? 196 : width < s(520) ? 140 : 120;
   const availableContentHeight = height - s(contentOffset) - eventAreaHeight - s(hasDetails ? 20 : 8);
   const contentAreaHeight = Math.max(0, availableContentHeight);
   const lineHeight = Math.min(s(compact ? 30 : 62), Math.max(s(compact ? 18 : 20), contentAreaHeight / Math.max(1, serviceRows.length)));
@@ -193,7 +217,7 @@ function buildCardLayout(props: CardProps): CardLayout {
   const hiddenGroups = Math.max(0, serviceRows.filter((row) => row.kind === "group").length - rows.filter((row) => row.kind === "group").length);
   const contentY = y + s(contentOffset) + Math.max(0, (contentAreaHeight - rows.length * lineHeight) / 2);
   const sourceHealthLabel = health === "stale" ? "Stale" : healthLabel[health];
-  const sourceStatusLabel = source.disabled ? "Disabled" : `Services: ${sourceHealthLabel}`;
+  const sourceStatusLabel = source.disabled ? "Disabled" : source.freshness !== "fresh" ? "Service status unknown" : `Services: ${sourceHealthLabel}`;
   const statusTextWidth = sourceStatusLabel.length * s(compact ? 6.5 : 9);
   const statusTextX = x + width - pad - statusTextWidth;
   const statusDotX = statusTextX - s(14);
@@ -212,16 +236,20 @@ function renderFullCardHeader(layout: CardLayout): string {
   const freshnessLabel = [freshnessDescription(source), formatFetched(source.fetchedAt)].filter(Boolean).join(" · ");
   const freshnessTextWidth = freshnessLabel.length * s(9);
   const freshnessX = x + width - pad - freshnessTextWidth - s(12);
-  const identityLimit = Math.max(8, Math.floor((freshnessX - left - s(16)) / s(8.5)));
-  let svg = `<text x="${left}" y="${y + s(70)}" fill="#d0dbea" font-size="${s(17)}">${svgText(truncateText(sourceIdentity, identityLimit))}</text>`;
-  svg += svgFreshnessBadge(freshnessX, y + s(70), scale, freshnessLabel, freshnessColor(source));
-  svg += svgStatusDot(statusDotX, y + s(90), s(7), colors[health]);
-  svg += `<text x="${statusTextX}" y="${y + s(96)}" fill="${svgText(colors[health])}" font-size="${s(16)}" font-weight="700">${svgText(layout.sourceStatusLabel)}</text>`;
+  const identityLimit = Math.floor((freshnessX - left - s(16)) / s(8.5));
+  const stacked = identityLimit < 16;
+  const identityMax = stacked ? Math.floor((width - pad * 2) / s(8.5)) : identityLimit;
+  const freshnessY = y + s(stacked ? 92 : 70);
+  const statusY = y + s(stacked ? 116 : 96);
+  const statusDotY = y + s(stacked ? 110 : 90);
+  let svg = `<text x="${left}" y="${y + s(70)}" fill="#d0dbea" font-size="${s(17)}">${svgText(truncateText(sourceIdentity, identityMax))}</text>`;
+  svg += svgFreshnessBadge(stacked ? left : freshnessX, freshnessY, scale, freshnessLabel, freshnessColor(source));
+  svg += svgStatusDot(statusDotX, statusDotY, s(7), colors[health]);
+  svg += `<text x="${statusTextX}" y="${statusY}" fill="${svgText(colors[health])}" font-size="${s(16)}" font-weight="700">${svgText(layout.sourceStatusLabel)}</text>`;
   if (source.provider === "atlassian-statuspage" && source.statusDescription) {
     const statusDescriptionWidth = Math.max(0, statusDotX - left - s(16));
-    svg += `<text x="${left}" y="${y + s(96)}" fill="#b9c9dc" font-size="${s(16)}">${svgText(truncateText(`Statuspage: ${source.statusDescription}`, Math.floor(statusDescriptionWidth / s(8.5))))}</text>`;
+    svg += `<text x="${left}" y="${statusY}" fill="#b9c9dc" font-size="${s(16)}">${svgText(truncateText(`Statuspage: ${source.statusDescription}`, Math.floor(statusDescriptionWidth / s(8.5))))}</text>`;
   }
-  if (source.error) svg += `<text x="${left}" y="${y + s(116)}" fill="#ffb86c" font-size="${s(14)}">${svgText(truncateText(source.error, Math.floor(width / s(9))))}</text>`;
   return svg;
 }
 
@@ -250,16 +278,27 @@ function renderServiceDisplayRow(row: ServiceDisplayRow, layout: CardLayout, row
     return svgGroupSummary({ x: left + s(16), y: rowY, right: x + width - pad, scale, label: "operational", count: row.count, history: row.history });
   }
   const { name, status } = row.component;
-  const color = colors[status as Health] ?? colors.unknown;
+  const unconfirmed = source.freshness !== "fresh" && status !== "stale";
+  const color = unconfirmed ? colors.unknown : colors[status as Health] ?? colors.unknown;
   const statusText = healthLabel[status as Health] ?? healthLabel.unknown;
   const changedTime = formatClock(row.component.statusChangedAt);
   const sampledTime = formatClock(row.component.sampledAt);
   const stateChangeTime = changedTime && ["down", "degraded", "maintenance"].includes(status) ? changedTime : undefined;
-  const statusMeta = [
-    stateChangeTime ? `Since ${stateChangeTime}` : status !== "operational" && sampledTime ? `Checked ${sampledTime}` : undefined,
-    typeof row.component.latencyMs === "number" && Number.isFinite(row.component.latencyMs) ? `${Math.round(row.component.latencyMs)} ms` : undefined,
+  const staleReading = status === "stale";
+  const lastKnown = staleReading || unconfirmed ? [...(row.component.history ?? [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).find((beat) => beat.status !== "stale")?.status ?? (unconfirmed ? status : undefined) : undefined;
+  const lastKnownLabel = lastKnown ? healthLabel[lastKnown] ?? healthLabel.unknown : undefined;
+  const sampledAge = staleReading || unconfirmed ? formatAge(row.component.sampledAt, source.fetchedAt) : undefined;
+  const conciseUnconfirmed = (staleReading || unconfirmed) && width < s(520);
+  const statusMeta = conciseUnconfirmed ? undefined : [
+    (staleReading || unconfirmed) && sampledTime ? (lastKnown ? sampledTime : `Last check ${sampledTime}`) : stateChangeTime ? `Since ${stateChangeTime}` : status !== "operational" && sampledTime ? `Checked ${sampledTime}` : undefined,
+    sampledAge,
+    !unconfirmed && typeof row.component.latencyMs === "number" && Number.isFinite(row.component.latencyMs) ? `${Math.round(row.component.latencyMs)} ms` : undefined,
   ].filter(Boolean).join(" · ") || undefined;
-  return svgServiceRow({ x: left, y: rowY, right: x + width - pad, scale, name, status: statusText, color, statusMeta, compact, showStatus: true });
+  const conciseAge = sampledAge?.replace(/(\d+)h (\d+)m old/, "$1h$2m").replace(/(\d+)m old/, "$1m");
+  const displayStatus = conciseUnconfirmed
+    ? lastKnownLabel ? `Last: ${lastKnownLabel} · ${conciseAge ?? "stale"}` : `${staleReading ? "Stale" : "Unconfirmed"} · ${conciseAge ?? ""}`.trim()
+    : lastKnownLabel ? `Last known: ${lastKnownLabel}` : staleReading ? "Stale" : unconfirmed ? "Unconfirmed" : statusText;
+  return svgServiceRow({ x: left, y: rowY, right: x + width - pad, scale, name, status: displayStatus, color, statusMeta, compact, showStatus: true });
 }
 
 function renderCardRows(layout: CardLayout): string {
@@ -269,6 +308,16 @@ function renderCardRows(layout: CardLayout): string {
 function renderContextMessage(layout: CardLayout): string {
   const { source, left, contentY, scale, services, hasParentGroups } = layout;
   if (source.disabled) return `<text x="${left}" y="${contentY}" fill="#aab8ca" font-size="${scale * 17}">Source is disabled and not polled</text>`;
+  if (source.freshness === "unavailable") {
+    const lastSuccessful = lastSuccessfulUpdate(source);
+    const details = [source.error, "Service status cannot be confirmed", lastSuccessful ? `Last successful feed data ${lastSuccessful}` : undefined].filter(Boolean).join(" · ");
+    return svgSourceNotice({ x: left, y: layout.y + scale * 124, width: layout.width - layout.pad * 2, scale,
+      title: "Monitoring feed unavailable", detail: details, color: colors.stale, unavailable: true });
+  }
+  if (source.freshness === "stale") {
+    return svgSourceNotice({ x: left, y: layout.y + scale * 124, width: layout.width - layout.pad * 2, scale,
+      title: "Service data is stale; health unconfirmed", detail: "", color: colors.stale });
+  }
   if (!services.length && !source.error && !hasParentGroups) return `<text x="${left}" y="${contentY}" fill="#aab8ca" font-size="${scale * 17}">No component data available</text>`;
   return "";
 }

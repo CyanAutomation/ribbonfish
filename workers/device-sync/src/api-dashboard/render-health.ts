@@ -11,13 +11,14 @@ export function healthOrder(health: Health): number {
 
 export function sourceHealth(source: DashboardSource): Health {
   if (source.disabled) return "unknown";
+  if (source.freshness === "stale") return "stale";
+  if (source.freshness === "unavailable") return "unknown";
   const leafStates = source.components.filter((item) => !item.isGroup).map((item) => item.status);
   if (leafStates.includes("down")) return "down";
   if (leafStates.includes("degraded")) return "degraded";
   if (leafStates.includes("maintenance")) return "maintenance";
   if (leafStates.includes("pending")) return "pending";
   if (leafStates.includes("stale")) return "stale";
-  if (source.freshness !== "fresh") return "unknown";
   if (source.status !== "operational") return source.status;
   if (!leafStates.length || leafStates.includes("unknown")) return "unknown";
   return "operational";
