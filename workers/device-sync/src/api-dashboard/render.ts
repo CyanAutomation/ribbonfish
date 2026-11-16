@@ -29,6 +29,7 @@ type DashboardCounts = {
   unknownServices: number;
   staleServices: number;
   staleSources: number;
+  unavailableSources: number;
   disabledSources: number;
 };
 
@@ -63,7 +64,7 @@ function buildDashboardLayout(sources: DashboardSource[], width: number, height:
 }
 
 function countServices(sources: DashboardSource[], status: Health): number {
-  return sources.reduce((sum, source) => sum + source.components.filter((component) => !component.isGroup && component.status === status).length, 0);
+  return sources.filter((source) => source.freshness === "fresh").reduce((sum, source) => sum + source.components.filter((component) => !component.isGroup && component.status === status).length, 0);
 }
 
 function summarizeSources(sources: DashboardSource[]): DashboardCounts {
@@ -76,8 +77,9 @@ function summarizeSources(sources: DashboardSource[]): DashboardCounts {
     maintenanceServices: countServices(activeSources, "maintenance"),
     pendingServices: countServices(activeSources, "pending"),
     unknownServices: countServices(activeSources, "unknown"),
-    staleServices: countServices(activeSources, "stale"),
+    staleServices: activeSources.filter((source) => source.freshness !== "unavailable").reduce((sum, source) => sum + source.components.filter((component) => !component.isGroup && (source.freshness === "stale" || component.status === "stale")).length, 0),
     staleSources: activeSources.filter((source) => source.freshness !== "fresh").length,
+    unavailableSources: activeSources.filter((source) => source.freshness === "unavailable").length,
     disabledSources: sources.length - activeSources.length,
   };
 }
@@ -86,34 +88,42 @@ function renderDashboardSummary(sources: DashboardSource[], width: number, scale
   const counts = summarizeSources(sources);
   const {
     activeSources, totalServices, downServices, degradedServices, maintenanceServices,
-    pendingServices, unknownServices, staleServices, staleSources, disabledSources,
+    pendingServices, unknownServices, staleServices, staleSources, unavailableSources, disabledSources,
   } = counts;
   let svg = `<text x="${pad}" y="${60 * scale}" fill="#ffffff" font-family="Ribbon Sans" font-size="${42 * scale}" font-weight="700">Operations status</text>`;
   const statusCounts = [
-    [downServices, "down"], [degradedServices, "degraded"], [staleServices, "stale"],
+    [downServices, "down"], [degradedServices, "degraded"],
     [pendingServices, "pending"], [maintenanceServices, "in maintenance"], [unknownServices, "unknown"],
   ] as const;
   const reportedIssues = statusCounts.filter(([count]) => count > 0).map(([count, label]) => `${count} ${label}`);
-  if (staleSources) reportedIssues.push(`${staleSources} stale or unavailable ${staleSources === 1 ? "source" : "sources"}`);
+  if (staleServices) reportedIssues.push(`${staleServices} ${staleServices === 1 ? "service" : "services"} with stale data`);
+  if (unavailableSources) reportedIssues.push(`${unavailableSources} unavailable ${unavailableSources === 1 ? "feed" : "feeds"}`);
+  const staleFeeds = staleSources - unavailableSources;
+  if (staleFeeds) reportedIssues.push(`${staleFeeds} stale ${staleFeeds === 1 ? "feed" : "feeds"}`);
   const healthySummary = staleSources ? "" : totalServices ? `${totalServices} ${totalServices === 1 ? "service" : "services"} operational` : "No service data";
-  const summary = `${sources.length} configured ${sources.length === 1 ? "source" : "sources"} · ${totalServices} active ${totalServices === 1 ? "service" : "services"}${disabledSources ? ` · ${disabledSources} disabled ${disabledSources === 1 ? "source" : "sources"}` : ""} · ${reportedIssues.length ? reportedIssues.join(" · ") : healthySummary}`;
+  const summary = `${sources.length} configured ${sources.length === 1 ? "source" : "sources"} · ${totalServices} monitored ${totalServices === 1 ? "service" : "services"}${disabledSources ? ` · ${disabledSources} disabled ${disabledSources === 1 ? "source" : "sources"}` : ""} · ${reportedIssues.length ? reportedIssues.join(" · ") : healthySummary}`;
   svg += `<text x="${pad}" y="${94 * scale}" fill="#c0cede" font-family="Ribbon Sans" font-size="${19 * scale}">${svgText(summary)}</text>`;
   svg += renderHealthOverview(activeSources, counts, width, scale, pad);
-  svg += svgStatusBadge(width - pad - 320 * scale, 24 * scale, 320 * scale, 62 * scale, scale, healthLabel[overall], dashboardColors[overall]);
+  const monitoringUnavailable = sources.some((source) => !source.disabled && source.freshness === "unavailable");
+  const badgeLabel = monitoringUnavailable ? "Monitoring data unavailable" : overall === "stale" ? "Monitoring data delayed" : healthLabel[overall];
+  svg += svgStatusBadge(width - pad - 390 * scale, 24 * scale, 390 * scale, 62 * scale, scale, badgeLabel, dashboardColors[overall]);
   svg += svgHealthLegend(pad, 166 * scale, width - 2 * pad, scale);
   return svg;
 }
 
 function renderHealthOverview(activeSources: DashboardSource[], counts: DashboardCounts, width: number, scale: number, pad: number): string {
-  const overview: Array<{ label: string; count: number; color: string }> = [];
+  const overview: Array<{ label: string; count: number; color: string; showCount?: boolean }> = [];
   const freshOperational = activeSources.reduce((sum, source) => sum + (source.freshness === "fresh" ? source.components.filter((component) => !component.isGroup && component.status === "operational").length : 0), 0);
   if (freshOperational) overview.push({ label: "Operational", count: freshOperational, color: dashboardColors.operational });
   const statuses: Array<[number, string, Health]> = [
-    [counts.downServices, "Down", "down"], [counts.degradedServices, "Degraded", "degraded"], [counts.staleServices, "Stale services", "stale"],
+    [counts.downServices, "Down", "down"], [counts.degradedServices, "Degraded", "degraded"],
     [counts.pendingServices, "Pending", "pending"], [counts.maintenanceServices, "Maintenance", "maintenance"], [counts.unknownServices, "Unknown", "unknown"],
   ];
   for (const [count, label, health] of statuses) if (count) overview.push({ label, count, color: dashboardColors[health] });
-  if (counts.staleSources) overview.push({ label: "Stale sources", count: counts.staleSources, color: dashboardColors.stale });
+  if (counts.staleServices) overview.push({ label: `${counts.staleServices} ${counts.staleServices === 1 ? "service" : "services"} with stale data`, count: 1, color: dashboardColors.stale, showCount: false });
+  if (counts.unavailableSources) overview.push({ label: `${counts.unavailableSources} ${counts.unavailableSources === 1 ? "unavailable feed" : "unavailable feeds"}`, count: 1, color: dashboardColors.stale, showCount: false });
+  const staleFeeds = counts.staleSources - counts.unavailableSources;
+  if (staleFeeds) overview.push({ label: `${staleFeeds} ${staleFeeds === 1 ? "stale feed" : "stale feeds"}`, count: 1, color: dashboardColors.stale, showCount: false });
   return svgHealthOverview(pad, 132 * scale, width - 2 * pad, scale, overview);
 }
 

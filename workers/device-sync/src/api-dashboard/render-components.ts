@@ -20,6 +20,19 @@ export interface SvgHealthCount {
   label: string;
   count: number;
   color: string;
+  showCount?: boolean;
+}
+
+/** Reusable status notice for stale readings and unavailable monitoring feeds. */
+export function svgSourceNotice(input: { x: number; y: number; width: number; scale: number; title: string; detail: string; color: string; unavailable?: boolean }): string {
+  const { x, y, width, scale, title, detail, color, unavailable = false } = input;
+  const height = unavailable ? 84 + (detail.split(" · ").length > 2 ? 19 : 0) : 48;
+  const titleY = y + scale * (unavailable ? 25 : 29);
+  const detailParts = detail.split(" · ");
+  const detailY = y + scale * 50;
+  const titleText = truncateText(title, Math.max(8, Math.floor((width - scale * 34) / (scale * 8.5))));
+  const detailSvg = unavailable ? detailParts.slice(0, 3).map((part, index) => `<text x="${x + scale * 14}" y="${detailY + index * scale * 19}" fill="#d0dbea" font-size="${scale * 13}">${svgText(truncateText(part, Math.max(8, Math.floor((width - scale * 34) / (scale * 8.5)))))}</text>`).join("") : "";
+  return `<g role="group" aria-label="${svgText(title)}"><rect x="${x}" y="${y}" width="${width}" height="${scale * height}" rx="${scale * 9}" fill="#202d40" stroke="${svgText(color)}" stroke-width="${scale}"/><rect x="${x}" y="${y}" width="${scale * 4}" height="${scale * height}" rx="${scale * 2}" fill="${svgText(color)}"/><text x="${x + scale * 14}" y="${titleY}" fill="${svgText(color)}" font-size="${scale * 15}" font-weight="700">${svgText(titleText)}</text>${detailSvg}</g>`;
 }
 
 /** Prominent, readable health counts used above the detail cards. */
@@ -31,7 +44,7 @@ export function svgHealthOverview(x: number, y: number, width: number, scale: nu
   let cursor = x;
   let result = `<g role="group" aria-label="Current service health">`;
   for (const item of visibleItems) {
-    const label = `${item.count} ${item.label}`;
+    const label = item.showCount === false ? item.label : `${item.count} ${item.label}`;
     const chipWidth = s(34 + label.length * 8.5);
     if (cursor + chipWidth > x + width) break;
     result += `<rect x="${cursor}" y="${y - s(23)}" width="${chipWidth}" height="${s(31)}" rx="${s(8)}" fill="#142238" stroke="${svgText(item.color)}" stroke-width="${s(1)}"/>`;
@@ -73,7 +86,8 @@ export function svgServiceRow(input: { x: number; y: number; right: number; scal
   const { x, y, right, scale, name, status, color, statusMeta, compact = false, showStatus = false } = input;
   const statusLabel = status === "Operational" && !showStatus ? "" : [status, statusMeta].filter(Boolean).join(" · ");
   const statusCharWidth = scale * (compact ? 7 : 9.5);
-  const maxStatusChars = Math.floor((right - x) * .48 / statusCharWidth);
+  const statusShare = /^(Stale|Unconfirmed|Last:|Last known:)/.test(statusLabel) ? .66 : .48;
+  const maxStatusChars = Math.floor((right - x) * statusShare / statusCharWidth);
   const shownStatus = statusLabel ? truncateText(statusLabel, maxStatusChars) : "";
   const statusWidth = shownStatus.length * statusCharWidth;
   const maxName = Math.max(8, Math.floor((right - x - scale * 38 - statusWidth) / (scale * 10.5)));

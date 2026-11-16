@@ -116,8 +116,18 @@ components. Long names are shortened to fit each service row. Output has no
 cosmetic current-time stamp, so an unchanged status image is byte stable.
 
 Source cards share the available vertical space and center an incomplete final
-row. The header uses larger health counts for non-operational services and stale
-feeds, with the complete status key retained at lower visual weight. Statuspage
+row. The header separates confirmed service health from monitoring freshness:
+unconfirmed readings are counted as stale data, stale feeds and unavailable
+feeds have separate counts, and the overall badge says when monitoring data is
+delayed or unavailable. Cached service states from a non-fresh source are shown
+as unconfirmed with their last known state, rather than as current health.
+Unavailable sources show a reusable notice with the feed error, the last
+successful cached-data time when available, and an explanation that service
+health cannot be confirmed; feed failures use the stale-data accent,
+while red remains reserved for confirmed service outages. Stale readings show
+their sample time and age. Narrow source cards put the freshness label on its
+own line so it does not crowd the source hostname. The complete status key
+remains available at lower visual weight. Statuspage
 groups list affected components first and show healthy component names when
 they fit; groups list up to eight components before summarizing healthy
 overflow. Small healthy Kuma groups list each monitor with its state and
@@ -130,8 +140,8 @@ missing two-hour buckets are shown as unknown, and the strip does not claim an
 uptime percentage. Shared SVG components in
 `src/api-dashboard/render-components.ts` provide escaped status dots, badges,
 panels, service rows, group summaries, event panels, a named status key, and
-check-history strips. The status key names each health color, and history strips
-show their 24-hour-to-now direction.
+check-history strips, and source-freshness notices. The status key names each
+health color, and history strips show their 24-hour-to-now direction.
 Incident and maintenance events have a dedicated high-contrast area on each
 source card. Scheduled maintenance keeps its start time separate from its last
 update and shows both when available, with a relative time to the scheduled
@@ -141,7 +151,7 @@ color.
 
 `npm test` runs a `wrangler dev --local` integration test against Wrangler’s
 Cloudflare Workers runtime. It initializes the bundled Wasm module and font,
-renders eleven synthetic 1920 by 1080 scenarios, validates their PNG headers, and
+renders twelve synthetic 1920 by 1080 scenarios, validates their PNG headers, and
 writes them to [`examples/api-dashboard/visual-samples/`](../examples/api-dashboard/visual-samples/).
 The realistic seven-source image is also written to
 [`examples/api-dashboard/status-dashboard.png`](../examples/api-dashboard/status-dashboard.png).
