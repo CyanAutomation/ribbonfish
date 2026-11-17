@@ -9,6 +9,7 @@
     "test": "node --test",
     "fallow:audit": "fallow audit",
     "build:admin": "node scripts/build-admin.ts",
+    "render:api-dashboard-samples": "node scripts/render-api-dashboard-samples.ts",
     "check:config": "wrangler deploy --dry-run --config wrangler.toml && wrangler deploy --dry-run --config wrangler.management.toml",
     "dev": "npm run publish:admin:local && wrangler dev --config wrangler.management.toml --local --var \"ADMIN_ENABLED:true\" \"ADMIN_ACCESS_REQUIRED:false\"",
     "deploy:production": "wrangler deploy --config wrangler.toml",
