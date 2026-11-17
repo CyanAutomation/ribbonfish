@@ -400,6 +400,29 @@ test("ribbonfish favicon is served from the private R2 bucket", async () => {
   assert.deepEqual(new Uint8Array(await response.arrayBuffer()), favicon);
 });
 
+test("brand and install assets are served with their public content types", async () => {
+  const env = testEnvironment();
+  const assets = [
+    ["favicon.svg", "image/svg+xml"],
+    ["ribbonfish-mark.svg", "image/svg+xml"],
+    ["ribbonfish-loading.svg", "image/svg+xml"],
+    ["site.webmanifest", "application/manifest+json; charset=utf-8"],
+    ["apple-touch-icon.png", "image/png"],
+    ["favicon-192.png", "image/png"],
+    ["favicon-512.png", "image/png"],
+  ] as const;
+
+  for (const [file, contentType] of assets) {
+    const bytes = new Uint8Array(await readFile(new URL(`../public/admin/${file}`, import.meta.url)));
+    env.objects.set(`admin/${file}`, bytes);
+    const response = await handleAdminRequest(request(`/admin/${file}`), env);
+
+    assert.equal(response.status, 200, `${file} is available`);
+    assert.equal(response.headers.get("content-type"), contentType, `${file} has the correct response type`);
+    assert.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes, `${file} serves the uploaded bytes`);
+  }
+});
+
 test("management UI validators can return 304 without reading the R2 body", async () => {
   const env = testEnvironment();
   env.objects.set("admin/app.js", new TextEncoder().encode("console.log('cached')"));

@@ -1,4 +1,5 @@
 import { jsonResponse } from "./http-response.ts";
+import { ADMIN_ASSETS } from "./admin-assets.ts";
 import { matchesETag } from "./http-cache.ts";
 import { readRequestBody as readBytes } from "./request-body.ts";
 import { randomToken, sha256Hex } from "./crypto-primitives.ts";
@@ -69,20 +70,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const CAPTURE_DURATION_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 const CAPTURE_DURATION_REVIEW_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const CAPTURE_DURATION_SUMMARY_LIMIT = 50_000;
-const ADMIN_FILES = new Map([
-  ["/admin/index.html", { key: "admin/index.html", contentType: "text/html; charset=utf-8", maxAge: 60 }],
-  ["/admin/app.js", { key: "admin/app.js", contentType: "text/javascript; charset=utf-8", maxAge: 300 }],
-  ["/admin/styles.css", { key: "admin/styles.css", contentType: "text/css; charset=utf-8", maxAge: 300 }],
-  ["/admin/favicon.png", { key: "admin/favicon.png", contentType: "image/png", maxAge: 3600 }],
-  ["/admin/favicon.svg", { key: "admin/favicon.svg", contentType: "image/svg+xml", maxAge: 3600 }],
-  ["/admin/site.webmanifest", { key: "admin/site.webmanifest", contentType: "application/manifest+json; charset=utf-8", maxAge: 300 }],
-  ["/admin/apple-touch-icon.png", { key: "admin/apple-touch-icon.png", contentType: "image/png", maxAge: 3600 }],
-  ["/admin/favicon-192.png", { key: "admin/favicon-192.png", contentType: "image/png", maxAge: 3600 }],
-  ["/admin/favicon-512.png", { key: "admin/favicon-512.png", contentType: "image/png", maxAge: 3600 }],
-  ["/admin/ribbonfish-mark.svg", { key: "admin/ribbonfish-mark.svg", contentType: "image/svg+xml", maxAge: 3600 }],
-  ["/admin/ribbonfish-loading.svg", { key: "admin/ribbonfish-loading.svg", contentType: "image/svg+xml", maxAge: 3600 }],
-  ["/admin/capture-pending.png", { key: "admin/capture-pending.png", contentType: "image/png", maxAge: 3600 }],
-]);
+const ADMIN_FILES: Map<string, { key: string; contentType: string; maxAge: number }> = new Map(ADMIN_ASSETS.map(({ pathname, key, contentType, maxAge }) =>
+  [pathname, { key, contentType, maxAge }] as const));
 
 // Production management deployments require a Cloudflare Access identity and an
 // explicit email allowlist, so the admin API fails closed if either is missing.
