@@ -81,51 +81,54 @@ let pendingEnrollmentsLoaded = false;
 let pendingEnrollmentIDs = new Set<string>();
 let playlistEditSource: { playlist_id: string; revision: string } | null = null;
 let intervalDefinitions: any = null;
-const feedbackSlots = new Map([...requiredElements(document, "[data-feedback-slot]")].map((element) => {
-  const slot = {
-    element,
-    text: requiredElement(element, "[data-feedback-text]"),
-    hovered: false,
-    focused: false,
-    transient: false,
-    timer: null,
-  };
-  slot.timer = createTransientNotice({ onExpire: () => { slot.transient = false; element.hidden = true; } });
-  element.addEventListener("mouseenter", () => { slot.hovered = true; slot.timer.pause(); });
-  element.addEventListener("mouseleave", () => {
-    slot.hovered = false;
-    if (!slot.focused && slot.transient) slot.timer.resume();
-  });
-  element.addEventListener("focusin", () => { slot.focused = true; slot.timer.pause(); });
-  element.addEventListener("focusout", (event) => {
-    if (event.relatedTarget instanceof Node && element.contains(event.relatedTarget)) return;
-    slot.focused = false;
-    if (!slot.hovered && slot.transient) slot.timer.resume();
-  });
-  requiredElement(element, "[data-dismiss-feedback]").addEventListener("click", () => {
-    slot.timer.clear();
-    slot.transient = false;
-    element.hidden = true;
-  });
-  return [element.dataset.feedbackSlot, slot];
-}));
+const feedbackToast = requiredElement<HTMLElement>(document, "#feedback-toast");
+const feedbackToastText = requiredElement<HTMLElement>(feedbackToast, "[data-feedback-text]");
+let feedbackToastHovered = false;
+let feedbackToastFocused = false;
+let feedbackToastTransient = false;
+const feedbackToastTimer = createTransientNotice({ onExpire: () => {
+  feedbackToastTransient = false;
+  feedbackToast.hidden = true;
+} });
+feedbackToast.addEventListener("mouseenter", () => {
+  feedbackToastHovered = true;
+  feedbackToastTimer.pause();
+});
+feedbackToast.addEventListener("mouseleave", () => {
+  feedbackToastHovered = false;
+  if (!feedbackToastFocused && feedbackToastTransient) feedbackToastTimer.resume();
+});
+feedbackToast.addEventListener("focusin", () => {
+  feedbackToastFocused = true;
+  feedbackToastTimer.pause();
+});
+feedbackToast.addEventListener("focusout", (event) => {
+  if (event.relatedTarget instanceof Node && feedbackToast.contains(event.relatedTarget)) return;
+  feedbackToastFocused = false;
+  if (!feedbackToastHovered && feedbackToastTransient) feedbackToastTimer.resume();
+});
+requiredElement<HTMLButtonElement>(feedbackToast, "[data-dismiss-feedback]").addEventListener("click", () => {
+  feedbackToastTimer.clear();
+  feedbackToastTransient = false;
+  feedbackToast.hidden = true;
+});
 
-function showMessage(text, isError = false, context = "global") {
-  const slot = feedbackSlots.get(context) ?? feedbackSlots.get("global");
-  slot.timer.clear();
-  slot.transient = !isError;
-  setStatusNotice(slot.element, slot.text, text, isError ? "error" : "success");
+function showMessage(text, isError = false, _context = "global") {
+  feedbackToastTimer.clear();
+  feedbackToastTransient = !isError;
+  setStatusNotice(feedbackToast, feedbackToastText, text, isError ? "error" : "success");
   if (!isError) {
-    if (slot.hovered || slot.focused) slot.timer.pause();
-    else slot.timer.start();
+    if (feedbackToastHovered || feedbackToastFocused) feedbackToastTimer.pause();
+    else feedbackToastTimer.start();
   }
 }
 
-function showInfoMessage(text, context = "global") {
-  const slot = feedbackSlots.get(context) ?? feedbackSlots.get("global");
-  slot.timer.clear();
-  slot.transient = false;
-  setStatusNotice(slot.element, slot.text, text, "info");
+function showInfoMessage(text, _context = "global") {
+  feedbackToastTimer.clear();
+  feedbackToastTransient = true;
+  setStatusNotice(feedbackToast, feedbackToastText, text, "info");
+  if (feedbackToastHovered || feedbackToastFocused) feedbackToastTimer.pause();
+  else feedbackToastTimer.start();
 }
 
 function showInlineMessage(target, text, isError = false) {
