@@ -29,6 +29,28 @@ test("disabled sources are labelled separately and do not make active sources st
   assert.doesNotMatch(svg, /Monitoring data unavailable|Monitoring data delayed/);
 });
 
+test("dashboard layout ranks unhealthy sources first without reordering its input", () => {
+  const healthy: DashboardSource = {
+    ...sample,
+    id: "healthy-source",
+    displayName: "Healthy source",
+    components: [{ ...sample.components[0], name: "Healthy component", status: "operational" }],
+  };
+  const down: DashboardSource = {
+    ...sample,
+    id: "down-source",
+    displayName: "Down source",
+    components: [{ ...sample.components[0], name: "Down component", status: "down" }],
+  };
+  const sources = [healthy, down];
+  const originalSources = [...sources];
+
+  const svg = dashboardSVG(sources);
+
+  assert.ok(svg.indexOf("Down source") < svg.indexOf("Healthy source"));
+  assert.deepEqual(sources, originalSources);
+});
+
 test("overflow and active event footer labels occupy separate rows", () => {
   const crowded: DashboardSource = {
     ...sample,
@@ -333,6 +355,26 @@ test("stale service data is described separately from service outages and includ
     components: [{ ...stale.components[0], history: [{ at: "2026-01-01T03:13:00.000Z", status: "operational" as const }] }],
   })));
   assert.match(narrow, /Last: Operational · 7h27m/);
+});
+
+test("stale service cards sort a copy of history to show the latest known status", () => {
+  const history = [
+    { at: "2026-01-01T03:10:00.000Z", status: "degraded" as const },
+    { at: "2026-01-01T03:13:00.000Z", status: "operational" as const },
+  ];
+  const originalHistory = history.map((item) => ({ ...item }));
+  const stale: DashboardSource = {
+    ...sample,
+    fetchedAt: "2026-01-01T10:40:00.000Z",
+    freshness: "stale",
+    status: "stale",
+    components: [{ ...sample.components[0], status: "stale", sampledAt: "2026-01-01T03:13:00.000Z", history }],
+  };
+
+  const svg = dashboardSVG([stale]);
+
+  assert.match(svg, /Last known: Operational/);
+  assert.deepEqual(history, originalHistory);
 });
 
 test("unexpected cached statuses use the Unknown label in wide and narrow cards", () => {

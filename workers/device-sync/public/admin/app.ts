@@ -490,7 +490,7 @@ function renderPlaylists(playlists) {
   desktop.replaceChildren();
   mobile.replaceChildren();
   const groups = new Map();
-  [...playlists].sort((a, b) => String(a.playlist_id).localeCompare(String(b.playlist_id)) || Number(b.active) - Number(a.active)).forEach((playlist) => {
+  playlists.toSorted((a, b) => String(a.playlist_id).localeCompare(String(b.playlist_id)) || Number(b.active) - Number(a.active)).forEach((playlist) => {
     const versions = groups.get(playlist.playlist_id) ?? [];
     versions.push(playlist);
     groups.set(playlist.playlist_id, versions);
@@ -777,7 +777,7 @@ function renderDevices(devices, activePlaylist) {
     tableSelector: "#devices",
     cardsSelector: "#devices-mobile",
     caption: "Enrolled devices",
-    records: [...devices].sort((a, b) => {
+    records: devices.toSorted((a, b) => {
       return Number(deviceNeedsReview(b, activePlaylist)) - Number(deviceNeedsReview(a, activePlaylist));
     }),
     fields: [

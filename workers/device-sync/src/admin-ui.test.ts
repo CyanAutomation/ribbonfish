@@ -1065,9 +1065,10 @@ test("capture issues are grouped and surfaced before healthy sites without chang
     { display_url: "second", last_error: "Budget reached", schedule_reviewed: true },
     { display_url: "review", schedule_reviewed: false },
   ];
+  const originalTargets = targets.map((target) => ({ ...target }));
   assert.deepEqual(prioritizeCaptureTargets(targets).map((item) => item.display_url), ["first", "second", "review", "healthy"]);
   assert.deepEqual(summarizeCaptureErrors(targets), [{ message: "Budget reached", count: 2 }]);
-  assert.equal(targets[0].display_url, "healthy");
+  assert.deepEqual(targets, originalTargets);
 });
 
 test("Browser Run forecast component exposes actual usage, quota markers, and per-site estimates", () => {

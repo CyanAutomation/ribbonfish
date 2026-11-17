@@ -316,7 +316,7 @@ function humanizeMetadataKey(key: string) {
 export function prioritizeCaptureTargets<T extends CaptureSummary>(targets: T[]) {
   const priority = (target: CaptureSummary) => target.last_error && !["queued", "running"].includes(target.job_status ?? "")
     ? 0 : target.schedule_reviewed === false || target.schedule_reviewed === 0 ? 1 : 2;
-  return [...targets].sort((a, b) => priority(a) - priority(b));
+  return targets.toSorted((a, b) => priority(a) - priority(b));
 }
 
 export function summarizeCaptureErrors(targets: CaptureSummary[]) {

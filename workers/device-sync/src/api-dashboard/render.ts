@@ -59,7 +59,7 @@ function buildDashboardLayout(sources: DashboardSource[], width: number, height:
     columns,
     cardWidth,
     rowHeights: Array.from({ length: rows }, () => availableCardHeight),
-    orderedSources: [...sources].sort((a, b) => healthOrder(sourceHealth(a)) - healthOrder(sourceHealth(b))),
+    orderedSources: sources.toSorted((a, b) => healthOrder(sourceHealth(a)) - healthOrder(sourceHealth(b))),
   };
 }
 
