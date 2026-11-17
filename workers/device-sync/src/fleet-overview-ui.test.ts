@@ -47,3 +47,18 @@ test("fleet overview metrics keep honest empty and unavailable states", () => {
   assert.match(container.textContent ?? "", /Pending approvals\s*0/);
   assert.match(container.textContent ?? "", /Browser Run used today\s*Unavailable/);
 });
+
+test("fleet overview does not count devices as behind when the active revision is missing", () => {
+  const dom = new JSDOM("<div id='metrics'></div>");
+  const container = dom.window.document.querySelector<HTMLElement>("#metrics");
+  assert.ok(container);
+
+  renderFleetOverviewMetrics(container, {
+    active_playlist: { playlist_id: "office" },
+    devices: [
+      { enabled: 1, health: { status: "online", applied_playlist_id: "office", applied_revision: "current" } },
+    ],
+  });
+
+  assert.match(container.textContent ?? "", /Devices offline or behind\s*0/);
+});
