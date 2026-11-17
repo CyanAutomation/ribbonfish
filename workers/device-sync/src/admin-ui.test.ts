@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 14406)
-Total output lines: 1170
-
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -532,7 +529,223 @@ test("concurrent health detail opens share one request", async () => {
   let resolveRequest;
   const request = new Promise((resolve) => { resolveRequest = resolve; });
   const first = loader.load(() => { calls += 1; return request; });
-  const second = loader…2406 tokens truncated…;
+  const second = loader.load(() => { calls += 1; return request; });
+  resolveRequest("health");
+  assert.deepEqual(await Promise.all([first, second]), ["health", "health"]);
+  assert.equal(calls, 1);
+});
+
+test("OpenUI Core parses and evaluates a read-only fleet view", async () => {
+  let overviewReads = 0;
+  const runtime = createFleetOpenUI({
+    getOverview: async () => {
+      overviewReads += 1;
+      return overview;
+    },
+  });
+
+  const initial = runtime.renderProgram(OPENUI_STARTER_SOURCE);
+  assert.equal(initial.root.typeName, "Dashboard");
+  assert.deepEqual(initial.parseResult.meta.errors, []);
+  await runtime.waitForQueries();
+
+  const [devices, fleetHealth, active, ready, health] = runtime.getView().root.props.children;
+  assert.equal(devices.props.value, "2 enrolled");
+  assert.equal(devices.props.detail, "1 enabled · 1 disabled");
+  assert.equal(fleetHealth.props.label, "Device health");
+  assert.equal(fleetHealth.props.value, "0 healthy · 0 degraded · 0 stale/offline");
+  assert.equal(fleetHealth.props.detail, "1 unknown · 0 starting/stopping · 1 disabled");
+  assert.equal(active.props.value, "operations / r-test");
+  assert.equal(active.props.detail, "Ready for enrolled devices on their next sync");
+  assert.equal(ready.props.value, "1 version ready to activate");
+  assert.equal(health.props.label, "Image availability");
+  assert.equal(health.props.value, "All available");
+  assert.equal(health.props.detail, "All images in the active playlist are available");
+  assert.equal(overviewReads, 1);
+  runtime.dispose();
+});
+
+test("OpenUI renderer handles text, supported elements, nested children, and unsupported types", () => {
+  const priorDocument = globalThis.document;
+  const dom = new JSDOM();
+  globalThis.document = dom.window.document;
+  try {
+    assert.equal(renderOpenUIElement(null).textContent, "");
+    assert.equal(renderOpenUIElement("plain text").textContent, "plain text");
+    const metric = { type: "element", typeName: "Metric", statementId: "metric", props: { label: "Devices", value: "2 enrolled", detail: "1 enabled" } };
+    const dashboard = renderOpenUIElement({ type: "element", typeName: "Dashboard", statementId: "dashboard", props: { children: [metric] } });
+    assert.equal(dashboard.textContent, "Devices2 enrolledMore about devices1 enabled");
+    assert.throws(() => renderOpenUIElement({ type: "element", typeName: "Unknown", statementId: "unknown", props: {} }), /Unsupported OpenUI component/);
+  } finally {
+    if (priorDocument === undefined) delete globalThis.document;
+    else globalThis.document = priorDocument;
+    dom.window.close();
+  }
+});
+
+test("OpenUI fleet health keeps degraded, stale, offline, unknown, and disabled counts distinct", async () => {
+  const statuses = ["healthy", "degraded", "stale", "offline", "starting", "stopping", "unknown"];
+  const runtime = createFleetOpenUI({
+    getOverview: async () => ({
+      ...overview,
+      devices: statuses.map((status, index) => ({ device_id: `pi-${index}`, enabled: 1, health: { status } }))
+        .concat({ device_id: "pi-disabled", enabled: 0, health: { status: "healthy" } }),
+    }),
+  });
+  runtime.renderProgram(OPENUI_STARTER_SOURCE);
+  await runtime.waitForQueries();
+  const health = runtime.getView().root.props.children[1];
+  assert.equal(health.props.value, "1 healthy · 1 degraded · 2 stale/offline");
+  assert.equal(health.props.detail, "1 unknown · 2 starting/stopping · 1 disabled");
+  runtime.dispose();
+});
+
+test("OpenUI Core summarizes missing assets as a compact metric", async () => {
+  const runtime = createFleetOpenUI({
+    getOverview: async () => ({
+      ...overview,
+      asset_health: { missing: [{ sha256: "deadbeef" }] },
+    }),
+  });
+
+  runtime.renderProgram(OPENUI_STARTER_SOURCE);
+  await runtime.waitForQueries();
+
+  const imageHealth = runtime.getView().root.props.children[4];
+  assert.equal(imageHealth.props.label, "Image availability");
+  assert.equal(imageHealth.props.value, "1 missing");
+  assert.equal(imageHealth.props.detail, "1 image is missing from the active playlist");
+  runtime.dispose();
+});
+
+test("fleet snapshot is concise and accurate when no playlist is active", async () => {
+  const runtime = createFleetOpenUI({
+    getOverview: async () => ({
+      ...overview,
+      playlists: [],
+      active_playlist: null,
+      asset_health: { missing: [] },
+    }),
+  });
+
+  runtime.renderProgram(OPENUI_STARTER_SOURCE);
+  await runtime.waitForQueries();
+
+  const [devices, fleetHealth, active, ready, health] = runtime.getView().root.props.children;
+  assert.equal(active.props.value, "No active playlist");
+  assert.equal(active.props.detail, "No playlist is active for enrolled devices");
+  assert.equal(ready.props.detail, "No versions are waiting to be activated");
+  assert.equal(health.props.value, "No active playlist");
+  assert.equal(health.props.detail, "No images can be checked until a playlist is active");
+  runtime.dispose();
+});
+
+test("fleet view compacts long revisions and keeps short or missing identifiers readable", async () => {
+  const runtime = createFleetOpenUI({
+    getOverview: async () => ({
+      ...overview,
+      active_playlist: { playlist_id: "operations", revision: "r-0123456789abcdef0123456789abcd" },
+    }),
+  });
+
+  runtime.renderProgram(OPENUI_STARTER_SOURCE);
+  await runtime.waitForQueries();
+
+  const active = runtime.getView().root.props.children[2];
+  assert.equal(active.props.value, "operations / r-01234567…89abcd");
+  assert.equal(compactIdentifier("r-short"), "r-short");
+  assert.equal(compactIdentifier(null), "—");
+  runtime.dispose();
+});
+
+test("OpenUI fleet view follows the documented read-only contract", () => {
+  let overviewReads = 0;
+  const runtime = createFleetOpenUI({
+    getOverview: async () => {
+      overviewReads += 1;
+      return overview;
+    },
+  });
+
+  assert.throws(() => runtime.renderProgram(
+    'data = Query("create_enrollment_code", {}, {})\nroot = Dashboard([])',
+  ), /only support the read-only get_fleet_overview query/i);
+  assert.throws(() => runtime.renderProgram(
+    'root = Dashboard([])\nchange = Mutation("disable_device", {})',
+  ), /mutations are disabled/i);
+  assert.equal(overviewReads, 0);
+  assert.match(runtime.prompt, /Use only the get_fleet_overview read-only query/i);
+  assert.match(runtime.prompt, /Do not emit Mutation statements, actions/i);
+  assert.match(runtime.prompt, /do not expose credentials or tokens/i);
+  assert.doesNotMatch(runtime.prompt, /Mutation\("disable_device"/i);
+  assert.doesNotMatch(runtime.prompt, /## Mutation|Mutation.*write examples/i);
+  assert.ok(runtime.prompt.length < 4_000, "the behind-the-scenes prompt should stay concise");
+  runtime.dispose();
+});
+
+test("OpenUI runtime recognizes incomplete programs and preserves selected fleet metrics when merging", async () => {
+  const runtime = createFleetOpenUI({ getOverview: async () => overview });
+  const partial = runtime.inspectProgram('root = Dashboard([deviceMetric');
+  assert.equal(partial.incomplete, true);
+
+  const merged = runtime.mergePatch(
+    OPENUI_STARTER_SOURCE,
+    "root = Dashboard([deviceMetric, activeMetric])",
+  );
+  const result = runtime.inspectProgram(merged);
+  assert.equal(result.incomplete, false);
+  assert.deepEqual(result.errors, []);
+  runtime.renderProgram(merged);
+  await runtime.waitForQueries();
+  const [devices, active] = runtime.getView().root.props.children;
+  assert.equal(devices.props.value, "2 enrolled");
+  assert.equal(active.props.value, "operations / r-test");
+  assert.equal(runtime.getView().root.props.children.length, 2, "the merged view excludes the replaced metrics");
+  runtime.dispose();
+});
+
+test("waitForQueries rejects when the runtime is disposed during a pending query", async () => {
+  let resolveOverview;
+  let markOverviewStarted;
+  const overviewStarted = new Promise((resolve) => { markOverviewStarted = resolve; });
+  const runtime = createFleetOpenUI({
+    getOverview: () => {
+      markOverviewStarted();
+      return new Promise((resolve) => { resolveOverview = resolve; });
+    },
+  });
+
+  runtime.renderProgram(OPENUI_STARTER_SOURCE);
+  await overviewStarted;
+  const waiting = runtime.waitForQueries();
+  runtime.dispose();
+
+  await assert.rejects(waiting, /disposed/i);
+  resolveOverview(overview);
+});
+
+test("audit timestamps are explicit UTC and preserve the Unix epoch", () => {
+  assert.equal(formatTimestamp(null), "Never seen");
+  assert.match(formatTimestamp(0, "en-GB"), /^1 Jan 1970, 00:00:00 UTC$/);
+  assert.equal(
+    formatAuditDetails({ expires_at: "2026-10-27T21:00:00.000Z" }, "en-GB")[0].value,
+    "27 Oct 2026, 21:00:00 UTC",
+  );
+});
+
+test("device enabled messages report the state just applied", () => {
+  assert.equal(formatDeviceEnabledMessage("pi-1", true), "Device pi-1 is now enabled.");
+  assert.equal(formatDeviceEnabledMessage("pi-1", false), "Device pi-1 is now disabled.");
+});
+
+test("audit events and metadata are presented as readable labels", () => {
+  assert.equal(formatAuditEventType("playlist.revision_created"), "Created playlist version");
+  assert.equal(formatAuditEventType("playlist.deleted"), "Deleted playlist");
+  assert.equal(formatAuditEventType("device.credential_rotated"), "Rotated device token");
+  assert.equal(formatAuditEventType("capture.skip_once_confirmed"), "Confirmed one screenshot skip");
+  assert.equal(formatAuditEventType("capture.skip_once_applied"), "Skipped one scheduled screenshot");
+  assert.equal(formatAuditEventType("capture.interval_updated"), "Updated screenshot interval");
+  assert.equal(formatAuditEventType("capture.schedule_reviewed"), "Reviewed screenshot schedule");
   assert.equal(formatAuditEventType("capture.site_created"), "Added capture site");
   assert.equal(formatAuditEventType("capture.site_removed"), "Removed capture site");
   assert.equal(formatAuditEventType("capture.site_restored"), "Restored capture site");

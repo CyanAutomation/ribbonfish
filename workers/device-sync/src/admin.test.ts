@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 13152)
-Total output lines: 1193
-
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -531,7 +528,135 @@ test("overview uses one freshness window for capture summaries and active playli
     viewport_height: 1080,
     wait_for_selector: null,
     sha256: currentDigest,
-    size: currentBytes.byteL…1152 tokens truncated…(body.forecast.sites[0].runtime_source, "site-history");
+    size: currentBytes.byteLength,
+    last_attempt_at: now,
+    last_success_at: 10_001,
+    last_error: null,
+    next_due_at: now,
+    schedule_reviewed_at: now,
+    job_status: null,
+    active_in_playlist: 1,
+  };
+  env.DB.captureTargets = [target];
+  env.DB.playlistCaptureTarget = {
+    ...target,
+    current_sha256: currentDigest,
+    current_size: currentBytes.byteLength,
+    placeholder_sha256: placeholderDigest,
+    placeholder_size: placeholderBytes.byteLength,
+  };
+
+  const originalNow = Date.now;
+  const clockValues = [now, now + 1, now + 2];
+  Date.now = () => clockValues.shift() ?? now + 2;
+  let response;
+  try {
+    response = await handleAdminRequest(request("/admin/api/overview"), env);
+  } finally {
+    Date.now = originalNow;
+  }
+
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.capture_targets[0].sha256, currentDigest);
+  assert.deepEqual(body.asset_health.missing, []);
+});
+
+test("overview returns active site runtime samples and both daily usage limits", async () => {
+  const env = testEnvironment();
+  const day = new Date().toISOString().slice(0, 10);
+  env.DAILY_BROWSER_BUDGET_MS = "540000";
+  env.DB.captureUsage = { usage_day: day, browser_ms: 42_000 };
+  env.DB.captureTargets = [{
+    capture_id: captureID,
+    url: "https://status.example.com/",
+    name: "Status",
+    capture_interval_seconds: 3600,
+    viewport_width: 1920,
+    viewport_height: 1080,
+    wait_for_selector: null,
+    sha256: digest,
+    size: 4,
+    last_success_at: 100,
+    last_error: null,
+    next_due_at: 200,
+    schedule_reviewed_at: 100,
+    job_status: null,
+    active_in_playlist: 1,
+  }];
+  env.DB.captureRuntimeAverages = [{ capture_id: captureID, average_browser_ms: 2100, sample_count: 4 }];
+  env.DB.captureDurationAggregates = [{
+    capture_id: captureID,
+    total_samples: 25,
+    measured_sample_count: 20,
+    reserve_estimated_sample_count: 3,
+    unknown_sample_count: 2,
+    failed_attempt_count: 2,
+    retry_attempt_count: 1,
+    measured_average_ms: 10_500,
+    measured_p50_ms: 10_500,
+    measured_p90_ms: 18_000,
+    reserve_estimated_total_ms: 180_000,
+  }];
+
+  const response = await handleAdminRequest(request("/admin/api/overview"), env);
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(body.capture_efficiency.daily_usage, {
+    day,
+    accounted_ms: 42_000,
+    budget_ms: 540_000,
+    free_plan_limit_ms: 600_000,
+    remaining_ms: 498_000,
+  });
+  assert.equal(body.capture_targets[0].active_in_playlist, true);
+  assert.equal(body.capture_targets[0].schedule_reviewed, true);
+  assert.equal(body.capture_targets[0].average_browser_ms, 2100);
+  assert.equal(body.capture_targets[0].browser_ms_samples, 4);
+  assert.equal(body.capture_targets[0].duration_summary.measured_p90_ms, 18_000);
+  assert.equal(body.capture_targets[0].duration_summary.failed_attempt_count, 2);
+  assert.equal(body.capture_targets[0].duration_summary.retry_attempt_count, 1);
+  assert.equal(body.capture_targets[0].duration_summary.capture_attempt_failure_rate, 2 / 25);
+  assert.equal(body.capture_targets[0].duration_summary.reserve_review, "possible_overestimate");
+});
+
+test("capture forecast API returns a queryable daily projection and account-wide quota metadata", async () => {
+  const env = testEnvironment();
+  const day = new Date().toISOString().slice(0, 10);
+  env.DAILY_BROWSER_BUDGET_MS = "540000";
+  env.DB.captureUsage = { usage_day: day, browser_ms: 42_000 };
+  const scheduledTarget = {
+    capture_id: captureID,
+    url: "https://status.example.com/",
+    name: "Status",
+    capture_interval_seconds: 3600,
+    last_success_at: 100,
+    schedule_reviewed_at: 100,
+    active_in_playlist: 1,
+  };
+  env.DB.captureTarget = scheduledTarget;
+  env.DB.captureTargets = [scheduledTarget];
+  env.DB.captureRuntimeAverages = [{ capture_id: captureID, average_browser_ms: 2100, sample_count: 4 }];
+
+  const response = await handleAdminRequest(request("/admin/api/capture-forecast"), env);
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.plan, "workers-free");
+  assert.equal(body.quota_scope, "account-wide");
+  assert.equal(body.other_account_usage_included, false);
+  assert.deepEqual(body.daily_usage, {
+    day,
+    accounted_ms: 42_000,
+    budget_ms: 540_000,
+    free_plan_limit_ms: 600_000,
+    remaining_ms: 498_000,
+  });
+  assert.equal(body.forecast.total_estimated_ms, 50_400);
+  assert.equal(body.forecast.sites[0].capture_id, captureID);
+  assert.equal(body.forecast.sites[0].estimated_browser_ms_per_day, 50_400);
+  assert.equal(body.forecast.sites[0].runtime_source, "site-history");
 
   const scheduleResponse = await handleAdminRequest(request(`/admin/api/captures/${captureID}`, {
     method: "PATCH",

@@ -24,9 +24,13 @@ function tokenValue(root: postcss.Root, name: string) {
   return cssValue(root, ":root", name);
 }
 
-function resolveColor(root: postcss.Root, value: string): string {
-  const variable = /^var\((--[\w-]+)\)$/.exec(value);
-  if (variable) return tokenValue(root, variable[1]);
+function resolveColor(root: postcss.Root, value: string, seen = new Set<string>()): string {
+  const variable = /^var\((--[\w-]+)\)$/.exec(value.trim());
+  if (variable) {
+    assert.ok(!seen.has(variable[1]), `CSS color tokens do not reference themselves: ${variable[1]}`);
+    seen.add(variable[1]);
+    return resolveColor(root, tokenValue(root, variable[1]), seen);
+  }
   if (value === "white") return "#ffffff";
   if (value === "black") return "#000000";
   return value;
@@ -49,9 +53,9 @@ function contrast(first: string, second: string) {
 
 test("destructive and warning text meets WCAG contrast using the colors applied by the UI", async () => {
   const css = postcss.parse(await readFile(stylesheetURL, "utf8"));
-  const danger = tokenValue(css, "--color-danger");
-  const surface = tokenValue(css, "--color-surface");
-  const dangerBackground = tokenValue(css, "--color-danger-bg");
+  const danger = resolveColor(css, tokenValue(css, "--color-danger"));
+  const surface = resolveColor(css, tokenValue(css, "--color-surface"));
+  const dangerBackground = resolveColor(css, tokenValue(css, "--color-danger-bg"));
 
   assert.equal(cssValue(css, ".button--danger", "color"), "var(--color-danger)");
   assert.equal(cssValue(css, ".button--danger", "background"), "var(--color-surface)");
