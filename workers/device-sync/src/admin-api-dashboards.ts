@@ -16,7 +16,7 @@ type DashboardUpdatePlan = { updates: string[]; values: unknown[] };
 
 function percentile(values: number[], proportion: number): number | null {
   if (!values.length) return null;
-  const sorted = [...values].sort((a, b) => a - b);
+  const sorted = values.toSorted((a, b) => a - b);
   return sorted[Math.max(0, Math.ceil(sorted.length * proportion) - 1)];
 }
 
