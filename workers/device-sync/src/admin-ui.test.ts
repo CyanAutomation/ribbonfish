@@ -1076,7 +1076,8 @@ test("Browser Run forecast component exposes actual usage, quota markers, and pe
   assert.equal(forecast.querySelector("figure")?.getAttribute("aria-label"), "Daily Browser Run usage forecast");
   assert.match(forecast.querySelector("[data-testid='forecast-total']")?.textContent ?? "", /48s/);
   assert.match(forecast.textContent, /0m 12s of 10m 0s/);
-  assert.match(forecast.textContent, /Hourly site/);
+  assert.match(forecast.querySelector(".browser-usage-budget-note")?.textContent ?? "", /forecast to stay within the.*daily budget/i);
+  assert.ok(forecast.querySelector("[data-capture-id='hourly']"), "the forecast chart still segments usage by site");
   assert.match(forecast.textContent, /Cloudflare account-wide allowance/);
   assert.ok(forecast.querySelector("[data-quota-marker='free-plan']"));
   assert.ok(forecast.querySelector("[data-quota-marker='worker-budget']"));
@@ -1139,6 +1140,34 @@ test("Browser Run forecast component requests a sample before inventing a runtim
     browser_ms_samples: 0,
   }], { accounted_ms: 0, budget_ms: 600_000, free_plan_limit_ms: 600_000 });
 
-  assert.match(forecast.textContent, /Forecast unavailable until at least one active capture completes/);
+  assert.match(forecast.textContent, /Forecasts need a runtime sample from an active capture/);
+  assert.match(forecast.querySelector(".browser-usage-budget-note")?.textContent ?? "", /incomplete.*cannot confirm whether it will stay within/i);
   assert.match(forecast.textContent, /New site/);
+});
+
+test("Browser Run forecast calls out when current schedules exceed the daily budget", () => {
+  const dom = new JSDOM("<section id='forecast'></section>");
+  const forecast = dom.window.document.querySelector("#forecast");
+  renderCaptureUsageForecast(forecast, [{
+    capture_id: "long-running",
+    display_label: "Long-running site",
+    capture_interval_seconds: 3600,
+    active_in_playlist: true,
+    schedule_reviewed: true,
+    average_browser_ms: 1_000_000,
+    browser_ms_samples: 10,
+  }], { accounted_ms: 0, budget_ms: 600_000, free_plan_limit_ms: 600_000 });
+
+  assert.match(forecast.querySelector(".browser-usage-budget-note")?.textContent ?? "", /forecast to exceed.*daily budget/i);
+});
+
+test("Browser Run forecast explains when no reviewed sites are active without repeating the missing-sample message", () => {
+  const dom = new JSDOM("<section id='forecast'></section>");
+  const forecast = dom.window.document.querySelector("#forecast");
+  renderCaptureUsageForecast(forecast, [], { accounted_ms: 0, budget_ms: 600_000, free_plan_limit_ms: 600_000 });
+
+  assert.match(forecast.querySelector(".browser-usage-budget-note")?.textContent ?? "", /no reviewed screenshot sites are active/i);
+  assert.equal(forecast.querySelectorAll(".browser-usage-forecast__note").length, 1,
+    "only the account-wide allowance note remains when there are no active sites");
+  assert.match(forecast.querySelectorAll(".scale-meter__label")[1].textContent, /No reviewed active sites/);
 });

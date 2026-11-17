@@ -62,10 +62,10 @@ test("admin layout uses the shared rem breakpoint set and scopes grid headings",
 test("capture efficiency analysis has dedicated layout rules", async () => {
   const { css } = await readAdminAssets();
   for (const selector of [
-    ".capture-duration-analysis",
-    ".capture-duration-analysis__sites",
-    ".capture-duration-analysis__site",
-    ".capture-duration-analysis__review",
+    ".capture-efficiency-advanced",
+    ".capture-efficiency-table-scroll",
+    ".capture-efficiency-table",
+    ".capture-efficiency-summary",
   ]) {
     assert.ok(rulesFor(css, selector).length > 0, `${selector} has a stylesheet rule`);
   }

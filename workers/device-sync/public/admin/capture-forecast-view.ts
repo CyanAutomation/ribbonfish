@@ -3,8 +3,7 @@ import {
   type CaptureForecastTarget,
 } from "../../src/capture-forecast.ts";
 import { formatRunTime } from "./capture-presentation.ts";
-import { metricCard, node, scaleMeter, type ScaleMeterMarker } from "./ui-primitives.ts";
-import { formatCaptureInterval } from "./ui-utils.ts";
+import { node, scaleMeter, type ScaleMeterMarker } from "./ui-primitives.ts";
 
 export interface DailyCaptureUsage {
   accounted_ms: number;
@@ -23,6 +22,7 @@ function chartRow(
   scaleMs: number,
   markers: Array<{ value: number; kind: string; label: string }>,
   siteSegments?: Array<{ capture_id: string; value_ms: number }>,
+  valueTestID?: string,
 ) {
   const row = node("div", undefined, "browser-usage-chart__row", document);
   const meterMarkers: ScaleMeterMarker[] = markers.map(({ value, kind, label: markerLabel }) => ({
@@ -56,8 +56,28 @@ function chartRow(
     node("span", "0", undefined, document),
     node("span", "Scale: " + formatRunTime(scaleMs), undefined, document),
   );
+  if (valueTestID) {
+    const value = meter.querySelector<HTMLElement>(".scale-meter__value");
+    if (value) value.dataset.testid = valueTestID;
+  }
   row.append(meter, axis);
   return row;
+}
+
+function forecastBudgetNote(forecast: ReturnType<typeof calculateDailyCaptureForecast>, budgetMs: number) {
+  const budget = formatRunTime(budgetMs);
+  if (!forecast.sites.length) {
+    return `No reviewed screenshot sites are active in the playlist, so there is no schedule forecast to compare with the Ribbonfish daily budget of ${budget}.`;
+  }
+  if (!forecast.is_complete) {
+    const sitesNeedingSamples = forecast.sites.filter((site) => site.estimated_browser_ms_per_day === null).length;
+    return `The current schedule forecast is incomplete: ${formatRunTime(forecast.known_estimated_ms)} is estimated so far, and ${sitesNeedingSamples} active ${sitesNeedingSamples === 1 ? "site still needs" : "sites still need"} a runtime sample. We cannot confirm whether it will stay within the Ribbonfish daily budget of ${budget}.`;
+  }
+  const total = forecast.total_estimated_ms ?? 0;
+  if (total <= budgetMs) {
+    return `Current schedules are forecast to stay within the Ribbonfish daily budget of ${budget} (estimated use: ${formatRunTime(total)} per day).`;
+  }
+  return `Current schedules are forecast to exceed the Ribbonfish daily budget of ${budget} by ${formatRunTime(total - budgetMs)} (estimated use: ${formatRunTime(total)} per day).`;
 }
 
 export function renderCaptureUsageForecast(
@@ -86,26 +106,15 @@ export function renderCaptureUsageForecast(
 
   const section = node("section", undefined, "browser-usage-forecast", document);
   section.setAttribute("aria-label", "Browser Run usage forecast");
-  const metrics = node("div", undefined, "browser-usage-forecast__metrics", document);
-  metrics.append(metricCard(
-    "Ribbonfish used today",
-    formatRunTime(daily.accounted) + " of " + formatRunTime(daily.quota),
+  const summary = node("div", undefined, "capture-efficiency-summary", document);
+  summary.append(node(
+    "h3",
+    `${formatRunTime(daily.accounted)} of ${formatRunTime(daily.quota)} Browser Run minutes used today`,
     undefined,
     document,
   ));
-
-  const forecastMetric = metricCard(
-    "Forecast at current schedules",
-    forecast.total_estimated_ms === null
-      ? "Waiting for runtime samples"
-      : formatRunTime(forecast.total_estimated_ms) + " / day",
-    undefined,
-    document,
-  );
-  const forecastTotal = forecastMetric.querySelector<HTMLElement>(".metric-card__value")!;
-  forecastTotal.dataset.testid = "forecast-total";
-  metrics.append(forecastMetric);
-  section.append(metrics);
+  summary.append(node("p", forecastBudgetNote(forecast, daily.budget), "browser-usage-budget-note", document));
+  section.append(summary);
 
   const figure = node("figure", undefined, "browser-usage-chart", document);
   figure.setAttribute("aria-label", "Daily Browser Run usage forecast");
@@ -113,7 +122,9 @@ export function renderCaptureUsageForecast(
   figure.append(chartRow(document, "Used today", daily.accounted, usageScaleMs, markers));
   figure.append(chartRow(
     document,
-    forecast.total_estimated_ms === null ? "Known forecast portion" : "Forecast per day",
+    !forecast.sites.length
+      ? "No reviewed active sites"
+      : forecast.total_estimated_ms === null ? "Known forecast portion" : "Forecast per day",
     forecastDisplayMs,
     forecastScaleMs,
     markers,
@@ -121,6 +132,7 @@ export function renderCaptureUsageForecast(
       capture_id: site.capture_id,
       value_ms: site.estimated_browser_ms_per_day ?? 0,
     })),
+    "forecast-total",
   ));
   section.append(figure);
 
@@ -131,37 +143,15 @@ export function renderCaptureUsageForecast(
     "browser-usage-forecast__legend-item browser-usage-forecast__legend-item--free", document));
   section.append(legend);
 
-  const note = forecast.is_complete
-    ? "Forecast uses recent successful capture runtimes and counts reviewed sites in the active playlist. Reserve-estimated runtimes may make it conservative."
-    : "Forecast unavailable until at least one active capture completes. New sites use the active sites' measured average when one is available.";
-  section.append(node("p", note, "browser-usage-forecast__note", document));
+  if (forecast.sites.length) {
+    const note = forecast.is_complete
+      ? "Forecast uses recent successful capture runtimes for reviewed sites in the active playlist. Reserve-estimated runtimes may make it conservative."
+      : "Forecasts need a runtime sample from an active capture. New sites use the active sites' measured average when one is available.";
+    section.append(node("p", note, "browser-usage-forecast__note", document));
+  }
   section.append(node("p",
     "The 10-minute Cloudflare account-wide allowance can also be used by other Browser Run workloads, which are not included in this Ribbonfish estimate.",
     "browser-usage-forecast__note", document));
-
-  if (forecast.sites.length) {
-    const list = node("ul", undefined, "browser-usage-forecast__sites", document);
-    forecast.sites.forEach((site, index) => {
-      const item = node("li", undefined, "browser-usage-forecast__site", document);
-      item.append(node("span", undefined,
-        "browser-usage-forecast__site-swatch browser-usage-chart__segment--" + (index % 6), document));
-      item.append(node("strong", site.display_label, undefined, document));
-      const runtime = site.average_browser_ms === null
-        ? "runtime sample needed" : formatRunTime(site.average_browser_ms) + " per capture";
-      const dailyCost = site.estimated_browser_ms_per_day === null
-        ? "daily estimate unavailable" : formatRunTime(site.estimated_browser_ms_per_day) + " / day";
-      const provenance = site.runtime_source === "fleet-history"
-        ? "fleet average"
-        : site.runtime_source === "site-history" ? site.browser_ms_samples + " site samples" : "no runtime history";
-      item.append(node("span",
-        formatCaptureInterval(site.interval_seconds ?? 0) + " · " +
-        (site.captures_per_day?.toFixed(1) ?? "—") + " captures/day · " +
-        runtime + " · " + dailyCost + " · " + provenance,
-        undefined, document));
-      list.append(item);
-    });
-    section.append(list);
-  }
 
   container.replaceChildren(section);
   return forecast;

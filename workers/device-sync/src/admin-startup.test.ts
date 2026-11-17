@@ -320,13 +320,18 @@ test("overview navigation renders the fleet landing page, capture efficiency and
     assert.equal(window.document.querySelector("#capture-efficiency-section").hidden, false);
     assert.equal(window.document.activeElement.id, "capture-efficiency-title");
     assert.equal(window.document.querySelector('#module-navigation a[href="#capture-efficiency-section"]').getAttribute("aria-current"), "page");
-    assert.equal(window.document.querySelectorAll("#capture-efficiency-section .metric-card").length, 2);
+    assert.equal(window.document.querySelectorAll("#capture-efficiency-section .metric-card").length, 0,
+      "daily use and forecast are combined into one clear summary");
     assert.equal(window.document.querySelectorAll("#capture-efficiency-section .scale-meter").length, 2);
-    assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /Forecast at current schedules/);
+    assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /10m 0s of 10m 0s Browser Run minutes used today/);
+    assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /Current schedules are forecast to stay within the Ribbonfish daily budget/);
+    assert.equal(window.document.querySelector("#capture-efficiency-section details.capture-efficiency-advanced").open, false);
     assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /Cloudflare account-wide allowance/);
     assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /fbo QA status/);
     assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /10 site samples/);
-    assert.match(window.document.querySelector("#capture-efficiency-section").textContent, /8m 0s measured, 2m 0s reserve-estimated/);
+    const recentOutcomes = window.document.querySelector("#capture-efficiency-section [data-table='capture-outcomes']");
+    assert.match(recentOutcomes.textContent, /Browser Run time measured from response headers8m 0s/);
+    assert.match(recentOutcomes.textContent, /Browser Run time estimated using the configured reserve2m 0s/);
     assert.doesNotMatch(window.document.querySelector("#capture-target-list").textContent, /Capture efficiency and Browser Run usage/);
 
     await navigate(window, () => { window.location.hash = "#fleet-insights"; });
