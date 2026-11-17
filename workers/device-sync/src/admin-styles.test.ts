@@ -71,6 +71,26 @@ test("capture efficiency analysis has dedicated layout rules", async () => {
   }
 });
 
+test("capture sites have one styled modal editor, an overflow action menu, and a mobile table fallback", async () => {
+  const { css } = await readAdminAssets();
+  assert.ok(declarationsFor(css, ".capture-site-dialog").some((item) => item.prop === "width" && item.value === "min(46rem, calc(100% - 2rem))"));
+  assert.ok(declarationsFor(css, ".capture-site-overflow__actions").some((item) => item.prop === "position" && item.value === "absolute"));
+  assert.ok(declarationsFor(css, ".capture-site-filter").some((item) => item.prop === "border-radius" && item.value === "var(--radius-pill)"));
+
+  let desktopTableIsHidden = false;
+  let mobileCardsAreShown = false;
+  css.walkAtRules("media", (media) => {
+    if (!/max-width:\s*53\.125rem/.test(media.params)) return;
+    media.walkRules(".desktop-data", (rule) => {
+      desktopTableIsHidden ||= rule.nodes.some((node) => node.type === "decl" && node.prop === "display" && node.value === "none");
+    });
+    media.walkRules(".mobile-card-list", (rule) => {
+      mobileCardsAreShown ||= rule.nodes.some((node) => node.type === "decl" && node.prop === "display" && node.value === "grid");
+    });
+  });
+  assert.ok(desktopTableIsHidden && mobileCardsAreShown, "table mode falls back to accessible mobile cards");
+});
+
 test("tile, chart, and brand glow colours are defined by CSS tokens", async () => {
   const { css, cssText } = await readAdminAssets();
   const tokenNames = [

@@ -534,15 +534,33 @@ function renderPlaylists(playlists) {
 
 function filterCaptureTargets() {
   const query = requiredElement(document, "#capture-search").value.trim().toLocaleLowerCase();
-  const filter = requiredElement(document, "#capture-filter").value;
-  const cards = [...requiredElements(document, "#capture-target-list .capture-target")];
+  const activeFilter = requiredElement<HTMLButtonElement>(document, "#capture-site-filters [aria-pressed=\"true\"]").dataset.captureFilter;
+  const cards = [...requiredElements<HTMLElement>(document, "#capture-target-list [data-capture-record]")];
   for (const card of cards) {
-    card.hidden = !card.dataset.search.includes(query) || (filter !== "all" && card.dataset.filter !== filter);
+    card.hidden = !card.dataset.search.includes(query) || (activeFilter !== "all" && card.dataset.filter !== activeFilter);
   }
-  requiredElement(document, "#capture-filter-empty").hidden = !cards.length || cards.some((card) => !card.hidden);
+  const cardView = document.querySelector<HTMLElement>("#capture-target-cards");
+  const tableView = document.querySelector<HTMLElement>("#capture-target-table-view");
+  if (!cardView || !tableView) {
+    requiredElement(document, "#capture-filter-empty").hidden = true;
+    return;
+  }
+  const activeRecords = cardView.hidden
+    ? requiredElements<HTMLElement>(tableView, "[data-capture-record]")
+    : requiredElements<HTMLElement>(cardView, "[data-capture-record]");
+  requiredElement(document, "#capture-filter-empty").hidden = !activeRecords.length || activeRecords.some((card) => !card.hidden);
 }
 requiredElement(document, "#capture-search").addEventListener("input", filterCaptureTargets);
-requiredElement(document, "#capture-filter").addEventListener("change", filterCaptureTargets);
+requiredElements<HTMLButtonElement>(document, "#capture-site-filters [data-capture-filter]").forEach((filterButton) => {
+  filterButton.addEventListener("click", () => {
+    requiredElements<HTMLButtonElement>(document, "#capture-site-filters [data-capture-filter]").forEach((item) => {
+      const selected = item === filterButton;
+      item.setAttribute("aria-pressed", String(selected));
+      item.classList.toggle("is-selected", selected);
+    });
+    filterCaptureTargets();
+  });
+});
 const renderCaptureTargets = createCaptureTargetRenderer({
   getCaptureIntervalOptions: () => intervalDefinitions?.capture.options ?? [],
   filterCaptureTargets,
@@ -975,12 +993,6 @@ async function refreshData(): Promise<boolean> {
     intervals.rotation.default, (option) => option.value);
   latestOverview = overview;
   const browserTargets = (overview.capture_targets ?? []).filter((target) => target.capture_type !== "api-dashboard");
-  const sitesNeedingAttention = browserTargets.filter((target) =>
-    target.last_error || !target.schedule_reviewed || !target.last_success_at).length;
-  setPageHeaderMetadata(requiredElement(document, "#sites-section > .page-header"), [
-    `${browserTargets.length} screenshot sites`,
-    `${sitesNeedingAttention} need attention`,
-  ]);
   const dashboardAttention = apiDashboards.filter((dashboard) => dashboard.last_error || dashboard.stale).length;
   setPageHeaderMetadata(requiredElement(document, "#dashboards-section > .page-header"), [
     `${apiDashboards.length} API dashboards`,
@@ -1151,7 +1163,12 @@ requiredElement(document, "#capture-site-form").addEventListener("submit", async
     requiredFormControl<HTMLInputElement>(form, "viewport_height").value = "1080";
     showInlineMessage(feedback, result.schedule_reviewed
       ? "This site already exists and its schedule has been reviewed."
-      : "Site added with the default daily schedule. Review or confirm that schedule below.");
+      : "Site added with the default daily schedule. Open Edit and confirm the schedule before adding this site to a playlist.");
+    const dialog = requiredElement<HTMLDialogElement>(document, "#capture-site-dialog");
+    if (dialog.open) {
+      if (typeof dialog.close === "function") dialog.close();
+      else dialog.removeAttribute("open");
+    }
     await refresh();
   } catch (error) { showInlineMessage(feedback, error.message, true); }
   finally { finishBusy(); }

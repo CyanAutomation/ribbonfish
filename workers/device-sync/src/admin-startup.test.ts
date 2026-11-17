@@ -30,7 +30,8 @@ const overviewFixture = () => ({
   capture_targets: [{
     capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", display_url: "https://status.example/", name: "fbo QA status",
     capture_interval_seconds: 86400, viewport: { width: 1920, height: 1080 }, sha256: "a".repeat(64), size: 4,
-    schedule_reviewed: true, active_in_playlist: true, average_browser_ms: 50_000, browser_ms_samples: 10,
+    schedule_reviewed: true, active_in_playlist: true, last_success_at: 1_700_000_000_000,
+    wait_for_selector: ".status-indicator", average_browser_ms: 50_000, browser_ms_samples: 10,
   }, {
     capture_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", display_url: "https://new.example/",
     capture_interval_seconds: 86400, viewport: { width: 1920, height: 1080 }, sha256: "b".repeat(64), size: 4,
@@ -48,12 +49,19 @@ const overviewFixture = () => ({
   },
 });
 
-function openConsole(initialDashboards = [], { smallScreen = false, initialDecisions = [] } = {}) {
+function openConsole(initialDashboards = [], {
+  smallScreen = false,
+  initialDecisions = [],
+  captureTargets,
+  storedCaptureView,
+  unavailableLocalStorage = false,
+} = {}) {
   const dom = new JSDOM(html, { url: "https://example.test/admin/", runScripts: "outside-only" });
   const { window } = dom;
   const calls = [];
   const requests = [];
   const overview = overviewFixture();
+  if (captureTargets) overview.capture_targets = captureTargets;
   let apiDashboards = initialDashboards;
   const captureDecisions = initialDecisions;
   let fail = false;
@@ -68,6 +76,13 @@ function openConsole(initialDashboards = [], { smallScreen = false, initialDecis
     dispatchEvent() { return false; },
   });
   window.confirm = () => true;
+  if (storedCaptureView) window.localStorage.setItem("ribbonfish.capture-sites.view", storedCaptureView);
+  if (unavailableLocalStorage) {
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      get() { throw new window.DOMException("Storage unavailable", "SecurityError"); },
+    });
+  }
   window.fetch = async (path, options = {}) => {
     calls.push(path);
     requests.push({ path, options });
@@ -114,8 +129,9 @@ test("capture site background assessment is shown once", async () => {
     await settle();
     const card = [...window.document.querySelectorAll(".capture-target")]
       .find((item) => item.dataset.search.includes("status.example"));
-    const disclosure = card.querySelector(".capture-target__assessment");
-    assert.equal((disclosure.textContent.match(/Background assessment/g) ?? []).length, 1, disclosure.textContent);
+    card.querySelector("[data-edit-capture-site]").click();
+    const dialog = window.document.querySelector("#capture-site-dialog");
+    assert.equal((dialog.querySelector("#capture-site-assessment-content").textContent.match(/Background assessment/g) ?? []).length, 1);
   } finally {
     dom.window.close();
   }
@@ -163,7 +179,7 @@ test("management navigation shows the selected section and moves focus", { timeo
     assert.equal(window.document.querySelector("#device-section").hidden, true);
     assert.equal(window.document.activeElement.id, "sites-title");
     assert.equal(window.document.querySelector('#module-navigation a[href="#sites-section"]').getAttribute("aria-current"), "page");
-    assert.equal(window.document.querySelector("#capture-site-editor").open, false);
+    assert.equal(window.document.querySelector("#capture-site-dialog").open, false);
 
     const navigation = window.document.querySelector("#module-navigation");
     const toggle = window.document.querySelector("#module-navigation-toggle");
@@ -223,11 +239,10 @@ test("management modules share page headers and labeled control toolbars", { tim
 
     const sitesHeader = window.document.querySelector("#sites-section > .page-header");
     const sitesDescription = sitesHeader.querySelector(".page-header__description");
-    assert.match(sitesDescription.textContent, /review their screenshot schedules/);
+    assert.match(sitesDescription.textContent, /scheduled captures run while a site is included in the active playlist/i);
     assert.equal(sitesHeader.querySelector("h2").getAttribute("aria-describedby"), sitesDescription.id);
-    assert.deepEqual([...sitesHeader.querySelectorAll(".page-header__meta span")].map((item) => item.textContent), [
-      "2 screenshot sites", "2 need attention",
-    ]);
+    assert.equal(sitesHeader.querySelector(".page-header__meta").hidden, true,
+      "site totals are shown once beside the wired status filters");
     const deviceHeader = window.document.querySelector("#device-section > .page-header");
     assert.deepEqual([...deviceHeader.querySelectorAll(".page-header__meta span")].map((item) => item.textContent), [
       "0 devices", "0 awaiting approval",
@@ -238,7 +253,6 @@ test("management modules share page headers and labeled control toolbars", { tim
         `${sectionID} keeps its editor action beside the editor instead of repeating it in the page heading`);
     }
     for (const [editorID, label] of [
-      ["capture-site-editor", "Add a site"],
       ["api-dashboard-editor", "Add an API status dashboard"],
       ["playlist-editor", "Create playlist version"],
     ]) {
@@ -249,19 +263,26 @@ test("management modules share page headers and labeled control toolbars", { tim
 
     const filters = window.document.querySelector(".capture-filters");
     assert.equal(filters.getAttribute("role"), "group");
-    assert.equal(filters.getAttribute("aria-label"), "Capture site filters");
-    assert.deepEqual([...filters.querySelectorAll(".toolbar__group")].map((group) => group.getAttribute("aria-label")), ["Site search", "Site status"]);
+    assert.equal(filters.getAttribute("aria-label"), "Capture site search");
+    assert.deepEqual([...filters.querySelectorAll(".toolbar__group")].map((group) => group.getAttribute("aria-label")), ["Search sites"]);
     assert.equal(filters.querySelector("input[type=search]"), window.document.getElementById("capture-search"));
-    assert.equal(filters.querySelector("select"), window.document.getElementById("capture-filter"));
+    assert.equal(window.document.getElementById("capture-filter"), null);
+    assert.equal(window.document.querySelector("#capture-site-filters").getAttribute("aria-label"), "Filter screenshot sites");
+    assert.equal(window.document.querySelector("#capture-site-view-toggle").hidden, true, "the list view is reserved for ten or more sites");
 
     const sourceToolbar = window.document.querySelector("#api-dashboard-source-list > .source-editor-toolbar");
     assert.equal(sourceToolbar.getAttribute("role"), "group");
     assert.equal(sourceToolbar.getAttribute("aria-label"), "Dashboard source controls");
     assert.equal(sourceToolbar.querySelector("[data-add-dashboard-source]").textContent, "Add source");
 
-    window.document.querySelector("#capture-site-editor > summary").click();
-    const siteEditor = window.document.getElementById("capture-site-editor");
-    assert.equal(siteEditor.open, true, "the editor opens from its native disclosure trigger");
+    const siteEditor = window.document.getElementById("capture-site-dialog");
+    assert.equal(siteEditor.open, false);
+    window.document.getElementById("add-capture-site").click();
+    assert.equal(siteEditor.open, true, "the add form opens in the shared site dialog");
+    assert.equal(window.document.getElementById("capture-site-form").hidden, false);
+    assert.equal(window.document.getElementById("capture-site-edit-form").hidden, true);
+    siteEditor.querySelector("[data-close-capture-site-dialog]").click();
+    assert.equal(siteEditor.open, false);
     window.document.querySelector("#api-dashboard-editor > summary").click();
     const dashboardEditor = window.document.getElementById("api-dashboard-editor");
     assert.equal(dashboardEditor.open, true, "the dashboard editor opens from its native disclosure trigger");
@@ -407,56 +428,184 @@ test("API dashboard editor adds provider-aware sources and preserves existing ID
   }
 });
 
-test("site search, naming, and schedule review send the selected site data", async () => {
-  const { dom, window, requests } = openConsole();
+test("capture site summaries show each fact once and labelled filters match the site status", async () => {
+  const { dom, window } = openConsole();
   try {
     await settle();
-    assert.match(window.document.querySelector("#capture-target-list").textContent, /https:\/\/status.example\//);
-    assert.match(window.document.querySelector("#capture-target-list").textContent, /Schedule review needed/);
-    assert.match(window.document.querySelector("#capture-target-list").textContent, /fbo QA status/);
+    const first = [...window.document.querySelectorAll("#capture-target-cards .capture-target")]
+      .find((card) => card.dataset.search.includes("status.example"));
+    assert.ok(first);
+    assert.match(first.textContent, /fbo QA status/);
+    assert.doesNotMatch(first.textContent, /https:\/\/status\.example/);
+    assert.match(first.textContent, /Screenshot ready/);
+    assert.match(first.textContent, /Last successful capture/);
+    assert.match(first.textContent, /1920 × 1080 px/);
+    assert.equal(first.querySelectorAll("details").length, 1, "only the overflow action menu is disclosed in a card");
+    assert.equal(first.querySelectorAll(".capture-target__error").length, 0);
+    assert.equal(first.querySelectorAll(".capture-target__url").length, 0);
+    assert.equal((first.textContent.match(/1 day/g) ?? []).length, 1);
+    assert.equal(first.querySelector("[data-capture-action=run]").textContent, "Take screenshot now");
 
-    const intervalErrors = [];
-    window.addEventListener("error", (event) => {
-      intervalErrors.push(event.message);
-      event.preventDefault();
-    });
-    const intervalSelect = window.document.querySelector(".capture-target__details select");
-    assert.equal(intervalSelect.hasAttribute("aria-label"), false);
-    assert.match(window.document.querySelector(`label[for="${intervalSelect.id}"]`)?.textContent ?? "", /^Screenshot interval/);
-    const selectorInput = window.document.querySelector('.capture-target__details input[maxlength="256"]');
-    assert.equal(selectorInput.hasAttribute("aria-label"), false);
-    assert.equal(window.document.querySelector(`label[for="${selectorInput.id}"]`)?.textContent, "Wait for CSS selector");
-    assert.deepEqual(Array.from(intervalSelect.options, ({ textContent }) => textContent), [
-      "15 minutes", "30 minutes", "1 hour", "3 hours", "6 hours", "12 hours", "24 hours",
-    ]);
-    intervalSelect.value = "3600";
-    intervalSelect.dispatchEvent(new window.Event("change", { bubbles: true }));
-    assert.deepEqual(intervalErrors, [], "changing a screenshot interval does not raise a runtime error");
+    const second = [...window.document.querySelectorAll("#capture-target-cards .capture-target")]
+      .find((card) => card.dataset.search.includes("new.example"));
+    assert.match(second.textContent, /Schedule review needed/);
+    assert.match(second.textContent, /No successful capture yet/);
+    assert.doesNotMatch(second.textContent, /Screenshot error:/);
 
+    const filters = window.document.querySelector("#capture-site-filters");
+    assert.match(window.document.querySelector("#capture-site-counts").textContent, /2 screenshot sites · 1 need attention/);
+    assert.match(filters.querySelector('[data-capture-filter="all"]').textContent, /2/);
+    assert.match(filters.querySelector('[data-capture-filter="attention"]').textContent, /1/);
+    assert.match(filters.querySelector('[data-capture-filter="ready"]').textContent, /1/);
+
+    filters.querySelector('[data-capture-filter="attention"]').click();
+    assert.equal(filters.querySelector('[data-capture-filter="attention"]').getAttribute("aria-pressed"), "true");
+    assert.equal(first.hidden, true);
+    assert.equal(second.hidden, false);
+    assert.equal(window.document.querySelector("#capture-filter-empty").hidden, true);
+
+    filters.querySelector('[data-capture-filter="all"]').click();
     const search = window.document.querySelector("#capture-search");
     search.value = "status.example";
     search.dispatchEvent(new window.Event("input", { bubbles: true }));
-    assert.equal(window.document.querySelectorAll("#capture-target-list .capture-target:not([hidden])").length, 1);
+    assert.equal([...window.document.querySelectorAll("#capture-target-cards .capture-target")].filter((card) => !card.hidden).length, 1);
     search.value = "";
     search.dispatchEvent(new window.Event("input", { bubbles: true }));
-
-    const nameInput = window.document.querySelector("#capture-target-list input[data-site-name]");
-    nameInput.value = "fbo QA status";
-    assert.equal(nameInput.labels[0].textContent.includes("Name (optional)"), true);
-    nameInput.closest(".settings-group").querySelector("button").click();
-    await settle();
-    const nameRequest = requests.find(({ path }) => path.endsWith("/name"));
-    assert.equal(JSON.parse(nameRequest.options.body).name, "fbo QA status");
-
-    const scheduleButton = [...window.document.querySelectorAll("#capture-target-list button")]
-      .find((button) => button.textContent === "Confirm schedule");
-    scheduleButton.click();
-    await settle();
-    const scheduleRequest = requests.find(({ path }) => path === "/admin/api/captures/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
-    assert.equal(scheduleRequest.options.method, "PATCH");
-    assert.equal(JSON.parse(scheduleRequest.options.body).capture_interval_seconds, 86400);
   } finally {
     dom.window.close();
+  }
+});
+
+test("one edit save sends only the changed fields to existing endpoints", async () => {
+  const { dom, window, requests } = openConsole();
+  try {
+    await settle();
+    const first = [...window.document.querySelectorAll("#capture-target-cards .capture-target")]
+      .find((card) => card.dataset.search.includes("status.example"));
+    first.querySelector("[data-edit-capture-site]").click();
+    const dialog = window.document.querySelector("#capture-site-dialog");
+    const form = window.document.querySelector("#capture-site-edit-form");
+    assert.equal(dialog.open, true);
+    assert.equal(window.document.querySelector("#capture-site-form").hidden, true);
+    assert.equal(form.hidden, false);
+    assert.equal(form.querySelector('[name="name"]').value, "fbo QA status");
+    assert.equal(form.querySelector('[name="wait_for_selector"]').value, ".status-indicator");
+    assert.equal(form.querySelectorAll("[data-save-site-changes]").length, 1);
+    assert.match(form.querySelector("[data-save-site-changes]").textContent, /Save changes/);
+    assert.equal((form.textContent.match(/schedule is shared/gi) ?? []).length, 1);
+
+    form.querySelector('[name="name"]').value = "Operations screen";
+    form.querySelector('[name="wait_for_selector"]').value = ".incident-list";
+    form.dispatchEvent(new window.SubmitEvent("submit", { bubbles: true, cancelable: true }));
+    await settle();
+    const changedRequests = requests.filter(({ path, options }) => path.includes("/captures/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa") && options.method === "PATCH");
+    assert.deepEqual(changedRequests.map(({ path, options }) => [path.split("/").at(-1), JSON.parse(options.body)]), [
+      ["name", { name: "Operations screen" }],
+      ["readiness", { wait_for_selector: ".incident-list" }],
+    ]);
+    assert.equal(dialog.open, false);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("Confirm schedule reviews an unchanged interval and screenshot actions remain available", async () => {
+  const { dom, window, requests } = openConsole();
+  try {
+    await settle();
+    const second = [...window.document.querySelectorAll("#capture-target-cards .capture-target")]
+      .find((card) => card.dataset.search.includes("new.example"));
+    second.querySelector("[data-edit-capture-site]").click();
+    const form = window.document.querySelector("#capture-site-edit-form");
+    const save = form.querySelector("[data-save-site-changes]");
+    assert.equal(save.textContent, "Confirm schedule");
+    assert.equal(form.querySelector("#capture-site-schedule-note").hidden, false);
+    assert.equal(form.querySelector('[name="capture_interval_seconds"]').value, "86400");
+    form.dispatchEvent(new window.SubmitEvent("submit", { bubbles: true, cancelable: true }));
+    await settle();
+    const scheduleRequest = requests.find(({ path, options }) => path === "/admin/api/captures/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" && options.method === "PATCH");
+    assert.deepEqual(JSON.parse(scheduleRequest.options.body), { capture_interval_seconds: 86400 });
+
+    const first = [...window.document.querySelectorAll("#capture-target-cards .capture-target")]
+      .find((card) => card.dataset.search.includes("status.example"));
+    first.querySelector("[data-capture-action=run]").click();
+    await settle();
+    const runRequest = requests.find(({ path, options }) => path.endsWith("/run") && options.method === "POST");
+    assert.deepEqual(JSON.parse(runRequest.options.body), {});
+    assert.match(window.document.querySelector('[data-feedback-slot="sites"]').textContent, /Screenshot job/);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("advisory assessment opens in the site dialog and the overflow menu keeps removal behind confirmation", async () => {
+  const { dom, window, requests } = openConsole();
+  try {
+    await settle();
+    const first = [...window.document.querySelectorAll("#capture-target-cards .capture-target")]
+      .find((card) => card.dataset.search.includes("status.example"));
+    const overflow = first.querySelector("details.action-disclosure");
+    assert.ok(overflow);
+    assert.equal(overflow.open, false);
+    overflow.querySelector("summary").click();
+    overflow.querySelector('[data-capture-action="assess"]').click();
+    await settle();
+    const dialog = window.document.querySelector("#capture-site-dialog");
+    assert.equal(dialog.open, true);
+    assert.ok(dialog.querySelector("#capture-site-assessment-result .jev-result"));
+    assert.equal(first.querySelector(".capture-target__assessment"), null);
+    assert.ok(requests.some(({ path, options }) => path === "/admin/api/jev/capture-assessment" && options.method === "POST"));
+
+    dialog.querySelector("[data-close-capture-site-dialog]").click();
+    overflow.querySelector("summary").click();
+    const remove = overflow.querySelector("[data-capture-action=remove]");
+    assert.equal(remove.textContent, "Remove capture site");
+    remove.click();
+    await settle();
+    const removeRequest = requests.find(({ path, options }) => path === "/admin/api/captures/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" && options.method === "DELETE");
+    assert.ok(removeRequest);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("capture sites offer a remembered list view from ten sites and tolerate unavailable localStorage", async () => {
+  const targets = Array.from({ length: 10 }, (_, index) => ({
+    ...overviewFixture().capture_targets[0],
+    capture_id: `site-${index}`,
+    display_url: `https://site-${index}.example/`,
+    name: `Site ${index}`,
+  }));
+  const { dom, window } = openConsole([], { captureTargets: targets, storedCaptureView: "list" });
+  try {
+    await settle();
+    const toggle = window.document.querySelector("#capture-site-view-toggle");
+    assert.equal(toggle.hidden, false);
+    assert.equal(toggle.querySelector('[data-capture-view="list"]').getAttribute("aria-pressed"), "true");
+    const table = window.document.querySelector("#capture-target-table-view table");
+    assert.equal(table.querySelector("caption").textContent, "Capture sites");
+    assert.deepEqual([...table.querySelectorAll("thead th")].map((heading) => heading.textContent), ["Name", "Status", "Last capture", "Interval", "Actions"]);
+    assert.ok([...table.querySelectorAll("thead th")].every((heading) => heading.getAttribute("scope") === "col"));
+    assert.ok(table.closest(".table-scroll"));
+    assert.equal(window.document.querySelectorAll("#capture-target-table-view .mobile-card-list .capture-target").length, 10);
+    assert.equal(window.document.querySelector("#capture-target-cards").hidden, true);
+    toggle.querySelector('[data-capture-view="cards"]').click();
+    assert.equal(toggle.querySelector('[data-capture-view="cards"]').getAttribute("aria-pressed"), "true");
+    assert.equal(window.localStorage.getItem("ribbonfish.capture-sites.view"), "cards");
+    toggle.querySelector('[data-capture-view="list"]').click();
+    assert.equal(toggle.querySelector('[data-capture-view="list"]').getAttribute("aria-pressed"), "true");
+    assert.equal(window.localStorage.getItem("ribbonfish.capture-sites.view"), "list");
+  } finally {
+    dom.window.close();
+  }
+
+  const blocked = openConsole([], { captureTargets: targets, unavailableLocalStorage: true });
+  try {
+    await settle();
+    assert.equal(blocked.window.document.querySelector("#capture-site-view-toggle").hidden, false);
+    assert.equal(blocked.window.document.querySelector('#capture-site-view-toggle [data-capture-view="cards"]').getAttribute("aria-pressed"), "true");
+  } finally {
+    blocked.dom.window.close();
   }
 });
 
@@ -464,6 +613,7 @@ test("operators can register a site and stage a playlist with an existing captur
   const { dom, window, requests } = openConsole();
   try {
     await settle();
+    window.document.querySelector("#add-capture-site").click();
     const siteForm = window.document.querySelector("#capture-site-form");
     siteForm.elements.namedItem("url").value = "https://added.example/";
     siteForm.dispatchEvent(new window.SubmitEvent("submit", { bubbles: true, cancelable: true }));
@@ -478,6 +628,7 @@ test("operators can register a site and stage a playlist with an existing captur
     assert.deepEqual(JSON.parse(siteRequest.options.body), {
       url: "https://added.example/", viewport: { width: 1920, height: 1080 },
     });
+    assert.equal(window.document.querySelector("#capture-site-dialog").open, false);
 
     window.document.querySelector('[name="id"]').value = "operations";
     window.document.querySelector("#available-sites input[data-capture-id]").checked = true;
@@ -532,10 +683,11 @@ test("site and device deletion send explicit requests", async () => {
     await settle();
     const siteCard = [...window.document.querySelectorAll("#capture-target-list article")]
       .find((card) => card.querySelector("h3")?.textContent === "fbo QA status");
-    const removeSiteButton = [...siteCard.querySelectorAll("button")]
-      .find((button) => button.textContent === "Remove capture site");
+    const siteOverflow = siteCard.querySelector("details.action-disclosure");
+    assert.ok(siteOverflow);
+    siteOverflow.querySelector("summary").click();
+    const removeSiteButton = siteOverflow.querySelector("[data-capture-action=remove]");
     assert.ok(removeSiteButton);
-    assert.equal(removeSiteButton.closest("details").open, false);
     removeSiteButton.click();
     await settle();
     const removeSiteRequest = requests.find(({ path }) => path === "/admin/api/captures/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");

@@ -84,31 +84,69 @@
         <div class="section-heading">
           <div><h2 id="sites-title">Capture sites</h2></div>
         </div>
-        <p class="muted">Register pages and review their screenshot schedules here. Sites are independent of playlists; only reviewed sites can be added to a playlist. Scheduled captures run when a site is included in the active playlist.</p>
+        <p class="muted">Register public pages for screenshots. Scheduled captures run while a site is included in the active playlist.</p>
         <div class="alert alert--success status-banner" data-feedback-slot="sites" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss site message">Dismiss</button></div>
-        <details id="capture-site-editor" class="editor-disclosure"><summary>Add a site</summary>
-        <form id="capture-site-form" class="form-grid">
-          <fieldset class="settings-group settings-group--form field--wide">
-            <legend>Site details</legend>
-            <div class="settings-group__fields">
-              <label class="field--wide">Public HTTPS URL <input class="field-control" name="url" type="url" placeholder="https://status.example.com" required></label>
-              <fieldset class="screenshot-size-fieldset">
-                <legend>Screenshot size</legend>
-                <label>Width (pixels) <input class="field-control" name="viewport_width" type="number" value="1920" min="320" max="3840" step="1" required></label>
-                <label>Height (pixels) <input class="field-control" name="viewport_height" type="number" value="1080" min="240" max="2160" step="1" required></label>
-              </fieldset>
-            </div>
-          </fieldset>
-          <div class="field--wide form-actions"><button class="button button--primary" type="submit">Add site</button></div>
-          <p id="capture-site-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
-        </form>
-        </details>
+        <div class="capture-sites-toolbar">
+          <button id="add-capture-site" class="button button--primary" type="button">Add a site</button>
+          <div id="capture-site-view-toggle" class="capture-site-view-toggle" role="group" aria-label="Capture site view" hidden>
+            <button class="button button--secondary" type="button" data-capture-view="cards" aria-pressed="true">Cards</button>
+            <button class="button button--secondary" type="button" data-capture-view="list" aria-pressed="false">List</button>
+          </div>
+        </div>
+        <div class="capture-sites-filter-summary">
+          <p id="capture-site-counts" class="muted">0 screenshot sites · 0 need attention</p>
+          <div id="capture-site-filters" class="capture-site-filters" role="group" aria-label="Filter screenshot sites">
+            <button class="capture-site-filter is-selected" type="button" data-capture-filter="all" aria-pressed="true">All sites <span data-capture-count="all">0</span></button>
+            <button class="capture-site-filter" type="button" data-capture-filter="attention" aria-pressed="false">Needs attention <span data-capture-count="attention">0</span></button>
+            <button class="capture-site-filter" type="button" data-capture-filter="ready" aria-pressed="false">Ready <span data-capture-count="ready">0</span></button>
+          </div>
+        </div>
         <div class="capture-filters">
           <label>Search sites <input id="capture-search" class="field-control" type="search" placeholder="Search name or URL"></label>
-          <label>Status <select id="capture-filter" class="field-control"><option value="all">All sites</option><option value="attention">Needs attention</option><option value="ready">Ready</option></select></label>
         </div>
         <p id="capture-filter-empty" class="muted" hidden>No sites match your search and filters.</p>
         <div id="capture-target-list" class="capture-target-list" role="region" aria-label="Capture sites" aria-live="polite"></div>
+        <dialog id="capture-site-dialog" class="confirm-dialog capture-site-dialog" aria-labelledby="capture-site-dialog-title">
+          <div class="capture-site-dialog__heading">
+            <h2 id="capture-site-dialog-title">Add a site</h2>
+            <button class="button button--quiet" type="button" data-close-capture-site-dialog aria-label="Close site editor">Close</button>
+          </div>
+          <form id="capture-site-form" class="form-grid">
+            <fieldset class="settings-group settings-group--form field--wide">
+              <legend>Site details</legend>
+              <div class="settings-group__fields">
+                <label class="field--wide">Public HTTPS URL <input class="field-control" name="url" type="url" placeholder="https://status.example.com" required></label>
+                <fieldset class="screenshot-size-fieldset">
+                  <legend>Screenshot size</legend>
+                  <label>Width (pixels) <input class="field-control" name="viewport_width" type="number" value="1920" min="320" max="3840" step="1" required></label>
+                  <label>Height (pixels) <input class="field-control" name="viewport_height" type="number" value="1080" min="240" max="2160" step="1" required></label>
+                </fieldset>
+              </div>
+            </fieldset>
+            <div class="field--wide form-actions">
+              <button class="button button--primary" type="submit">Add site</button>
+              <button class="button button--secondary" type="button" data-close-capture-site-dialog>Cancel</button>
+            </div>
+            <p id="capture-site-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
+          </form>
+          <form id="capture-site-edit-form" class="form-grid" hidden>
+            <p id="capture-site-shared-schedule-note" class="field--wide field-hint">A screenshot schedule is shared by playlists using the same site and screenshot size.</p>
+            <label>Site name (optional) <input class="field-control" name="name" type="text" maxlength="120"></label>
+            <label>Screenshot interval <select class="field-control" name="capture_interval_seconds"></select></label>
+            <p id="capture-site-schedule-note" class="field--wide field-hint" hidden>Confirm the existing schedule to make this site available for playlists.</p>
+            <label class="field--wide">Wait for CSS selector (optional) <input class="field-control" name="wait_for_selector" type="text" maxlength="256"></label>
+            <p class="field--wide field-hint">Leave this blank to use the default page readiness behavior.</p>
+            <section id="capture-site-assessment-result" class="field--wide capture-site-assessment" aria-labelledby="capture-site-assessment-title" hidden>
+              <h3 id="capture-site-assessment-title">Advisory assessment</h3>
+              <div id="capture-site-assessment-content"></div>
+            </section>
+            <p id="capture-site-edit-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
+            <div class="field--wide form-actions">
+              <button class="button button--primary" type="submit" data-save-site-changes>Save changes</button>
+              <button class="button button--secondary" type="button" data-close-capture-site-dialog>Cancel</button>
+            </div>
+          </form>
+        </dialog>
       </section>
 
       <section id="dashboards-section" class="panel" aria-labelledby="dashboards-title">

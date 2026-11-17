@@ -1,5 +1,5 @@
 type RequiredAdminElementMap = {
-  "#capture-filter": HTMLSelectElement;
+  "#capture-site-filters": HTMLElement;
   "#capture-search": HTMLInputElement;
   "#capture-site-form": HTMLFormElement;
   "#cancel-playlist-edit": HTMLButtonElement;
