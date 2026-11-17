@@ -18,28 +18,26 @@
       <div id="ribbonfish-loading" class="loading-indicator ribbonfish-loading" role="status" aria-live="polite" aria-atomic="true" hidden><img class="loading-indicator__mascot" src="/admin/ribbonfish-loading.svg" alt="" width="128" height="70"><span class="loading-indicator__label">Loading Ribbonfish…</span></div>
       <header class="app-header">
         <div class="header-inner">
-          <div class="brand-line">
-            <div id="brand-lockup" class="brand-lockup brand-lockup--horizontal">
+          <h1>
+            <span id="brand-lockup" class="brand-lockup brand-lockup--horizontal">
               <img class="brand-lockup__mark" src="/admin/ribbonfish-mark.svg" width="56" height="45" alt="">
               <span class="brand-lockup__name">Ribbonfish</span>
-            </div>
-            <span id="environment-tag" class="environment-tag">Management</span>
-          </div>
-          <h1>Fleet management</h1>
+            </span>
+          </h1>
+          <span id="environment-tag" class="environment-tag">Management</span>
         </div>
+        <p id="environment-notice" class="environment-notice" hidden role="alert"></p>
         <div class="app-header__actions">
-          <button id="module-navigation-toggle" class="button button--secondary sidebar-toggle" type="button" aria-controls="module-navigation" aria-expanded="true" hidden>Toggle navigation</button>
-          <button id="reload" class="button button--secondary" type="button">Refresh data</button>
+          <button id="module-navigation-toggle" class="button button--header sidebar-toggle" type="button" aria-label="Toggle navigation" title="Toggle navigation" aria-controls="module-navigation" aria-expanded="true" hidden><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"></path></svg></button>
+          <button id="reload" class="button button--header" type="button">Refresh data</button>
         </div>
       </header>
 
-      <nav id="module-navigation" class="module-navigation management-sidebar" aria-label="Management modules">
+      <nav id="module-navigation" class="module-navigation management-sidebar" aria-label="Management navigation">
         <section class="management-sidebar__section" aria-labelledby="module-overview-title">
           <h2 class="management-sidebar__heading" id="module-overview-title">Overview</h2>
           <ul class="management-sidebar__list">
-            <li><a href="#dashboard">All modules</a></li>
             <li><a href="#overview-section">Fleet overview</a></li>
-            <li><a href="#fleet-insights">Fleet insights</a></li>
           </ul>
         </section>
         <section class="management-sidebar__section" aria-labelledby="module-capture-title">
@@ -61,77 +59,95 @@
       </nav>
 
       <main id="main-content">
-      <p id="environment-notice" class="alert alert--warning" hidden></p>
-      <div id="message" class="alert alert--success status-banner" data-feedback-slot="global" hidden role="status" aria-live="polite" aria-atomic="true">
-        <span data-feedback-text></span>
-        <button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss message">Dismiss</button>
-      </div>
       <section id="asset-health" class="panel panel--alert" hidden role="alert" aria-live="assertive"></section>
-
-      <nav id="dashboard-tiles" class="tile-grid" aria-label="Management modules">
-        <a class="module-tile" href="#overview-section"><strong>Overview</strong><span>Fleet snapshot and items needing attention</span></a>
-        <a class="module-tile" href="#sites-section"><strong>Capture sites</strong><span id="sites-tile-status">Sites, schedules and screenshots</span></a>
-        <a class="module-tile" href="#dashboards-section"><strong>Capture dashboards</strong><span id="dashboards-tile-status">API status dashboards</span></a>
-        <a class="module-tile" href="#capture-efficiency-section"><strong>Capture efficiency and Browser Run usage</strong><span id="capture-efficiency-tile-status">Daily usage, runtime forecast and efficiency</span></a>
-        <a class="module-tile" href="#playlist-section"><strong>Playlists</strong><span id="playlists-tile-status">Versions, images and content</span></a>
-        <a class="module-tile" href="#device-section"><strong>Devices</strong><span id="devices-tile-status">Fleet health and approvals</span></a>
-        <a class="module-tile" href="#activity-section"><strong>Recent activity</strong><span>Management history</span></a>
-        <a class="module-tile" href="#fleet-insights"><strong>Fleet insights</strong><span>Prioritized findings and recommended actions</span></a>
-      </nav>
 
       <section id="overview-section" class="panel" aria-labelledby="overview-title">
         <div class="section-heading">
-          <div><p class="eyebrow">Overview</p><h2 id="overview-title">Fleet snapshot</h2></div>
+          <div><h2 id="overview-title">Fleet overview</h2></div>
         </div>
-        <p class="muted">Current fleet health and prioritized items that need attention.</p>
-        <div id="overview-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="overview" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss overview message">Dismiss</button></div>
         <section id="fleet-insights" class="fleet-insights-section" aria-labelledby="fleet-insights-title">
           <div class="section-heading fleet-insights-section__heading">
-            <div><p class="eyebrow">Prioritized findings</p><h3 id="fleet-insights-title">Needs attention</h3></div>
+            <div><h3 id="fleet-insights-title">Needs attention</h3></div>
             <p id="fleet-data-as-of" class="fleet-insights-section__updated" role="status" aria-live="polite"></p>
           </div>
-          <div id="fleet-attention" role="region" aria-label="Fleet findings" aria-live="polite"></div>
+          <div id="fleet-attention" role="region" aria-label="Fleet findings"></div>
         </section>
-        <div id="fleet-summary" role="region" aria-label="Fleet snapshot" aria-live="polite"></div>
+        <div id="fleet-summary" class="overview-metrics" role="region" aria-label="Fleet overview metrics"></div>
       </section>
 
       <section id="sites-section" class="panel" aria-labelledby="sites-title">
         <div class="section-heading">
-          <div><p class="eyebrow">Sites</p><h2 id="sites-title">Capture sites</h2></div>
+          <div><h2 id="sites-title">Capture sites</h2></div>
         </div>
-        <p class="muted">Register pages and review their screenshot schedules here. Sites are independent of playlists; only reviewed sites can be added to a playlist. Scheduled captures run when a site is included in the active playlist.</p>
-        <div class="alert alert--success status-banner" data-feedback-slot="sites" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss site message">Dismiss</button></div>
-        <details id="capture-site-editor" class="editor-disclosure"><summary>Add a site</summary>
-        <form id="capture-site-form" class="form-grid">
-          <fieldset class="settings-group settings-group--form field--wide">
-            <legend>Site details</legend>
-            <div class="settings-group__fields">
-              <label class="field--wide">Public HTTPS URL <input class="field-control" name="url" type="url" placeholder="https://status.example.com" required></label>
-              <fieldset class="screenshot-size-fieldset">
-                <legend>Screenshot size</legend>
-                <label>Width (pixels) <input class="field-control" name="viewport_width" type="number" value="1920" min="320" max="3840" step="1" required></label>
-                <label>Height (pixels) <input class="field-control" name="viewport_height" type="number" value="1080" min="240" max="2160" step="1" required></label>
-              </fieldset>
-            </div>
-          </fieldset>
-          <div class="field--wide form-actions"><button class="button button--primary" type="submit">Add site</button></div>
-          <p id="capture-site-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
-        </form>
-        </details>
+        <p class="muted">Register public pages for screenshots. Scheduled captures run while a site is included in the active playlist.</p>
+        <div class="capture-sites-toolbar">
+          <button id="add-capture-site" class="button button--primary" type="button">Add a site</button>
+          <div id="capture-site-view-toggle" class="capture-site-view-toggle" role="group" aria-label="Capture site view" hidden>
+            <button class="button button--secondary" type="button" data-capture-view="cards" aria-pressed="true">Cards</button>
+            <button class="button button--secondary" type="button" data-capture-view="list" aria-pressed="false">List</button>
+          </div>
+        </div>
+        <div class="capture-sites-filter-summary">
+          <p id="capture-site-counts" class="muted">0 screenshot sites · 0 need attention</p>
+          <div id="capture-site-filters" class="capture-site-filters" role="group" aria-label="Filter screenshot sites">
+            <button class="capture-site-filter is-selected" type="button" data-capture-filter="all" aria-pressed="true">All sites <span data-capture-count="all">0</span></button>
+            <button class="capture-site-filter" type="button" data-capture-filter="attention" aria-pressed="false">Needs attention <span data-capture-count="attention">0</span></button>
+            <button class="capture-site-filter" type="button" data-capture-filter="ready" aria-pressed="false">Ready <span data-capture-count="ready">0</span></button>
+          </div>
+        </div>
         <div class="capture-filters">
           <label>Search sites <input id="capture-search" class="field-control" type="search" placeholder="Search name or URL"></label>
-          <label>Status <select id="capture-filter" class="field-control"><option value="all">All sites</option><option value="attention">Needs attention</option><option value="ready">Ready</option></select></label>
         </div>
         <p id="capture-filter-empty" class="muted" hidden>No sites match your search and filters.</p>
-        <div id="capture-target-list" class="capture-target-list" role="region" aria-label="Capture sites" aria-live="polite"></div>
+        <div id="capture-target-list" class="capture-target-list" role="region" aria-label="Capture sites"></div>
+        <dialog id="capture-site-dialog" class="confirm-dialog capture-site-dialog" aria-labelledby="capture-site-dialog-title">
+          <div class="capture-site-dialog__heading">
+            <h2 id="capture-site-dialog-title">Add a site</h2>
+            <button class="button button--quiet" type="button" data-close-capture-site-dialog aria-label="Close site editor">Close</button>
+          </div>
+          <form id="capture-site-form" class="form-grid">
+            <fieldset class="settings-group settings-group--form field--wide">
+              <legend>Site details</legend>
+              <div class="settings-group__fields">
+                <label class="field--wide">Public HTTPS URL <input class="field-control" name="url" type="url" placeholder="https://status.example.com" required></label>
+                <fieldset class="screenshot-size-fieldset">
+                  <legend>Screenshot size</legend>
+                  <label>Width (pixels) <input class="field-control" name="viewport_width" type="number" value="1920" min="320" max="3840" step="1" required></label>
+                  <label>Height (pixels) <input class="field-control" name="viewport_height" type="number" value="1080" min="240" max="2160" step="1" required></label>
+                </fieldset>
+              </div>
+            </fieldset>
+            <div class="field--wide form-actions">
+              <button class="button button--primary" type="submit">Add site</button>
+              <button class="button button--secondary" type="button" data-close-capture-site-dialog>Cancel</button>
+            </div>
+            <p id="capture-site-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
+          </form>
+          <form id="capture-site-edit-form" class="form-grid" hidden>
+            <p id="capture-site-shared-schedule-note" class="field--wide field-hint">A screenshot schedule is shared by playlists using the same site and screenshot size.</p>
+            <label>Site name (optional) <input class="field-control" name="name" type="text" maxlength="120"></label>
+            <label>Screenshot interval <select class="field-control" name="capture_interval_seconds"></select></label>
+            <p id="capture-site-schedule-note" class="field--wide field-hint" hidden>Confirm the existing schedule to make this site available for playlists.</p>
+            <label class="field--wide">Wait for CSS selector (optional) <input class="field-control" name="wait_for_selector" type="text" maxlength="256"></label>
+            <p class="field--wide field-hint">Leave this blank to use the default page readiness behavior.</p>
+            <section id="capture-site-assessment-result" class="field--wide capture-site-assessment" aria-labelledby="capture-site-assessment-title" hidden>
+              <h3 id="capture-site-assessment-title">Advisory assessment</h3>
+              <div id="capture-site-assessment-content"></div>
+            </section>
+            <p id="capture-site-edit-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
+            <div class="field--wide form-actions">
+              <button class="button button--primary" type="submit" data-save-site-changes>Save changes</button>
+              <button class="button button--secondary" type="button" data-close-capture-site-dialog>Cancel</button>
+            </div>
+          </form>
+        </dialog>
       </section>
 
       <section id="dashboards-section" class="panel" aria-labelledby="dashboards-title">
         <div class="section-heading">
-          <div><p class="eyebrow">API status</p><h2 id="dashboards-title">Capture dashboards</h2></div>
+          <div><h2 id="dashboards-title">Capture dashboards</h2></div>
         </div>
         <p class="muted">Configure public API status sources and inspect generated dashboard images. These captures use the Worker renderer and do not consume Browser Run minutes.</p>
-        <div class="alert alert--success status-banner" data-feedback-slot="dashboards" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss dashboard message">Dismiss</button></div>
         <details id="api-dashboard-editor" class="editor-disclosure"><summary>Add an API status dashboard</summary>
         <form id="api-dashboard-form" class="form-grid">
           <fieldset class="settings-group settings-group--form field--wide">
@@ -163,21 +179,20 @@
           <p id="api-dashboard-feedback" class="field--wide form-feedback" hidden role="status" aria-live="polite"></p>
         </form>
         </details>
-        <div id="api-dashboard-list" class="capture-target-list" role="region" aria-label="API dashboards" aria-live="polite"></div>
+        <div id="api-dashboard-list" class="capture-target-list" role="region" aria-label="API dashboards"></div>
       </section>
 
       <section id="capture-efficiency-section" class="panel" aria-labelledby="capture-efficiency-title">
-        <div class="section-heading"><div><p class="eyebrow">Capture operations</p><h2 id="capture-efficiency-title">Capture efficiency and Browser Run usage</h2></div></div>
+        <div class="section-heading"><div><h2 id="capture-efficiency-title">Capture efficiency and Browser Run usage</h2></div></div>
         <p class="muted">Review daily Browser Run usage, forecast runtime for current schedules, and recent capture outcomes.</p>
-        <div id="capture-efficiency-content" role="region" aria-label="Browser Run usage and capture forecast" aria-live="polite"></div>
+        <div id="capture-efficiency-content" role="region" aria-label="Browser Run usage and capture forecast"></div>
       </section>
 
       <section id="playlist-section" class="panel" aria-labelledby="playlist-title">
         <div class="section-heading">
-          <div><p class="eyebrow">Playlists</p><h2 id="playlist-title">Playlist versions</h2></div>
+          <div><h2 id="playlist-title">Playlist versions</h2></div>
         </div>
         <p class="muted">Manage versions, images, and reviewed capture content for device playlists.</p>
-        <div id="playlist-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="playlist" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss playlist message">Dismiss</button></div>
         <details id="playlist-editor" class="playlist-editor editor-disclosure">
           <summary id="playlist-editor-summary">Create playlist version</summary>
           <form id="playlist-form" class="form-grid">
@@ -213,10 +228,9 @@
 
       <section id="device-section" class="panel" aria-labelledby="device-title">
         <div class="section-heading">
-          <div><p class="eyebrow">Devices</p><h2 id="device-title">Device fleet</h2></div>
+          <div><h2 id="device-title">Device fleet</h2></div>
         </div>
         <p class="muted">Review enrollment requests, sync status, and device health.</p>
-        <div id="device-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="device" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss device message">Dismiss</button></div>
         <details id="pending-enrollments-details" class="pending-enrollments">
           <summary><h3 id="pending-enrollments-title">Devices awaiting approval</h3><span id="pending-enrollment-count" class="disclosure-hint"></span></summary>
           <p class="muted">Compare the full fingerprint with the code shown on the device before approving it.</p>
@@ -229,17 +243,15 @@
 
       <section id="activity-section" class="panel" aria-labelledby="activity-title">
         <div class="section-heading">
-          <div><p class="eyebrow">Activity</p><h2 id="activity-title">Recent activity</h2></div>
+          <div><h2 id="activity-title">Recent activity</h2></div>
         </div>
         <p class="muted">Review the latest changes made in the Management console.</p>
-        <div id="activity-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="activity" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss activity message">Dismiss</button></div>
         <div id="audit" class="table-scroll desktop-data" role="region" aria-label="Recent management activity" tabindex="0"></div>
         <div id="audit-mobile" class="mobile-card-list" role="region" aria-label="Recent management activity"></div>
       </section>
 
       <section id="secret-panel" class="panel secret-panel" hidden aria-labelledby="secret-title">
         <div class="section-heading"><div><p class="eyebrow">Shown once</p><h2 id="secret-title">Credential</h2></div></div>
-        <div id="credential-feedback-notice" class="alert alert--success status-banner" data-feedback-slot="credential" hidden role="status" aria-live="polite" aria-atomic="true"><span data-feedback-text></span><button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss credential message">Dismiss</button></div>
         <p>Copy this value to the device now. It will not be shown again.</p>
         <code id="secret-value"></code>
         <div class="action-row">
@@ -248,6 +260,11 @@
         </div>
       </section>
       </main>
+    </div>
+
+    <div id="feedback-toast" class="alert status-banner feedback-toast" hidden role="status" aria-live="polite" aria-atomic="true">
+      <span data-feedback-text></span>
+      <button class="button button--quiet" data-dismiss-feedback type="button" aria-label="Dismiss message">Dismiss</button>
     </div>
 
     <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-description">

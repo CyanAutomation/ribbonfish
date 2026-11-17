@@ -181,7 +181,8 @@ function latestTimestamp(values: unknown[]) {
 }
 
 function isBehindActivePlaylist(device: FleetDevice, activePlaylist: FleetOverview["active_playlist"]) {
-  return Boolean(activePlaylist && device.health?.applied_playlist_id && device.health?.applied_revision !== undefined && device.health?.applied_revision !== null &&
+  return Boolean(activePlaylist && activePlaylist.revision !== undefined && activePlaylist.revision !== null &&
+    device.health?.applied_playlist_id && device.health?.applied_revision !== undefined && device.health?.applied_revision !== null &&
     (device.health.applied_playlist_id !== activePlaylist.playlist_id || String(device.health.applied_revision) !== String(activePlaylist.revision)));
 }
 
