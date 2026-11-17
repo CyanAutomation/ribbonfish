@@ -55,11 +55,14 @@ function openConsole(initialDashboards = [], {
   captureTargets,
   storedCaptureView,
   unavailableLocalStorage = false,
+  fakeTimers = false,
 } = {}) {
   const dom = new JSDOM(html, { url: "https://example.test/admin/", runScripts: "outside-only" });
   const { window } = dom;
   const calls = [];
   const requests = [];
+  const scheduledTimers = new Map();
+  let nextTimerID = 0;
   const overview = overviewFixture();
   if (captureTargets) overview.capture_targets = captureTargets;
   let apiDashboards = initialDashboards;
@@ -82,6 +85,14 @@ function openConsole(initialDashboards = [], {
       configurable: true,
       get() { throw new window.DOMException("Storage unavailable", "SecurityError"); },
     });
+  }
+  if (fakeTimers) {
+    window.setTimeout = (callback, delay = 0) => {
+      const timerID = ++nextTimerID;
+      scheduledTimers.set(timerID, { callback, delay });
+      return timerID;
+    };
+    window.clearTimeout = (timerID) => scheduledTimers.delete(timerID);
   }
   window.fetch = async (path, options = {}) => {
     calls.push(path);
@@ -110,6 +121,12 @@ function openConsole(initialDashboards = [], {
     calls,
     requests,
     overview,
+    scheduledTimers,
+    fireTimers() {
+      const pending = [...scheduledTimers.values()];
+      scheduledTimers.clear();
+      pending.forEach(({ callback }) => callback());
+    },
     setFailure(value) { fail = value; },
     setDashboards(value) { apiDashboards = value; },
   };
@@ -532,7 +549,7 @@ test("Confirm schedule reviews an unchanged interval and screenshot actions rema
     await settle();
     const runRequest = requests.find(({ path, options }) => path.endsWith("/run") && options.method === "POST");
     assert.deepEqual(JSON.parse(runRequest.options.body), {});
-    assert.match(window.document.querySelector('[data-feedback-slot="sites"]').textContent, /Screenshot job/);
+    assert.match(window.document.querySelector("#feedback-toast").textContent, /Screenshot job/);
   } finally {
     dom.window.close();
   }
@@ -671,7 +688,7 @@ test("uploaded playlist progress clears after a version saves", async () => {
     assert.equal(requests.some(({ path }) => path === "/admin/api/assets"), true);
     assert.equal(requests.some(({ path }) => path === "/admin/api/playlists"), true);
     assert.equal(feedback.hidden, true, "completed progress is cleared from the inline form feedback");
-    assert.match(window.document.querySelector('[data-feedback-slot="playlist"]').textContent, /New version/);
+    assert.match(window.document.querySelector("#feedback-toast").textContent, /New version/);
   } finally {
     dom.window.close();
   }
@@ -730,11 +747,41 @@ test("playlist revisions stay grouped and refresh errors can be dismissed", asyn
     setFailure(true);
     window.document.querySelector("#reload").click();
     await settle();
-    const notice = window.document.querySelector('[data-feedback-slot="global"]');
+    const notice = window.document.querySelector("#feedback-toast");
     assert.equal(notice.hidden, false);
     assert.match(notice.textContent, /Refresh failed/);
     notice.querySelector("[data-dismiss-feedback]").click();
     assert.equal(notice.hidden, true);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("feedback toast auto-dismisses success and keeps errors until dismissed", async () => {
+  const { dom, window, scheduledTimers, fireTimers, setFailure } = openConsole([], { fakeTimers: true });
+  try {
+    await settle();
+    const toast = window.document.querySelector("#feedback-toast");
+    window.document.querySelector("[data-capture-action=run]").click();
+    await settle();
+    assert.equal(toast.hidden, false);
+    assert.match(toast.textContent, /Screenshot job/);
+    assert.equal(toast.getAttribute("role"), "status");
+    assert.equal(toast.getAttribute("aria-live"), "polite");
+    assert.deepEqual([...scheduledTimers.values()].map(({ delay }) => delay), [5000]);
+    fireTimers();
+    assert.equal(toast.hidden, true, "successful messages expire after five seconds");
+
+    setFailure(true);
+    window.document.querySelector("#reload").click();
+    await settle();
+    assert.equal(toast.hidden, false);
+    assert.match(toast.textContent, /Refresh failed/);
+    assert.equal(toast.getAttribute("role"), "alert");
+    assert.equal(toast.getAttribute("aria-live"), "assertive");
+    assert.equal(scheduledTimers.size, 0, "errors are not scheduled for automatic dismissal");
+    toast.querySelector("[data-dismiss-feedback]").click();
+    assert.equal(toast.hidden, true);
   } finally {
     dom.window.close();
   }

@@ -157,33 +157,36 @@ test("transient notices replace, pause, resume, and clear their expiry", () => {
   assert.equal(timers.size, 0, "a cleared notice cannot be resumed");
 });
 
-test("feedback locations have contextual announcements and dismissal controls", async () => {
+test("feedback uses one fixed live toast and leaves re-rendered lists out of live regions", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const styles = await readFile(new URL("../public/admin/styles.css", import.meta.url), "utf8");
   const nodes = parseHTML(html);
-  for (const name of ["global", "overview", "sites", "dashboards", "playlist", "device", "activity", "credential"]) {
-    const slot = nodes.find((node) => attribute(node, "data-feedback-slot") === name);
-    assert.ok(slot, `feedback for ${name} has a dedicated location`);
-    assert.equal(attribute(slot, "role"), "status");
-    assert.equal(attribute(slot, "aria-live"), "polite");
-    assert.ok(descendants(slot).some((node) => attribute(node, "data-dismiss-feedback") !== undefined));
+  assert.equal(nodes.filter((node) => attribute(node, "data-feedback-slot") !== undefined).length, 0);
+  const toast = byID(nodes, "feedback-toast");
+  assert.ok(toast);
+  assert.equal(attribute(toast, "role"), "status");
+  assert.equal(attribute(toast, "aria-live"), "polite");
+  assert.equal(attribute(toast, "aria-atomic"), "true");
+  assert.ok(descendants(toast).some((node) => attribute(node, "data-dismiss-feedback") !== undefined));
+  assert.ok(byID(nodes, "secret-panel"), "the one-time credential panel remains available");
+  for (const id of ["capture-target-list", "api-dashboard-list", "playlists", "devices", "audit", "fleet-attention", "capture-efficiency-content"]) {
+    assert.equal(attribute(byID(nodes, id), "aria-live"), undefined, `${id} does not re-announce a full list on refresh`);
   }
   const stylesheet = postcss.parse(styles);
-  const bannerRules = [];
-  stylesheet.walkRules(".status-banner", (rule) => bannerRules.push(rule));
-  assert.ok(bannerRules.some((rule) => rule.nodes.some((node) =>
-    node.type === "decl" && node.prop === "display" && node.value === "flex")));
-  assert.ok(bannerRules.every((rule) => !rule.nodes.some((node) =>
-    node.type === "decl" && node.prop === "position" && ["fixed", "absolute"].includes(node.value))));
-  let reducedMotionDisablesBannerAnimation = false;
+  let fixedToast = false;
+  stylesheet.walkRules(".feedback-toast", (rule) => {
+    fixedToast ||= rule.nodes.some((node) => node.type === "decl" && node.prop === "position" && node.value === "fixed");
+  });
+  assert.ok(fixedToast, "the toast does not shift page layout");
+  let reducedMotionDisablesToastAnimation = false;
   stylesheet.walkAtRules("media", (media) => {
     if (!/prefers-reduced-motion\s*:\s*reduce/.test(media.params)) return;
-    media.walkRules(".status-banner", (rule) => {
-      reducedMotionDisablesBannerAnimation ||= rule.nodes.some((node) =>
+    media.walkRules(".feedback-toast", (rule) => {
+      reducedMotionDisablesToastAnimation ||= rule.nodes.some((node) =>
         node.type === "decl" && node.prop === "animation" && node.value === "none");
     });
   });
-  assert.ok(reducedMotionDisablesBannerAnimation);
+  assert.ok(reducedMotionDisablesToastAnimation);
 });
 
 test("management page prioritizes task navigation and defers optional panels", async () => {
