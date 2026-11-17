@@ -312,6 +312,19 @@ test("fleet insights detect a missing active playlist and stay clear for a healt
   assert.deepEqual(clear, []);
 });
 
+test("fleet insights do not flag devices behind when the active revision is missing", () => {
+  const insights = buildFleetInsights({
+    devices: [{
+      device_id: "pi-1",
+      enabled: 1,
+      health: { status: "healthy", sync_status: "ok", applied_playlist_id: "ops", applied_revision: "current" },
+    }],
+    active_playlist: { playlist_id: "ops" },
+  });
+
+  assert.deepEqual(insights, []);
+});
+
 test("reusable finding components render accessible evidence, actions and responsive card styles", async () => {
   const dom = new JSDOM();
   const ownerDocument = dom.window.document;

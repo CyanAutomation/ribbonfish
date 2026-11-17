@@ -35,7 +35,8 @@ function validMilliseconds(value: unknown): value is number {
 
 function isBehindActivePlaylist(device: NonNullable<FleetOverviewData["devices"]>[number], active: FleetOverviewData["active_playlist"]) {
   const health = device.health;
-  if (!active || !health?.applied_playlist_id || health.applied_revision === undefined || health.applied_revision === null) return false;
+  if (!active || active.revision === undefined || active.revision === null || !health?.applied_playlist_id ||
+    health.applied_revision === undefined || health.applied_revision === null) return false;
   return health.applied_playlist_id !== active.playlist_id || String(health.applied_revision) !== String(active.revision);
 }
 
