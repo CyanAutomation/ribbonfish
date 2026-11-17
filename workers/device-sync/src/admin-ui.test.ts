@@ -66,7 +66,7 @@ test("management page exposes accessible fleet and playlist sections", async () 
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const nodes = parseHTML(html);
   for (const [id, label] of [
-    ["fleet-summary", "Fleet snapshot"],
+    ["fleet-summary", "Fleet overview metrics"],
     ["devices", "Enrolled devices"],
     ["playlists", "Playlist versions"],
   ]) {
@@ -103,7 +103,7 @@ test("shared page headers and toolbars wrap without hiding page controls", async
 
   let narrowHeaderStacks = false;
   stylesheet.walkAtRules("media", (media) => {
-    if (!/max-width:\s*700px/.test(media.params)) return;
+    if (!/max-width:\s*43\.75rem/.test(media.params)) return;
     media.walkRules(".page-header", (rule) => {
       narrowHeaderStacks ||= rule.nodes.some((node) => node.type === "decl" && node.prop === "flex-direction" && node.value === "column");
     });
@@ -157,33 +157,36 @@ test("transient notices replace, pause, resume, and clear their expiry", () => {
   assert.equal(timers.size, 0, "a cleared notice cannot be resumed");
 });
 
-test("feedback locations have contextual announcements and dismissal controls", async () => {
+test("feedback uses one fixed live toast and leaves re-rendered lists out of live regions", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const styles = await readFile(new URL("../public/admin/styles.css", import.meta.url), "utf8");
   const nodes = parseHTML(html);
-  for (const name of ["global", "overview", "sites", "dashboards", "playlist", "device", "activity", "credential"]) {
-    const slot = nodes.find((node) => attribute(node, "data-feedback-slot") === name);
-    assert.ok(slot, `feedback for ${name} has a dedicated location`);
-    assert.equal(attribute(slot, "role"), "status");
-    assert.equal(attribute(slot, "aria-live"), "polite");
-    assert.ok(descendants(slot).some((node) => attribute(node, "data-dismiss-feedback") !== undefined));
+  assert.equal(nodes.filter((node) => attribute(node, "data-feedback-slot") !== undefined).length, 0);
+  const toast = byID(nodes, "feedback-toast");
+  assert.ok(toast);
+  assert.equal(attribute(toast, "role"), "status");
+  assert.equal(attribute(toast, "aria-live"), "polite");
+  assert.equal(attribute(toast, "aria-atomic"), "true");
+  assert.ok(descendants(toast).some((node) => attribute(node, "data-dismiss-feedback") !== undefined));
+  assert.ok(byID(nodes, "secret-panel"), "the one-time credential panel remains available");
+  for (const id of ["capture-target-list", "api-dashboard-list", "playlists", "devices", "audit", "fleet-attention", "capture-efficiency-content"]) {
+    assert.equal(attribute(byID(nodes, id), "aria-live"), undefined, `${id} does not re-announce a full list on refresh`);
   }
   const stylesheet = postcss.parse(styles);
-  const bannerRules = [];
-  stylesheet.walkRules(".status-banner", (rule) => bannerRules.push(rule));
-  assert.ok(bannerRules.some((rule) => rule.nodes.some((node) =>
-    node.type === "decl" && node.prop === "display" && node.value === "flex")));
-  assert.ok(bannerRules.every((rule) => !rule.nodes.some((node) =>
-    node.type === "decl" && node.prop === "position" && ["fixed", "absolute"].includes(node.value))));
-  let reducedMotionDisablesBannerAnimation = false;
+  let fixedToast = false;
+  stylesheet.walkRules(".feedback-toast", (rule) => {
+    fixedToast ||= rule.nodes.some((node) => node.type === "decl" && node.prop === "position" && node.value === "fixed");
+  });
+  assert.ok(fixedToast, "the toast does not shift page layout");
+  let reducedMotionDisablesToastAnimation = false;
   stylesheet.walkAtRules("media", (media) => {
     if (!/prefers-reduced-motion\s*:\s*reduce/.test(media.params)) return;
-    media.walkRules(".status-banner", (rule) => {
-      reducedMotionDisablesBannerAnimation ||= rule.nodes.some((node) =>
+    media.walkRules(".feedback-toast", (rule) => {
+      reducedMotionDisablesToastAnimation ||= rule.nodes.some((node) =>
         node.type === "decl" && node.prop === "animation" && node.value === "none");
     });
   });
-  assert.ok(reducedMotionDisablesBannerAnimation);
+  assert.ok(reducedMotionDisablesToastAnimation);
 });
 
 test("management page prioritizes task navigation and defers optional panels", async () => {
@@ -200,7 +203,6 @@ test("management page prioritizes task navigation and defers optional panels", a
     assert.ok(descendants(panel).some((node) => node.tagName === "summary"));
   }
   for (const [sectionID, editorID, listID] of [
-    ["sites-section", "capture-site-editor", "capture-target-list"],
     ["dashboards-section", "api-dashboard-editor", "api-dashboard-list"],
     ["playlist-section", "playlist-editor", "playlists"],
   ]) {
@@ -215,6 +217,13 @@ test("management page prioritizes task navigation and defers optional panels", a
     assert.ok(!descendants(heading).some((node) => node.tagName === "a" || node.tagName === "button"),
       `${sectionID} avoids repeating the editor trigger in its heading`);
   }
+  const sites = byID(nodes, "sites-section");
+  const siteEditor = byID(nodes, "capture-site-dialog");
+  assert.equal(siteEditor.tagName, "dialog");
+  assert.equal(attribute(siteEditor, "aria-labelledby"), "capture-site-dialog-title");
+  assert.ok(descendants(siteEditor).some((item) => attribute(item, "id") === "capture-site-form"));
+  assert.ok(descendants(sites).indexOf(byID(nodes, "add-capture-site")) < descendants(sites).indexOf(byID(nodes, "capture-target-list")),
+    "the add site button appears before its records");
   assert.ok(byID(nodes, "fleet-attention"));
 });
 
@@ -303,6 +312,19 @@ test("fleet insights detect a missing active playlist and stay clear for a healt
   assert.deepEqual(clear, []);
 });
 
+test("fleet insights do not flag devices behind when the active revision is missing", () => {
+  const insights = buildFleetInsights({
+    devices: [{
+      device_id: "pi-1",
+      enabled: 1,
+      health: { status: "healthy", sync_status: "ok", applied_playlist_id: "ops", applied_revision: "current" },
+    }],
+    active_playlist: { playlist_id: "ops" },
+  });
+
+  assert.deepEqual(insights, []);
+});
+
 test("reusable finding components render accessible evidence, actions and responsive card styles", async () => {
   const dom = new JSDOM();
   const ownerDocument = dom.window.document;
@@ -352,7 +374,7 @@ test("fleet insights live in the overview and no longer open in a modal", async 
   const overview = byID(nodes, "overview-section");
   const findings = byID(nodes, "fleet-attention");
   assert.ok(overview && descendants(overview).includes(findings));
-  assert.ok(nodes.some((node) => node.tagName === "a" && attribute(node, "href") === "#fleet-insights"));
+  assert.ok(byID(nodes, "fleet-insights"), "the fleet findings deep link remains available");
   assert.equal(byID(nodes, "analysis-dialog"), undefined);
   assert.equal(byID(nodes, "run-fleet-analysis"), undefined);
 });
@@ -374,7 +396,7 @@ test("management records switch to cards on narrow screens", async () => {
   const stylesheet = postcss.parse(styles);
   const responsiveRules = [];
   stylesheet.walkAtRules("media", (rule) => {
-    if (/max-width\s*:\s*850px/.test(rule.params)) responsiveRules.push(rule);
+    if (/max-width\s*:\s*53\.125rem/.test(rule.params)) responsiveRules.push(rule);
   });
   const declarationsFor = (selector) => {
     const declarations = [];
@@ -756,10 +778,10 @@ test("audit events and metadata are presented as readable labels", () => {
   ]);
 });
 
-test("management environment copy accurately describes Access and local sign-in", () => {
+test("management environment copy shows attention on development and stays quiet for verified production", () => {
   const production = formatEnvironmentNotice("production");
   assert.equal(production.production, true);
-  assert.match(production.detail, /Cloudflare Access/i);
+  assert.equal(production.detail, "");
 
   const development = formatEnvironmentNotice("development");
   assert.equal(development.production, false);
@@ -882,23 +904,23 @@ test("management shell provides grouped persistent navigation and an on-demand s
   assert.ok(shell, "the console content uses a shared application shell");
   const nav = byID(nodes, "module-navigation");
   assert.ok(nav);
-  assert.equal(attribute(nav, "aria-label"), "Management modules");
+  assert.equal(attribute(nav, "aria-label"), "Management navigation");
   assert.equal(attribute(nav, "class")?.includes("management-sidebar"), true);
   assert.equal(attribute(nav, "id"), attribute(byID(nodes, "module-navigation-toggle"), "aria-controls"));
   assert.equal(attribute(byID(nodes, "module-navigation-toggle"), "aria-expanded"), "true");
   assert.equal(attribute(byID(nodes, "module-navigation-toggle"), "hidden"), "");
   const links = descendants(nav).filter((item) => item.tagName === "a");
-  for (const id of ["dashboard", "overview-section", "sites-section", "capture-efficiency-section", "playlist-section", "device-section", "activity-section", "fleet-insights"]) {
+  for (const id of ["overview-section", "sites-section", "capture-efficiency-section", "playlist-section", "device-section", "activity-section"]) {
     assert.ok(links.some((link) => attribute(link, "href") === `#${id}`), `${id} is reachable`);
   }
+  assert.equal(links.some((link) => attribute(link, "href") === "#fleet-insights"), false);
   assert.deepEqual(descendants(nav).filter((item) => item.tagName === "h2").map((item) => item.childNodes[0]?.value),
     ["Overview", "Capture", "Fleet"]);
-  const efficiencyTile = descendants(byID(nodes, "dashboard-tiles")).find((item) =>
-    item.tagName === "a" && attribute(item, "href") === "#capture-efficiency-section");
-  assert.ok(efficiencyTile, "capture efficiency has its own dashboard tile");
+  assert.equal(byID(nodes, "dashboard-tiles"), undefined);
+  assert.ok(links.some((link) => attribute(link, "href") === "#capture-efficiency-section"), "capture efficiency has a sidebar destination");
   assert.equal(attribute(byID(nodes, "capture-efficiency-section"), "aria-labelledby"), "capture-efficiency-title");
-  const siteEditor = byID(nodes, "capture-site-editor");
-  assert.equal(siteEditor.tagName, "details");
+  const siteEditor = byID(nodes, "capture-site-dialog");
+  assert.equal(siteEditor.tagName, "dialog");
   assert.ok(descendants(siteEditor).some((item) => attribute(item, "id") === "capture-site-form"));
   const stylesheet = postcss.parse(styles);
   let desktopShell = false;
@@ -932,18 +954,48 @@ test("configuration forms separate dashboard details, sources, and playlist cont
     item.tagName === "fieldset" && attribute(item, "id") === "available-sites"));
 });
 
-test("capture sites and API dashboards are separate modules with their own home tiles", async () => {
+test("capture sites and API dashboards are separate sidebar modules", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const nodes = parseHTML(html);
   const nav = descendants(byID(nodes, "module-navigation"));
-  const tiles = descendants(byID(nodes, "dashboard-tiles"));
   assert.ok(nav.some((item) => item.tagName === "a" && attribute(item, "href") === "#dashboards-section"));
-  assert.ok(tiles.some((item) => item.tagName === "a" && attribute(item, "href") === "#dashboards-section"));
+  assert.equal(byID(nodes, "dashboard-tiles"), undefined);
   assert.ok(byID(nodes, "dashboards-section"));
   assert.equal(byID(nodes, "api-dashboard-form").parentNode?.parentNode?.parentNode?.attrs?.some((item) => item.name === "id" && item.value === "sites-section"), false);
   assert.ok(descendants(byID(nodes, "dashboards-section")).some((item) => attribute(item, "id") === "api-dashboard-form"));
   assert.ok(descendants(byID(nodes, "sites-section")).some((item) => attribute(item, "id") === "capture-site-form"));
   assert.equal(descendants(byID(nodes, "sites-section")).some((item) => attribute(item, "id") === "api-dashboard-list"), false);
+});
+
+test("capture site management uses one edit dialog, labelled filter chips and an optional list view", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const nodes = parseHTML(html);
+  const sites = byID(nodes, "sites-section");
+  assert.equal(byID(nodes, "capture-site-editor"), undefined);
+  assert.equal(attribute(byID(nodes, "add-capture-site"), "type"), "button");
+
+  const dialog = byID(nodes, "capture-site-dialog");
+  assert.equal(dialog.tagName, "dialog");
+  assert.equal(attribute(dialog, "aria-labelledby"), "capture-site-dialog-title");
+  assert.ok(descendants(dialog).some((item) => attribute(item, "id") === "capture-site-form"));
+  const editForm = byID(nodes, "capture-site-edit-form");
+  assert.equal(attribute(editForm, "hidden"), "");
+  assert.ok(descendants(editForm).some((item) => attribute(item, "name") === "name"));
+  assert.ok(descendants(editForm).some((item) => attribute(item, "name") === "capture_interval_seconds"));
+  assert.ok(descendants(editForm).some((item) => attribute(item, "name") === "wait_for_selector"));
+  assert.equal(descendants(editForm).filter((item) => attribute(item, "type") === "submit").length, 1);
+  assert.equal(descendants(editForm).filter((item) => item.tagName === "details").length, 0);
+  assert.match(byID(nodes, "capture-site-shared-schedule-note").childNodes[0]?.value ?? "", /shared by playlists using the same site and screenshot size/i);
+
+  const filterGroup = byID(nodes, "capture-site-filters");
+  assert.equal(attribute(filterGroup, "role"), "group");
+  assert.equal(attribute(filterGroup, "aria-label"), "Filter screenshot sites");
+  assert.deepEqual(descendants(filterGroup).filter((item) => item.tagName === "button").map((item) => attribute(item, "data-capture-filter")), ["all", "attention", "ready"]);
+  const viewGroup = byID(nodes, "capture-site-view-toggle");
+  assert.equal(attribute(viewGroup, "role"), "group");
+  assert.equal(attribute(viewGroup, "hidden"), "");
+  assert.deepEqual(descendants(viewGroup).filter((item) => item.tagName === "button").map((item) => attribute(item, "data-capture-view")), ["cards", "list"]);
+  assert.ok(descendants(sites).some((item) => attribute(item, "id") === "capture-target-list"));
 });
 
 test("API dashboard configuration defaults to structured source controls with optional JSON", async () => {
@@ -956,17 +1008,53 @@ test("API dashboard configuration defaults to structured source controls with op
   assert.ok(descendants(advanced).some((item) => item.tagName === "textarea" && attribute(item, "name") === "sources-json"));
 });
 
-test("fleet insights have a dashboard tile with a direct link to findings", async () => {
+test("fleet findings retain a direct deep link without a duplicate sidebar item", async () => {
   const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
   const nodes = parseHTML(html);
-  const tiles = byID(nodes, "dashboard-tiles");
-  assert.ok(tiles, "dashboard-tiles container exists");
-  const tile = descendants(tiles).find((item) =>
-    item.tagName === "a" && attribute(item, "href") === "#fleet-insights");
-  assert.ok(tile, "fleet insights are reachable from the dashboard tiles");
-  const tileText = descendants(tile).filter((item) => item.nodeName === "#text").map((item) => item.value).join(" ");
-  assert.match(tileText, /Fleet insights/);
-  assert.match(tileText, /Prioritized findings and recommended actions/);
+  assert.ok(byID(nodes, "fleet-insights"), "the existing fleet findings anchor remains available");
+  const nav = descendants(byID(nodes, "module-navigation"));
+  assert.equal(nav.filter((item) => item.tagName === "a" && attribute(item, "href") === "#overview-section").length, 1);
+  assert.equal(nav.some((item) => item.tagName === "a" && attribute(item, "href") === "#fleet-insights"), false);
+});
+
+test("fleet landing page puts findings first, replaces module tiles, and keeps one overview destination", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const nodes = parseHTML(html);
+  const header = descendants(byID(nodes, "management-shell")).find((item) => item.tagName === "header");
+  const heading = descendants(header).find((item) => item.tagName === "h1");
+  assert.equal(descendants(heading).some((item) => attribute(item, "id") === "brand-lockup"), true);
+  assert.equal(descendants(heading).find((item) => attribute(item, "class")?.split(/\s+/).includes("brand-lockup__name"))?.childNodes[0]?.value, "Ribbonfish");
+  assert.equal(byID(nodes, "dashboard-tiles"), undefined);
+
+  const overviewSection = byID(nodes, "overview-section");
+  const findingsIndex = descendants(overviewSection).findIndex((item) => attribute(item, "id") === "fleet-insights");
+  const metricsIndex = descendants(overviewSection).findIndex((item) => attribute(item, "id") === "fleet-summary");
+  assert.ok(findingsIndex >= 0 && metricsIndex > findingsIndex, "findings come before the live metrics");
+  assert.equal(byID(nodes, "overview-title")?.childNodes[0]?.value, "Fleet overview");
+
+  const links = descendants(byID(nodes, "module-navigation")).filter((item) => item.tagName === "a");
+  assert.equal(links.filter((link) => attribute(link, "href") === "#overview-section").length, 1);
+  assert.equal(links.some((link) => attribute(link, "href") === "#fleet-insights"), false);
+  assert.equal(links.some((link) => attribute(link, "href") === "#dashboard"), false);
+  assert.ok(byID(nodes, "fleet-insights"), "the existing findings deep link remains available");
+  for (const sectionID of ["overview-section", "sites-section", "dashboards-section", "capture-efficiency-section", "playlist-section", "device-section", "activity-section"]) {
+    const section = byID(nodes, sectionID);
+    const heading = descendants(section).find((item) => attribute(item, "class")?.includes("section-heading"));
+    assert.equal(descendants(heading).some((item) => attribute(item, "class")?.split(/\s+/).includes("eyebrow")), false,
+      `${sectionID} uses its heading as the only page title`);
+  }
+});
+
+test("environment status lives in the header and production has no success notice", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const nodes = parseHTML(html);
+  const header = descendants(byID(nodes, "management-shell")).find((item) => item.tagName === "header");
+  assert.ok(descendants(header).some((item) => attribute(item, "id") === "environment-tag"));
+  const notice = descendants(header).find((item) => attribute(item, "id") === "environment-notice");
+  assert.ok(notice);
+  assert.equal(attribute(notice, "role"), "alert");
+  assert.equal(attribute(notice, "hidden"), "");
+  assert.equal(byID(nodes, "main-content")?.childNodes.some((item) => attribute(item, "id") === "environment-notice"), false);
 });
 
 
@@ -1001,7 +1089,8 @@ test("Browser Run forecast component exposes actual usage, quota markers, and pe
   assert.equal(forecast.querySelector("figure")?.getAttribute("aria-label"), "Daily Browser Run usage forecast");
   assert.match(forecast.querySelector("[data-testid='forecast-total']")?.textContent ?? "", /48s/);
   assert.match(forecast.textContent, /0m 12s of 10m 0s/);
-  assert.match(forecast.textContent, /Hourly site/);
+  assert.match(forecast.querySelector(".browser-usage-budget-note")?.textContent ?? "", /forecast to stay within the.*daily budget/i);
+  assert.ok(forecast.querySelector("[data-capture-id='hourly']"), "the forecast chart still segments usage by site");
   assert.match(forecast.textContent, /Cloudflare account-wide allowance/);
   assert.ok(forecast.querySelector("[data-quota-marker='free-plan']"));
   assert.ok(forecast.querySelector("[data-quota-marker='worker-budget']"));
@@ -1064,6 +1153,34 @@ test("Browser Run forecast component requests a sample before inventing a runtim
     browser_ms_samples: 0,
   }], { accounted_ms: 0, budget_ms: 600_000, free_plan_limit_ms: 600_000 });
 
-  assert.match(forecast.textContent, /Forecast unavailable until at least one active capture completes/);
+  assert.match(forecast.textContent, /Forecasts need a runtime sample from an active capture/);
+  assert.match(forecast.querySelector(".browser-usage-budget-note")?.textContent ?? "", /incomplete.*cannot confirm whether it will stay within/i);
   assert.match(forecast.textContent, /New site/);
+});
+
+test("Browser Run forecast calls out when current schedules exceed the daily budget", () => {
+  const dom = new JSDOM("<section id='forecast'></section>");
+  const forecast = dom.window.document.querySelector("#forecast");
+  renderCaptureUsageForecast(forecast, [{
+    capture_id: "long-running",
+    display_label: "Long-running site",
+    capture_interval_seconds: 3600,
+    active_in_playlist: true,
+    schedule_reviewed: true,
+    average_browser_ms: 1_000_000,
+    browser_ms_samples: 10,
+  }], { accounted_ms: 0, budget_ms: 600_000, free_plan_limit_ms: 600_000 });
+
+  assert.match(forecast.querySelector(".browser-usage-budget-note")?.textContent ?? "", /forecast to exceed.*daily budget/i);
+});
+
+test("Browser Run forecast explains when no reviewed sites are active without repeating the missing-sample message", () => {
+  const dom = new JSDOM("<section id='forecast'></section>");
+  const forecast = dom.window.document.querySelector("#forecast");
+  renderCaptureUsageForecast(forecast, [], { accounted_ms: 0, budget_ms: 600_000, free_plan_limit_ms: 600_000 });
+
+  assert.match(forecast.querySelector(".browser-usage-budget-note")?.textContent ?? "", /no reviewed screenshot sites are active/i);
+  assert.equal(forecast.querySelectorAll(".browser-usage-forecast__note").length, 1,
+    "only the account-wide allowance note remains when there are no active sites");
+  assert.match(forecast.querySelectorAll(".scale-meter__label")[1].textContent, /No reviewed active sites/);
 });

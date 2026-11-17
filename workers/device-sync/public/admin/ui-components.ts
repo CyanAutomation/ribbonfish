@@ -19,7 +19,7 @@ export interface BrandLockupOptions {
 export function createBrandLockup(options: BrandLockupOptions = {}): HTMLElement {
   const ownerDocument = options.ownerDocument ?? document;
   const orientation = options.orientation ?? "horizontal";
-  const lockup = node("div", undefined, `brand-lockup brand-lockup--${orientation}`, ownerDocument);
+  const lockup = node("span", undefined, `brand-lockup brand-lockup--${orientation}`, ownerDocument);
   const mark = node("img", undefined, "brand-lockup__mark", ownerDocument);
   mark.src = options.markSrc ?? "/admin/ribbonfish-mark.svg";
   mark.alt = "";

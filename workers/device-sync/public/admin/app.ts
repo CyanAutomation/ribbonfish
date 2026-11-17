@@ -21,6 +21,7 @@ import { parseApiDashboardConfig } from "../../src/api-dashboard/config.ts";
 import { renderApiDashboards } from "./api-dashboard-view.ts";
 import { createCaptureTargetRenderer } from "./capture-sites-view.ts";
 import { renderCaptureEfficiencyModule } from "./capture-efficiency-module.ts";
+import { renderFleetOverviewMetrics } from "./fleet-overview.ts";
 import {
   createBrandLockup,
   createActionGroup,
@@ -33,11 +34,6 @@ import {
   type RefreshMode,
 } from "./ui-components.ts";
 import { initModuleNavigation } from "./module-navigation.ts";
-import {
-  createFleetOpenUI,
-  OPENUI_STARTER_SOURCE,
-  renderOpenUIElement,
-} from "./openui-core.ts";
 import {
   compactIdentifier,
   confirmAction,
@@ -81,60 +77,58 @@ const apiDashboardCreateEditor = createApiDashboardSourceEditor(
   requiredFormControl<HTMLTextAreaElement>(apiDashboardCreateForm, "sources-json"),
 );
 let latestOverview: any = null;
-let fleetSummaryInitialized = false;
 let pendingEnrollmentsLoaded = false;
 let pendingEnrollmentIDs = new Set<string>();
 let playlistEditSource: { playlist_id: string; revision: string } | null = null;
 let intervalDefinitions: any = null;
-const fleetViewRuntime = createFleetOpenUI({ getOverview: async () => latestOverview });
+const feedbackToast = requiredElement<HTMLElement>(document, "#feedback-toast");
+const feedbackToastText = requiredElement<HTMLElement>(feedbackToast, "[data-feedback-text]");
+let feedbackToastHovered = false;
+let feedbackToastFocused = false;
+let feedbackToastTransient = false;
+const feedbackToastTimer = createTransientNotice({ onExpire: () => {
+  feedbackToastTransient = false;
+  feedbackToast.hidden = true;
+} });
+feedbackToast.addEventListener("mouseenter", () => {
+  feedbackToastHovered = true;
+  feedbackToastTimer.pause();
+});
+feedbackToast.addEventListener("mouseleave", () => {
+  feedbackToastHovered = false;
+  if (!feedbackToastFocused && feedbackToastTransient) feedbackToastTimer.resume();
+});
+feedbackToast.addEventListener("focusin", () => {
+  feedbackToastFocused = true;
+  feedbackToastTimer.pause();
+});
+feedbackToast.addEventListener("focusout", (event) => {
+  if (event.relatedTarget instanceof Node && feedbackToast.contains(event.relatedTarget)) return;
+  feedbackToastFocused = false;
+  if (!feedbackToastHovered && feedbackToastTransient) feedbackToastTimer.resume();
+});
+requiredElement<HTMLButtonElement>(feedbackToast, "[data-dismiss-feedback]").addEventListener("click", () => {
+  feedbackToastTimer.clear();
+  feedbackToastTransient = false;
+  feedbackToast.hidden = true;
+});
 
-fleetViewRuntime.subscribe(renderFleetSummary);
-
-const feedbackSlots = new Map([...requiredElements(document, "[data-feedback-slot]")].map((element) => {
-  const slot = {
-    element,
-    text: requiredElement(element, "[data-feedback-text]"),
-    hovered: false,
-    focused: false,
-    transient: false,
-    timer: null,
-  };
-  slot.timer = createTransientNotice({ onExpire: () => { slot.transient = false; element.hidden = true; } });
-  element.addEventListener("mouseenter", () => { slot.hovered = true; slot.timer.pause(); });
-  element.addEventListener("mouseleave", () => {
-    slot.hovered = false;
-    if (!slot.focused && slot.transient) slot.timer.resume();
-  });
-  element.addEventListener("focusin", () => { slot.focused = true; slot.timer.pause(); });
-  element.addEventListener("focusout", (event) => {
-    if (event.relatedTarget instanceof Node && element.contains(event.relatedTarget)) return;
-    slot.focused = false;
-    if (!slot.hovered && slot.transient) slot.timer.resume();
-  });
-  requiredElement(element, "[data-dismiss-feedback]").addEventListener("click", () => {
-    slot.timer.clear();
-    slot.transient = false;
-    element.hidden = true;
-  });
-  return [element.dataset.feedbackSlot, slot];
-}));
-
-function showMessage(text, isError = false, context = "global") {
-  const slot = feedbackSlots.get(context) ?? feedbackSlots.get("global");
-  slot.timer.clear();
-  slot.transient = !isError;
-  setStatusNotice(slot.element, slot.text, text, isError ? "error" : "success");
+function showMessage(text, isError = false, _context = "global") {
+  feedbackToastTimer.clear();
+  feedbackToastTransient = !isError;
+  setStatusNotice(feedbackToast, feedbackToastText, text, isError ? "error" : "success");
   if (!isError) {
-    if (slot.hovered || slot.focused) slot.timer.pause();
-    else slot.timer.start();
+    if (feedbackToastHovered || feedbackToastFocused) feedbackToastTimer.pause();
+    else feedbackToastTimer.start();
   }
 }
 
-function showInfoMessage(text, context = "global") {
-  const slot = feedbackSlots.get(context) ?? feedbackSlots.get("global");
-  slot.timer.clear();
-  slot.transient = false;
-  setStatusNotice(slot.element, slot.text, text, "info");
+function showInfoMessage(text, _context = "global") {
+  feedbackToastTimer.clear();
+  feedbackToastTransient = true;
+  setStatusNotice(feedbackToast, feedbackToastText, text, "info");
+  if (feedbackToastHovered || feedbackToastFocused) feedbackToastTimer.pause();
+  else feedbackToastTimer.start();
 }
 
 function showInlineMessage(target, text, isError = false) {
@@ -543,15 +537,33 @@ function renderPlaylists(playlists) {
 
 function filterCaptureTargets() {
   const query = requiredElement(document, "#capture-search").value.trim().toLocaleLowerCase();
-  const filter = requiredElement(document, "#capture-filter").value;
-  const cards = [...requiredElements(document, "#capture-target-list .capture-target")];
+  const activeFilter = requiredElement<HTMLButtonElement>(document, "#capture-site-filters [aria-pressed=\"true\"]").dataset.captureFilter;
+  const cards = [...requiredElements<HTMLElement>(document, "#capture-target-list [data-capture-record]")];
   for (const card of cards) {
-    card.hidden = !card.dataset.search.includes(query) || (filter !== "all" && card.dataset.filter !== filter);
+    card.hidden = !card.dataset.search.includes(query) || (activeFilter !== "all" && card.dataset.filter !== activeFilter);
   }
-  requiredElement(document, "#capture-filter-empty").hidden = !cards.length || cards.some((card) => !card.hidden);
+  const cardView = document.querySelector<HTMLElement>("#capture-target-cards");
+  const tableView = document.querySelector<HTMLElement>("#capture-target-table-view");
+  if (!cardView || !tableView) {
+    requiredElement(document, "#capture-filter-empty").hidden = true;
+    return;
+  }
+  const activeRecords = cardView.hidden
+    ? requiredElements<HTMLElement>(tableView, "[data-capture-record]")
+    : requiredElements<HTMLElement>(cardView, "[data-capture-record]");
+  requiredElement(document, "#capture-filter-empty").hidden = !activeRecords.length || activeRecords.some((card) => !card.hidden);
 }
 requiredElement(document, "#capture-search").addEventListener("input", filterCaptureTargets);
-requiredElement(document, "#capture-filter").addEventListener("change", filterCaptureTargets);
+requiredElements<HTMLButtonElement>(document, "#capture-site-filters [data-capture-filter]").forEach((filterButton) => {
+  filterButton.addEventListener("click", () => {
+    requiredElements<HTMLButtonElement>(document, "#capture-site-filters [data-capture-filter]").forEach((item) => {
+      const selected = item === filterButton;
+      item.setAttribute("aria-pressed", String(selected));
+      item.classList.toggle("is-selected", selected);
+    });
+    filterCaptureTargets();
+  });
+});
 const renderCaptureTargets = createCaptureTargetRenderer({
   getCaptureIntervalOptions: () => intervalDefinitions?.capture.options ?? [],
   filterCaptureTargets,
@@ -984,12 +996,6 @@ async function refreshData(): Promise<boolean> {
     intervals.rotation.default, (option) => option.value);
   latestOverview = overview;
   const browserTargets = (overview.capture_targets ?? []).filter((target) => target.capture_type !== "api-dashboard");
-  const sitesNeedingAttention = browserTargets.filter((target) =>
-    target.last_error || !target.schedule_reviewed || !target.last_success_at).length;
-  setPageHeaderMetadata(requiredElement(document, "#sites-section > .page-header"), [
-    `${browserTargets.length} screenshot sites`,
-    `${sitesNeedingAttention} need attention`,
-  ]);
   const dashboardAttention = apiDashboards.filter((dashboard) => dashboard.last_error || dashboard.stale).length;
   setPageHeaderMetadata(requiredElement(document, "#dashboards-section > .page-header"), [
     `${apiDashboards.length} API dashboards`,
@@ -1006,36 +1012,22 @@ async function refreshData(): Promise<boolean> {
   setPageHeaderMetadata(requiredElement(document, "#activity-section > .page-header"), [
     `${overview.audit.length} recent events`,
   ]);
-  requiredElement(document, "#sites-tile-status").textContent = `${browserTargets.length} screenshot sites`;
-  requiredElement(document, "#dashboards-tile-status").textContent = `${apiDashboards.length} API dashboards`;
-  requiredElement(document, "#playlists-tile-status").textContent = `${overview.playlists.length} playlist versions`;
-  requiredElement(document, "#devices-tile-status").textContent = `${overview.devices.length} devices · ${enrollmentRequests.length} awaiting approval`;
   renderEnvironment(overview.environment);
   renderHealth(overview.asset_health);
   renderFleetAttention(overview, enrollmentRequests);
+  renderFleetOverviewMetrics(fleetSummary, overview, enrollmentRequests);
   renderPlaylists(overview.playlists);
-  const captureForecast = renderCaptureEfficiencyModule(
+  renderCaptureEfficiencyModule(
     requiredElement(document, "#capture-efficiency-content"),
     browserTargets,
     overview.capture_efficiency,
   );
-  requiredElement(document, "#capture-efficiency-tile-status").textContent = captureForecast
-    ? captureForecast.total_estimated_ms === null
-      ? "Waiting for active runtime samples"
-      : formatRunTime(captureForecast.total_estimated_ms) + " forecast per day"
-    : "Forecast unavailable";
   renderCaptureTargets(browserTargets, captureDecisions);
   renderApiDashboards(apiDashboards, { showMessage, refresh, showConfirmDialog });
   renderAvailableSites(overview.capture_targets ?? []);
   renderDevices(overview.devices, overview.active_playlist);
   renderPendingEnrollments(enrollmentRequests);
   renderAudit(overview.audit);
-  if (!fleetSummaryInitialized) {
-    fleetViewRuntime.renderProgram(OPENUI_STARTER_SOURCE);
-    fleetSummaryInitialized = true;
-  } else {
-    fleetViewRuntime.refresh();
-  }
   return true;
 }
 
@@ -1059,32 +1051,22 @@ function resetIntervalSelections(form) {
 function renderEnvironment(environment) {
   const status = formatEnvironmentNotice(environment);
   environmentTag.textContent = status.label;
+  environmentTag.classList.toggle("environment-tag--warning", !status.production);
   environmentNotice.classList.toggle("alert--warning", !status.production);
-  environmentNotice.classList.toggle("alert--info", status.production);
-  environmentNotice.replaceChildren();
-  const lead = node("strong", status.heading);
-  const detail = node("span", ` ${status.detail}`);
-  environmentNotice.append(lead, detail);
+  environmentNotice.classList.remove("alert--info");
+  if (status.production) {
+    environmentNotice.hidden = true;
+    environmentNotice.replaceChildren();
+    delete environmentNotice.dataset.message;
+    return;
+  }
+  const message = `${status.heading} ${status.detail}`.trim();
+  if (environmentNotice.dataset.message !== message) {
+    environmentNotice.replaceChildren();
+    environmentNotice.append(node("strong", status.heading), node("span", ` ${status.detail}`));
+    environmentNotice.dataset.message = message;
+  }
   environmentNotice.hidden = false;
-}
-
-function renderFleetSummary(view) {
-  if (!view) return;
-  if (view.loading) {
-    fleetSummary.setAttribute("aria-busy", "true");
-    fleetSummary.replaceChildren(node("p", "Loading fleet summary…", "muted"));
-    return;
-  }
-  fleetSummary.removeAttribute("aria-busy");
-  if (view.errors.length) {
-    fleetSummary.replaceChildren(node("p", view.errors.map((error) => error.message).join(" "), "error-title"));
-    return;
-  }
-  try {
-    fleetSummary.replaceChildren(renderOpenUIElement(view.root));
-  } catch (error) {
-    fleetSummary.replaceChildren(node("p", error.message, "error-title"));
-  }
 }
 
 function renderJevDecision(
@@ -1184,7 +1166,12 @@ requiredElement(document, "#capture-site-form").addEventListener("submit", async
     requiredFormControl<HTMLInputElement>(form, "viewport_height").value = "1080";
     showInlineMessage(feedback, result.schedule_reviewed
       ? "This site already exists and its schedule has been reviewed."
-      : "Site added with the default daily schedule. Review or confirm that schedule below.");
+      : "Site added with the default daily schedule. Open Edit and confirm the schedule before adding this site to a playlist.");
+    const dialog = requiredElement<HTMLDialogElement>(document, "#capture-site-dialog");
+    if (dialog.open) {
+      if (typeof dialog.close === "function") dialog.close();
+      else dialog.removeAttribute("open");
+    }
     await refresh();
   } catch (error) { showInlineMessage(feedback, error.message, true); }
   finally { finishBusy(); }

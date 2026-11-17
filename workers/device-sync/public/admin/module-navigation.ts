@@ -30,15 +30,11 @@ function enhanceModulePageHeaders(sections: HTMLElement[]): void {
 function enhanceManagementToolbars(): void {
   const captureFilters = document.querySelector<HTMLElement>(".capture-filters");
   const searchLabel = captureFilters?.querySelector("#capture-search")?.closest("label") as HTMLElement | null;
-  const statusLabel = captureFilters?.querySelector("#capture-filter")?.closest("label") as HTMLElement | null;
-  if (captureFilters && searchLabel && statusLabel) {
+  if (captureFilters && searchLabel) {
     captureFilters.replaceWith(createToolbar({
-      label: "Capture site filters",
+      label: "Capture site search",
       className: "capture-filters",
-      groups: [
-        { label: "Site search", items: [searchLabel] },
-        { label: "Site status", items: [statusLabel] },
-      ],
+      groups: [{ label: "Search sites", items: [searchLabel] }],
       ownerDocument: captureFilters.ownerDocument,
     }));
   }
@@ -65,7 +61,6 @@ function enhanceManagementToolbars(): void {
 export function initModuleNavigation(): void {
   const ids = ["overview-section", "sites-section", "dashboards-section", "capture-efficiency-section", "playlist-section", "device-section", "activity-section"];
   const sections = ids.map((id) => document.getElementById(id) as HTMLElement);
-  const tiles = document.getElementById("dashboard-tiles") as HTMLElement;
   const navigation = document.getElementById("module-navigation") as HTMLElement;
   const shell = document.getElementById("management-shell") as HTMLElement;
   const navigationToggle = document.getElementById("module-navigation-toggle") as HTMLButtonElement;
@@ -84,10 +79,11 @@ export function initModuleNavigation(): void {
     const target = id ? document.getElementById(id) : null;
     const section = sections.find((item) => item === target || (target && item.contains(target)));
     const isHome = !section;
-    sections.forEach((item) => { item.hidden = item !== section; });
-    tiles.hidden = !isHome;
+    sections.forEach((item) => {
+      item.hidden = item !== section && !(isHome && item.id === "overview-section");
+    });
     navigation.querySelectorAll<HTMLAnchorElement>("a").forEach((link) => {
-      const active = link.hash === (target?.id === "fleet-insights" ? "#fleet-insights" : section ? `#${section.id}` : "#dashboard");
+      const active = link.hash === (section ? `#${section.id}` : "#overview-section");
       if (active) link.setAttribute("aria-current", "page");
       else link.removeAttribute("aria-current");
     });
