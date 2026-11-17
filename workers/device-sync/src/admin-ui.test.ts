@@ -200,7 +200,6 @@ test("management page prioritizes task navigation and defers optional panels", a
     assert.ok(descendants(panel).some((node) => node.tagName === "summary"));
   }
   for (const [sectionID, editorID, listID] of [
-    ["sites-section", "capture-site-editor", "capture-target-list"],
     ["dashboards-section", "api-dashboard-editor", "api-dashboard-list"],
     ["playlist-section", "playlist-editor", "playlists"],
   ]) {
@@ -215,6 +214,13 @@ test("management page prioritizes task navigation and defers optional panels", a
     assert.ok(!descendants(heading).some((node) => node.tagName === "a" || node.tagName === "button"),
       `${sectionID} avoids repeating the editor trigger in its heading`);
   }
+  const sites = byID(nodes, "sites-section");
+  const siteEditor = byID(nodes, "capture-site-dialog");
+  assert.equal(siteEditor.tagName, "dialog");
+  assert.equal(attribute(siteEditor, "aria-labelledby"), "capture-site-dialog-title");
+  assert.ok(descendants(siteEditor).some((item) => attribute(item, "id") === "capture-site-form"));
+  assert.ok(descendants(sites).indexOf(byID(nodes, "add-capture-site")) < descendants(sites).indexOf(byID(nodes, "capture-target-list")),
+    "the add site button appears before its records");
   assert.ok(byID(nodes, "fleet-attention"));
 });
 
@@ -897,8 +903,8 @@ test("management shell provides grouped persistent navigation and an on-demand s
   assert.equal(byID(nodes, "dashboard-tiles"), undefined);
   assert.ok(links.some((link) => attribute(link, "href") === "#capture-efficiency-section"), "capture efficiency has a sidebar destination");
   assert.equal(attribute(byID(nodes, "capture-efficiency-section"), "aria-labelledby"), "capture-efficiency-title");
-  const siteEditor = byID(nodes, "capture-site-editor");
-  assert.equal(siteEditor.tagName, "details");
+  const siteEditor = byID(nodes, "capture-site-dialog");
+  assert.equal(siteEditor.tagName, "dialog");
   assert.ok(descendants(siteEditor).some((item) => attribute(item, "id") === "capture-site-form"));
   const stylesheet = postcss.parse(styles);
   let desktopShell = false;
@@ -943,6 +949,37 @@ test("capture sites and API dashboards are separate sidebar modules", async () =
   assert.ok(descendants(byID(nodes, "dashboards-section")).some((item) => attribute(item, "id") === "api-dashboard-form"));
   assert.ok(descendants(byID(nodes, "sites-section")).some((item) => attribute(item, "id") === "capture-site-form"));
   assert.equal(descendants(byID(nodes, "sites-section")).some((item) => attribute(item, "id") === "api-dashboard-list"), false);
+});
+
+test("capture site management uses one edit dialog, labelled filter chips and an optional list view", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const nodes = parseHTML(html);
+  const sites = byID(nodes, "sites-section");
+  assert.equal(byID(nodes, "capture-site-editor"), undefined);
+  assert.equal(attribute(byID(nodes, "add-capture-site"), "type"), "button");
+
+  const dialog = byID(nodes, "capture-site-dialog");
+  assert.equal(dialog.tagName, "dialog");
+  assert.equal(attribute(dialog, "aria-labelledby"), "capture-site-dialog-title");
+  assert.ok(descendants(dialog).some((item) => attribute(item, "id") === "capture-site-form"));
+  const editForm = byID(nodes, "capture-site-edit-form");
+  assert.equal(attribute(editForm, "hidden"), "");
+  assert.ok(descendants(editForm).some((item) => attribute(item, "name") === "name"));
+  assert.ok(descendants(editForm).some((item) => attribute(item, "name") === "capture_interval_seconds"));
+  assert.ok(descendants(editForm).some((item) => attribute(item, "name") === "wait_for_selector"));
+  assert.equal(descendants(editForm).filter((item) => attribute(item, "type") === "submit").length, 1);
+  assert.equal(descendants(editForm).filter((item) => item.tagName === "details").length, 0);
+  assert.match(byID(nodes, "capture-site-shared-schedule-note").childNodes[0]?.value ?? "", /shared by playlists using the same site and screenshot size/i);
+
+  const filterGroup = byID(nodes, "capture-site-filters");
+  assert.equal(attribute(filterGroup, "role"), "group");
+  assert.equal(attribute(filterGroup, "aria-label"), "Filter screenshot sites");
+  assert.deepEqual(descendants(filterGroup).filter((item) => item.tagName === "button").map((item) => attribute(item, "data-capture-filter")), ["all", "attention", "ready"]);
+  const viewGroup = byID(nodes, "capture-site-view-toggle");
+  assert.equal(attribute(viewGroup, "role"), "group");
+  assert.equal(attribute(viewGroup, "hidden"), "");
+  assert.deepEqual(descendants(viewGroup).filter((item) => item.tagName === "button").map((item) => attribute(item, "data-capture-view")), ["cards", "list"]);
+  assert.ok(descendants(sites).some((item) => attribute(item, "id") === "capture-target-list"));
 });
 
 test("API dashboard configuration defaults to structured source controls with optional JSON", async () => {
