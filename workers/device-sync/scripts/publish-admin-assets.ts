@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { ADMIN_ASSETS } from "../src/admin-assets.ts";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const workerDirectory = resolve(scriptDirectory, "..");
@@ -40,29 +41,16 @@ execFileSync(process.execPath, [resolve(scriptDirectory, "build-admin.ts")], {
 });
 
 const buildDirectory = resolve(workerDirectory, ".admin-build");
-const files = [
-  ["index.html", "text/html; charset=utf-8"],
-  ["app.js", "text/javascript; charset=utf-8"],
-  ["styles.css", "text/css; charset=utf-8"],
-  ["favicon.png", "image/png"],
-  ["favicon.svg", "image/svg+xml"],
-  ["site.webmanifest", "application/manifest+json; charset=utf-8"],
-  ["apple-touch-icon.png", "image/png"],
-  ["favicon-192.png", "image/png"],
-  ["favicon-512.png", "image/png"],
-  ["ribbonfish-mark.svg", "image/svg+xml"],
-  ["ribbonfish-loading.svg", "image/svg+xml"],
-  ["capture-pending.png", "image/png"],
-];
+const publicDirectory = resolve(workerDirectory, "public/admin");
 
-for (const [file, contentType] of files) {
-  const source = file.endsWith(".png") || file.endsWith(".svg") || file.endsWith(".webmanifest")
-    ? resolve(workerDirectory, "public/admin", file)
-    : resolve(buildDirectory, file);
+for (const asset of ADMIN_ASSETS) {
+  const file = asset.key.slice("admin/".length);
+  const sourceDirectory = asset.source === "build" ? buildDirectory : publicDirectory;
+  const source = resolve(sourceDirectory, file);
   execFileSync("npx", [
-    "wrangler", "r2", "object", "put", `${bucket}/admin/${file}`,
+    "wrangler", "r2", "object", "put", `${bucket}/${asset.key}`,
     "--file", source,
-    "--content-type", contentType,
+    "--content-type", asset.contentType,
     local ? "--local" : "--remote",
     "--force",
     "--config", resolve(workerDirectory, config),

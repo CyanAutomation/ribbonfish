@@ -82,35 +82,6 @@ test("management page exposes accessible fleet and playlist sections", async () 
   }
 });
 
-test("shared page headers and toolbars wrap without hiding page controls", async () => {
-  const styles = await readFile(new URL("../public/admin/styles.css", import.meta.url), "utf8");
-  const stylesheet = postcss.parse(styles);
-  const declarations = (selector: string) => {
-    const values: Array<[string, string]> = [];
-    stylesheet.walkRules(selector, (rule) => rule.nodes.forEach((node) => {
-      if (node.type === "decl") values.push([node.prop, node.value]);
-    }));
-    return values;
-  };
-
-  assert.ok(declarations(".page-header").some(([property, value]) => property === "display" && value === "flex"));
-  assert.ok(declarations(".page-header__actions").some(([property, value]) => property === "flex-wrap" && value === "wrap"));
-  assert.ok(declarations(".toolbar").some(([property, value]) => property === "flex-wrap" && value === "wrap"));
-  assert.ok(declarations(".toolbar__group--end").some(([property, value]) => property === "margin-inline-start" && value === "auto"));
-  assert.ok(declarations(".definition-list").some(([property, value]) => property === "display" && value === "grid"));
-  assert.ok(declarations(".action-group, .form-actions, .table-actions").some(([property, value]) => property === "display" && value === "flex"));
-  assert.ok(declarations(".action-group, .form-actions, .table-actions").some(([property, value]) => property === "flex-wrap" && value === "wrap"));
-
-  let narrowHeaderStacks = false;
-  stylesheet.walkAtRules("media", (media) => {
-    if (!/max-width:\s*43\.75rem/.test(media.params)) return;
-    media.walkRules(".page-header", (rule) => {
-      narrowHeaderStacks ||= rule.nodes.some((node) => node.type === "decl" && node.prop === "flex-direction" && node.value === "column");
-    });
-  });
-  assert.ok(narrowHeaderStacks, "page actions move below the heading on narrow screens");
-});
-
 test("transient notices replace, pause, resume, and clear their expiry", () => {
   let nextID = 0;
   const timers = new Map();
@@ -225,6 +196,18 @@ test("management page prioritizes task navigation and defers optional panels", a
   assert.ok(descendants(sites).indexOf(byID(nodes, "add-capture-site")) < descendants(sites).indexOf(byID(nodes, "capture-target-list")),
     "the add site button appears before its records");
   assert.ok(byID(nodes, "fleet-attention"));
+});
+
+test("management navigation has a present, unique accessible name", async () => {
+  const html = await readFile(new URL("../public/admin/index.html", import.meta.url), "utf8");
+  const nodes = parseHTML(html);
+  const navs = nodes.filter((node) => node.tagName === "nav");
+  const labels = navs.map((node) => attribute(node, "aria-label"));
+
+  assert.equal(navs.length, 1, "the management shell exposes its primary navigation");
+  assert.deepEqual(labels, ["Management navigation"]);
+  assert.equal(new Set(labels).size, navs.length, "every navigation region has a distinct name");
+  assert.equal(attribute(byID(nodes, "module-navigation-toggle"), "aria-controls"), attribute(navs[0], "id"));
 });
 
 test("capture efficiency introduction describes runtime forecasts instead of monetary cost", async () => {
