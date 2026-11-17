@@ -285,7 +285,7 @@ function renderServiceDisplayRow(row: ServiceDisplayRow, layout: CardLayout, row
   const sampledTime = formatClock(row.component.sampledAt);
   const stateChangeTime = changedTime && ["down", "degraded", "maintenance"].includes(status) ? changedTime : undefined;
   const staleReading = status === "stale";
-  const lastKnown = staleReading || unconfirmed ? [...(row.component.history ?? [])].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).find((beat) => beat.status !== "stale")?.status ?? (unconfirmed ? status : undefined) : undefined;
+  const lastKnown = staleReading || unconfirmed ? (row.component.history ?? []).toSorted((a, b) => Date.parse(b.at) - Date.parse(a.at)).find((beat) => beat.status !== "stale")?.status ?? (unconfirmed ? status : undefined) : undefined;
   const lastKnownLabel = lastKnown ? healthLabel[lastKnown] ?? healthLabel.unknown : undefined;
   const sampledAge = staleReading || unconfirmed ? formatAge(row.component.sampledAt, source.fetchedAt) : undefined;
   const conciseUnconfirmed = (staleReading || unconfirmed) && width < s(520);

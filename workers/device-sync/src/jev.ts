@@ -154,7 +154,7 @@ function validateAnswerEvidence(answer: Record<string, any>, choices: string[]) 
 
 function validateProbabilities(probabilities: unknown, choices: string[]) {
   if (!isRecord(probabilities)) return false;
-  if (Object.keys(probabilities).sort().join("\0") !== [...choices].sort().join("\0")) return false;
+  if (Object.keys(probabilities).sort().join("\0") !== choices.toSorted().join("\0")) return false;
   const values = Object.values(probabilities);
   return values.every(isProbability) &&
     Math.abs(values.reduce<number>((sum, item) => sum + (typeof item === "number" ? item : 0), 0) - 1) <= 0.02;

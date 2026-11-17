@@ -20,6 +20,6 @@ await build({
   minify: true,
   format: "esm",
   platform: "browser",
-  target: ["es2022"],
+  target: ["es2023"],
   legalComments: "none",
 });
