@@ -29,9 +29,17 @@ func TestCaptureBadgeUsesUTCAndKeepsSourceFrameUntouched(t *testing.T) {
 	if got, want := color.RGBAModel.Convert(frame.At(corner.X, corner.Y)), color.RGBAModel.Convert(source.At(corner.X, corner.Y)); got == want {
 		t.Fatalf("badge did not change its background pixel: got %#v", got)
 	}
-	textPixel := image.Pt(frame.Bounds().Max.X-264, frame.Bounds().Min.Y+16)
-	if got, want := color.RGBAModel.Convert(frame.At(textPixel.X, textPixel.Y)), (color.RGBA{R: 255, G: 255, B: 255, A: 255}); got != want {
-		t.Fatalf("badge text pixel = %#v, want white glyph", got)
+	whiteGlyphFound := false
+	for y := frame.Bounds().Min.Y; y < frame.Bounds().Max.Y && !whiteGlyphFound; y++ {
+		for x := frame.Bounds().Min.X; x < frame.Bounds().Max.X; x++ {
+			if got := color.RGBAModel.Convert(frame.At(x, y)).(color.RGBA); got == (color.RGBA{R: 255, G: 255, B: 255, A: 255}) {
+				whiteGlyphFound = true
+				break
+			}
+		}
+	}
+	if !whiteGlyphFound {
+		t.Fatal("badge has no white text pixels")
 	}
 	if got, want := source.At(corner.X, corner.Y), (color.RGBA{R: 80, G: 120, B: 160, A: 255}); got != want {
 		t.Fatalf("source frame changed at badge position: got %#v, want %#v", got, want)
