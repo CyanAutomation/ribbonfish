@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { dispatchDueCaptures, enqueueCapture, handleCaptureQueue } from "./capture-workflow.ts";
+import { dispatchCaptureOutbox, dispatchDueCaptures, enqueueCapture, handleCaptureQueue } from "./capture-workflow.ts";
 import worker, { fetchHandler, queueHandler, scheduledHandler } from "./index.ts";
 import { handleAdminRequest } from "./admin.ts";
 
@@ -232,6 +232,104 @@ test("scheduled recovery restages expired capture leases and dispatches the same
   }
 });
 
+test("scheduled dispatch republishes an orphaned queued job without a retry timestamp", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const orphaned = messages.shift();
+    const captureID = created.body.captures[0].capture_id;
+    sqlite.prepare("UPDATE capture_jobs SET queue_dispatch_after_at = NULL WHERE job_id = ?").run(orphaned.job_id);
+
+    assert.deepEqual({ ...sqlite.prepare(
+      "SELECT status, attempts, retry_after_at FROM capture_jobs WHERE job_id = ?",
+    ).get(orphaned.job_id) }, { status: "queued", attempts: 0, retry_after_at: null });
+
+    const dispatch = await scheduledHandler({ scheduledTime: Date.now() }, env);
+
+    assert.equal(dispatch.dispatched_capture_jobs, 1);
+    assert.deepEqual(messages, [{ job_id: orphaned.job_id }], "the same durable job is republished");
+    assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM capture_jobs WHERE capture_id = ? AND status IN ('queued', 'running')")
+      .get(captureID).count, 1, "recovery does not create another job for the target");
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("scheduled dispatch republishes unclaimed queue messages after the delivery grace period", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    await createCapturePlaylist(env);
+    const original = messages.shift();
+    const firstRepublishAt = sqlite.prepare("SELECT queue_dispatch_after_at FROM capture_jobs WHERE job_id = ?")
+      .get(original.job_id).queue_dispatch_after_at;
+
+    const beforeGrace = await scheduledHandler({ scheduledTime: firstRepublishAt - 1 }, env);
+    assert.equal(beforeGrace.dispatched_capture_jobs, 0);
+    assert.equal(messages.length, 0, "a healthy queue has five minutes to claim the message");
+
+    const afterGrace = await scheduledHandler({ scheduledTime: firstRepublishAt }, env);
+    assert.equal(afterGrace.dispatched_capture_jobs, 1);
+    assert.deepEqual(messages, [{ job_id: original.job_id }], "a stale delivery reuses the original job ID");
+
+    const leaseNow = firstRepublishAt + 1;
+    sqlite.prepare("UPDATE capture_jobs SET queue_dispatch_after_at = ?, queue_dispatch_lease_until = ? WHERE job_id = ?")
+      .run(leaseNow - 1, leaseNow + 30_000, original.job_id);
+    const leased = await scheduledHandler({ scheduledTime: leaseNow }, env);
+    assert.equal(leased.dispatched_capture_jobs, 0);
+    assert.equal(messages.length, 1, "an active publisher lease prevents concurrent sends");
+
+    const expiredLease = await scheduledHandler({ scheduledTime: leaseNow + 30_001 }, env);
+    assert.equal(expiredLease.dispatched_capture_jobs, 1);
+    assert.deepEqual(messages, [{ job_id: original.job_id }, { job_id: original.job_id }]);
+  } finally {
+    sqlite.close();
+  }
+});
+
+test("a D1 publish checkpoint failure is logged separately from a queue send failure", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    await createCapturePlaylist(env);
+    const original = messages.shift();
+    const now = Date.now() + 1;
+    sqlite.prepare("UPDATE capture_jobs SET queue_dispatch_after_at = NULL WHERE job_id = ?").run(original.job_id);
+
+    const database = env.DB;
+    env.DB = {
+      prepare(sql) {
+        if (sql.startsWith("UPDATE capture_jobs SET retry_after_at = NULL, queue_dispatch_after_at = ?")) {
+          return { bind() { return { async run() { throw new Error("D1 checkpoint unavailable"); } }; } };
+        }
+        return database.prepare(sql);
+      },
+      batch(statements) { return database.batch(statements); },
+    };
+    const errors = [];
+    const originalConsoleError = console.error;
+    console.error = (line) => errors.push(JSON.parse(line));
+    let dispatch;
+    try {
+      dispatch = await dispatchCaptureOutbox(env, now);
+    } finally {
+      console.error = originalConsoleError;
+    }
+
+    assert.equal(dispatch.enqueued, 1, "the queue send succeeded even though its D1 checkpoint failed");
+    assert.deepEqual(messages, [{ job_id: original.job_id }]);
+    assert.deepEqual(errors.map((entry) => entry.event), ["capture_queue_checkpoint_failed"]);
+    assert.deepEqual({ ...sqlite.prepare(
+      "SELECT status, queue_dispatch_after_at, queue_dispatch_lease_until FROM capture_jobs WHERE job_id = ?",
+    ).get(original.job_id) }, {
+      status: "queued", queue_dispatch_after_at: null, queue_dispatch_lease_until: now + 30_000,
+    }, "the persisted lease prevents another send until it expires");
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("dead-letter messages stage bounded recovery and never execute captures", async () => {
   const sqlite = await freshDatabase();
   try {
@@ -268,6 +366,40 @@ test("dead-letter messages stage bounded recovery and never execute captures", a
   }
 });
 
+test("a dead-lettered duplicate preserves its pending retry and the D1 outbox republishes it when due", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    await createCapturePlaylist(env);
+    const original = messages.shift();
+    const now = Date.now();
+    const retryAt = now + 60_000;
+    sqlite.prepare(
+      "UPDATE capture_jobs SET status = 'queued', retry_after_at = ?, queue_dispatch_after_at = NULL, " +
+      "queue_dispatch_lease_until = NULL, recovery_attempts = 0 WHERE job_id = ?",
+    ).run(retryAt, original.job_id);
+    let acked = false;
+
+    await queueHandler({
+      queue: "ribbonfish-capture-dead-letter",
+      messages: [{ body: original, ack() { acked = true; }, retry() { throw new Error("unexpected retry"); } }],
+    }, env);
+
+    assert.equal(acked, true);
+    assert.deepEqual({ ...sqlite.prepare(
+      "SELECT status, retry_after_at, recovery_attempts FROM capture_jobs WHERE job_id = ?",
+    ).get(original.job_id) }, { status: "queued", retry_after_at: retryAt, recovery_attempts: 0 });
+
+    const dispatch = await scheduledHandler({ scheduledTime: retryAt }, env);
+
+    assert.equal(dispatch.dispatched_capture_jobs, 1);
+    assert.deepEqual(messages, [{ job_id: original.job_id }], "the scheduled outbox recovers the same job when its retry is due");
+    assert.equal(sqlite.prepare("SELECT retry_after_at FROM capture_jobs WHERE job_id = ?").get(original.job_id).retry_after_at, null);
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("a failed recovery publish remains due and is retried on a later scheduled tick", async () => {
   const sqlite = await freshDatabase();
   try {
@@ -277,7 +409,8 @@ test("a failed recovery publish remains due and is retried on a later scheduled 
     const now = Date.now();
     const retryAt = now + 60_000;
     sqlite.prepare(
-      "UPDATE capture_jobs SET status = 'queued', retry_cycle_attempts = 0, recovery_attempts = 1, retry_after_at = ? WHERE job_id = ?",
+      "UPDATE capture_jobs SET status = 'queued', retry_cycle_attempts = 0, recovery_attempts = 1, retry_after_at = ?, " +
+      "queue_dispatch_after_at = NULL, queue_dispatch_lease_until = NULL WHERE job_id = ?",
     ).run(retryAt, original.job_id);
     env.CAPTURE_QUEUE = { async send() { throw new Error("queue unavailable"); } };
 
@@ -286,6 +419,8 @@ test("a failed recovery publish remains due and is retried on a later scheduled 
     assert.equal(messages.length, 0);
     assert.equal(sqlite.prepare("SELECT retry_after_at FROM capture_jobs WHERE job_id = ?").get(original.job_id).retry_after_at, retryAt,
       "the D1 outbox remains due when queue publication fails");
+    assert.equal(sqlite.prepare("SELECT queue_dispatch_after_at FROM capture_jobs WHERE job_id = ?")
+      .get(original.job_id).queue_dispatch_after_at, retryAt + 60_000, "queue failure backoff is durable in D1");
 
     env.CAPTURE_QUEUE = { async send(body) { messages.push(body); } };
     await scheduledHandler({ scheduledTime: retryAt + 60_000 }, env);
@@ -837,7 +972,7 @@ test("playlist saves schedule capture dispatch after the response through waitUn
   }
 });
 
-test("staged first captures retry on the scheduled dispatcher after a queue publish failure", async () => {
+test("staged first captures remain durable and retry after a queue publish failure", async () => {
   const sqlite = await freshDatabase();
   try {
     const { env, messages } = environment(sqlite);
@@ -846,13 +981,15 @@ test("staged first captures retry on the scheduled dispatcher after a queue publ
     const created = await createCapturePlaylist(env);
 
     assert.equal(created.response.status, 201, "a committed playlist remains saved if queue publishing fails");
-    assert.equal(sqlite.prepare("SELECT status FROM capture_jobs").get().status, "failed");
+    assert.equal(sqlite.prepare("SELECT status FROM capture_jobs").get().status, "queued");
+    const retryAt = sqlite.prepare("SELECT queue_dispatch_after_at FROM capture_jobs").get().queue_dispatch_after_at;
+    assert.ok(retryAt > Date.now(), "failed publication is recorded as a future retry instead of failing the capture job");
     assert.equal(messages.length, 0);
 
     env.CAPTURE_QUEUE = { async send(body) { messages.push(body); } };
-    const dispatch = await scheduledHandler({ scheduledTime: Date.now() + 1 }, env);
+    const dispatch = await scheduledHandler({ scheduledTime: retryAt }, env);
 
-    assert.equal(dispatch.enqueued, 1);
+    assert.equal(dispatch.dispatched_capture_jobs, 1);
     assert.equal(messages.length, 1);
     assert.equal(sqlite.prepare("SELECT status FROM capture_jobs ORDER BY created_at DESC LIMIT 1").get().status, "queued");
   } finally {
