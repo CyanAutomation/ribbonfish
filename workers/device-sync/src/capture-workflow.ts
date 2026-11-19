@@ -211,14 +211,6 @@ export async function dispatchCaptureOutbox(env: CaptureEnv, now = Date.now(), {
     const attempt = job.queue_dispatch_attempts + 1;
     try {
       await env.CAPTURE_QUEUE.send({ job_id: job.job_id });
-      const republishAfterAt = now + Math.min(QUEUE_REPUBLISH_AFTER_MS * 2 ** Math.min(attempt - 1, 3), QUEUE_REPUBLISH_MAX_MS);
-      await env.DB.prepare(
-        "UPDATE capture_jobs SET retry_after_at = NULL, queue_dispatch_after_at = ?, queue_dispatch_lease_until = NULL " +
-        "WHERE job_id = ? AND status = 'queued' AND queue_dispatch_lease_until = ?",
-      ).bind(republishAfterAt, job.job_id, leaseUntil).run();
-      enqueued += 1;
-      console.log(JSON.stringify({ event: "capture_queue_published", job_id: job.job_id, capture_id: job.capture_id,
-        dispatch_attempt: attempt, republish_after_at: republishAfterAt }));
     } catch (error) {
       const delaySeconds = QUEUE_DISPATCH_RETRY_DELAYS_SECONDS[
         Math.min(attempt - 1, QUEUE_DISPATCH_RETRY_DELAYS_SECONDS.length - 1)
@@ -230,6 +222,22 @@ export async function dispatchCaptureOutbox(env: CaptureEnv, now = Date.now(), {
       ).bind(retryAt, job.job_id, leaseUntil).run();
       console.error(JSON.stringify({ event: "capture_queue_publish_failed", job_id: job.job_id, capture_id: job.capture_id,
         dispatch_attempt: attempt, retry_after_at: retryAt,
+        message: String(error instanceof Error ? error.message : error).slice(0, 160) }));
+      continue;
+    }
+
+    enqueued += 1;
+    const republishAfterAt = now + Math.min(QUEUE_REPUBLISH_AFTER_MS * 2 ** Math.min(attempt - 1, 3), QUEUE_REPUBLISH_MAX_MS);
+    try {
+      const checkpoint = await env.DB.prepare(
+        "UPDATE capture_jobs SET retry_after_at = NULL, queue_dispatch_after_at = ?, queue_dispatch_lease_until = NULL " +
+        "WHERE job_id = ? AND status = 'queued' AND queue_dispatch_lease_until = ?",
+      ).bind(republishAfterAt, job.job_id, leaseUntil).run();
+      console.log(JSON.stringify({ event: "capture_queue_published", job_id: job.job_id, capture_id: job.capture_id,
+        dispatch_attempt: attempt, republish_after_at: republishAfterAt, checkpointed: checkpoint.meta?.changes === 1 }));
+    } catch (error) {
+      console.error(JSON.stringify({ event: "capture_queue_checkpoint_failed", job_id: job.job_id, capture_id: job.capture_id,
+        dispatch_attempt: attempt, lease_expires_at: leaseUntil,
         message: String(error instanceof Error ? error.message : error).slice(0, 160) }));
     }
   }
