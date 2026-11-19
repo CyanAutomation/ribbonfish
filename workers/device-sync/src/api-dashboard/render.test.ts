@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { dashboardSVG, renderDashboardPNG } from "./render.ts";
-import { svgCheckHistory, svgEventPanel, svgFreshnessBadge, svgGroupSummary, svgHealthLegend, svgHealthOverview, svgPanel, svgServiceRow, svgSourceNotice, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
+import { svgEventPanel, svgFreshnessBadge, svgGroupSummary, svgHealthOverview, svgPanel, svgProviderIdentity, svgServiceRow, svgSourceNotice, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
 import type { DashboardSource } from "./model.ts";
 
 const sample: DashboardSource = { id: "source-1", provider: "uptime-kuma", displayName: "<SCRIPT>alert('x')</SCRIPT>", fetchedAt: "2026-01-01T00:00:00.000Z", freshness: "fresh", status: "operational", statusDescription: "All systems operational", incidents: [], maintenance: [], components: [
@@ -24,7 +24,7 @@ test("disabled sources are labelled separately and do not make active sources st
   assert.match(svg, />Disabled<\/text>/);
   assert.match(svg, /Source is disabled and not polled/);
   assert.match(svg, /2 configured sources · 2 monitored services · 1 disabled source/);
-  assert.match(svg, /1 unknown/);
+  assert.match(svg, /1 Unknown/);
   assert.doesNotMatch(svg, /0 stale|0 pending/);
   assert.doesNotMatch(svg, /Monitoring data unavailable|Monitoring data delayed/);
 });
@@ -152,29 +152,14 @@ test("shared SVG primitives escape text and render status panels, dots, and badg
   assert.match(svgStatusBadge(0, 0, 200, 50, 1, "Down", "#ff647c"), />Down<\/text>/);
   assert.match(svgHealthOverview(10, 20, 1000, 1, [{ label: "Operational", count: 2, color: "#20c997" }, { label: "Down", count: 1, color: "#ff647c" }]), />2 Operational<\/text>/);
   assert.match(svgHealthOverview(10, 20, 1000, 1, [{ label: '<img onerror="x">', count: 1, color: "#20c997" }]), /&lt;img onerror=&quot;x&quot;&gt;/);
+  assert.match(svgProviderIdentity(10, 20, 1, "Uptime Kuma", "status.example.com"), /Uptime Kuma<\/tspan><tspan> \| status\.example\.com/);
+  assert.doesNotMatch(svgProviderIdentity(10, 20, 1, "Uptime Kuma", "<script>"), /<script>/);
   assert.match(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API <edge>", status: "Down", color: "#ff647c" }), /API &lt;edge&gt;/);
-  assert.match(svgGroupSummary({ x: 10, y: 30, right: 600, scale: 1, label: "operational", count: 2, history: ["operational", "unknown"] }), />2 services operational<\/text>/);
-  assert.equal((svgCheckHistory({ x: 0, y: 0, width: 100, height: 8, states: ["operational", "down"] }).match(/<rect /g) ?? []).length, 2);
+  assert.match(svgGroupSummary({ x: 10, y: 30, scale: 1, label: "operational", count: 2 }), />2 services operational<\/text>/);
   assert.doesNotMatch(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API", status: "Operational", color: "#20c997" }), /120 ms/);
 });
 
-test("health legend names every state so color is never the only status cue", () => {
-  const legend = svgHealthLegend(12, 24, 1000, 1);
-  for (const state of ["Operational", "Degraded", "Down", "Maintenance", "Pending", "Unknown", "Stale"]) {
-    assert.match(legend, new RegExp(state));
-  }
-  assert.match(legend, /Status key/);
-});
-
-test("history strip explains its time direction and each sampled status", () => {
-  const history = svgCheckHistory({ x: 10, y: 20, width: 144, height: 10, states: ["operational", "down"] });
-  assert.match(history, /24 hours ago/);
-  assert.match(history, /now/i);
-  assert.match(history, /Operational/);
-  assert.match(history, /Down/);
-});
-
-test("dashboard includes a visible status key and gives history strips a now label", () => {
+test("healthy slide dashboards keep the overall takeaway and omit a redundant status key", () => {
   const historical: DashboardSource = {
     ...sample,
     fetchedAt: "2026-01-02T03:05:00.000Z",
@@ -184,12 +169,11 @@ test("dashboard includes a visible status key and gives history strips a now lab
     ] }],
   };
   const svg = dashboardSVG([historical]);
-  assert.match(svg, /Status key/);
-  assert.match(svg, />Now</);
-  assert.match(svg, /24 hours ago/);
+  assert.match(svg, />1\/1 Operational</);
+  assert.doesNotMatch(svg, /Status key|24h|Recent checks/);
 });
 
-test("large healthy Uptime Kuma groups show representative monitors and summarize the remainder", () => {
+test("large healthy Uptime Kuma groups summarize health without listing routine monitors or latency", () => {
   const healthy: DashboardSource = {
     ...sample,
     groups: [{ id: "g", name: "Primary group", order: 0 }],
@@ -197,14 +181,12 @@ test("large healthy Uptime Kuma groups show representative monitors and summariz
   };
   const svg = dashboardSVG([healthy]);
   assert.match(svg, /Primary group/);
-  assert.match(svg, /16 services operational/);
-  assert.match(svg, /Service 0/);
-  assert.match(svg, /Service 15/);
-  assert.doesNotMatch(svg, /Service 16/);
-  assert.match(svg, /99 ms/);
+  assert.match(svg, /32 services operational/);
+  assert.doesNotMatch(svg, /Service 0|Service 15|Service 16|99 ms/);
+  assert.match(svg, /<tspan fill="#f5f8fc" font-weight="700">Uptime Kuma<\/tspan><tspan> \|/);
 });
 
-test("large-group history includes checks from both visible and overflow monitors", () => {
+test("healthy summary rows omit decorative history strips", () => {
   const grouped: DashboardSource = {
     ...sample,
     groups: [{ id: "g", name: "Primary group", order: 0 }],
@@ -219,10 +201,10 @@ test("large-group history includes checks from both visible and overflow monitor
     })),
   };
   const svg = dashboardSVG([grouped]);
-  assert.match(svg, /Recent checks from 24 hours ago to now:[^\"]*Down/);
+  assert.doesNotMatch(svg, /Recent checks from 24 hours ago to now/);
 });
 
-test("small Uptime Kuma groups list monitor names, state, and response time", () => {
+test("small healthy Uptime Kuma groups summarize routine monitors without response time", () => {
   const smallGroup: DashboardSource = {
     ...sample,
     groups: [{ id: "g", name: "West Europe", order: 0 }],
@@ -232,13 +214,13 @@ test("small Uptime Kuma groups list monitor names, state, and response time", ()
     ],
   };
   const svg = dashboardSVG([smallGroup]);
-  assert.match(svg, /Public web/);
-  assert.match(svg, /API/);
+  assert.doesNotMatch(svg, /Public web|>API</);
+  assert.match(svg, /2 services operational/);
   assert.match(svg, /Operational/);
-  assert.match(svg, /84 ms/);
+  assert.doesNotMatch(svg, /84 ms|121 ms/);
 });
 
-test("Kuma group summaries show a labelled 24-hour check strip when history is available", () => {
+test("Kuma group summaries stay compact when monitor history is available", () => {
   const historical: DashboardSource = {
     ...sample,
     fetchedAt: "2026-01-02T03:05:00.000Z",
@@ -248,9 +230,7 @@ test("Kuma group summaries show a labelled 24-hour check strip when history is a
     ] }],
   };
   const svg = dashboardSVG([historical]);
-  assert.match(svg, />24h<\/text>/);
-  assert.match(svg, /<title>Recent checks from 24 hours ago to now:/);
-  assert.match(svg, /#ff647c/);
+  assert.doesNotMatch(svg, />24h<\/text>|Recent checks from 24 hours ago/);
 });
 
 test("affected service rows retain a last sample timestamp while healthy rows summarize", () => {
@@ -269,7 +249,7 @@ test("affected service rows retain a last sample timestamp while healthy rows su
   assert.match(svg, /Checked 12:31 UTC/);
   assert.doesNotMatch(svg, /Down · Since 12:30 UTC · Checked/);
   assert.match(svg, /1 service operational/);
-  assert.match(svg, /87 ms/);
+  assert.doesNotMatch(svg, /87 ms/);
 });
 
 test("source and event freshness labels distinguish updates from failed checks", () => {
@@ -303,7 +283,7 @@ test("Statuspage provider status and dashboard feed freshness have separate labe
   assert.match(svg, /Data fresh/);
   assert.match(svg, /Checked 12:34 UTC/);
   assert.match(svg, /All Systems Operational/);
-  assert.match(svg, /1 configured source · 1 monitored service · 1 service operational/);
+  assert.match(svg, /1 configured source · 1 monitored service/);
 });
 
 test("unavailable feeds do not summarize old component data as operational", () => {
@@ -447,7 +427,7 @@ test("Statuspage keeps affected services first and summarizes healthy overflow",
   assert.doesNotMatch(svg, /Service 10/);
 });
 
-test("header emphasizes live service counts while retaining the full status key", () => {
+test("header emphasizes issue counts without a redundant status key", () => {
   const source: DashboardSource = {
     ...sample,
     provider: "atlassian-statuspage",
@@ -459,7 +439,6 @@ test("header emphasizes live service counts while retaining the full status key"
   const svg = dashboardSVG([source]);
   assert.match(svg, />1 Operational<\/text>/);
   assert.match(svg, />1 Down<\/text>/);
-  assert.match(svg, /Status key/);
 });
 
 test("shared event panel escapes names and gives scheduled time a separate visual line", () => {
