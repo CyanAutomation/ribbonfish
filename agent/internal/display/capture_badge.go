@@ -60,16 +60,50 @@ func DrawCaptureTimestampBadge(source image.Image, capturedAt time.Time) *image.
 	boxWidth := textWidth + 2*padding
 	boxHeight := 14*scale + lineGap + 2*padding
 	margin := 4 * scale
-	if boxWidth+2*margin > bounds.Dx() || boxHeight+2*margin > bounds.Dy() {
+	badge := image.NewRGBA(image.Rect(0, 0, boxWidth, boxHeight))
+	draw.Draw(badge, badge.Bounds(), image.NewUniform(color.RGBA{R: 12, G: 20, B: 28, A: 232}), image.Point{}, draw.Src)
+	drawCaptureBadgeText(badge, image.Pt(padding, padding), lines[0], scale)
+	drawCaptureBadgeText(badge, image.Pt(padding, padding+7*scale+lineGap), lines[1], scale)
+	badge = halfSizeCaptureBadge(badge)
+
+	margin = (margin + 1) / 2
+	if badge.Bounds().Dx()+2*margin > bounds.Dx() || badge.Bounds().Dy()+2*margin > bounds.Dy() {
 		return frame
 	}
 
-	badge := image.Rect(bounds.Max.X-margin-boxWidth, bounds.Min.Y+margin,
-		bounds.Max.X-margin, bounds.Min.Y+margin+boxHeight)
-	draw.Draw(frame, badge, image.NewUniform(color.RGBA{R: 12, G: 20, B: 28, A: 232}), image.Point{}, draw.Over)
-	drawCaptureBadgeText(frame, image.Pt(badge.Min.X+padding, badge.Min.Y+padding), lines[0], scale)
-	drawCaptureBadgeText(frame, image.Pt(badge.Min.X+padding, badge.Min.Y+padding+7*scale+lineGap), lines[1], scale)
+	badgeBounds := image.Rect(bounds.Max.X-margin-badge.Bounds().Dx(), bounds.Min.Y+margin,
+		bounds.Max.X-margin, bounds.Min.Y+margin+badge.Bounds().Dy())
+	draw.Draw(frame, badgeBounds, badge, badge.Bounds().Min, draw.Over)
 	return frame
+}
+
+func halfSizeCaptureBadge(source *image.RGBA) *image.RGBA {
+	bounds := source.Bounds()
+	width := (bounds.Dx() + 1) / 2
+	height := (bounds.Dy() + 1) / 2
+	resized := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			var red, green, blue, alpha, samples uint32
+			for sourceY := y * 2; sourceY < min(y*2+2, bounds.Dy()); sourceY++ {
+				for sourceX := x * 2; sourceX < min(x*2+2, bounds.Dx()); sourceX++ {
+					pixel := source.RGBAAt(bounds.Min.X+sourceX, bounds.Min.Y+sourceY)
+					red += uint32(pixel.R)
+					green += uint32(pixel.G)
+					blue += uint32(pixel.B)
+					alpha += uint32(pixel.A)
+					samples++
+				}
+			}
+			resized.SetRGBA(x, y, color.RGBA{
+				R: uint8((red + samples/2) / samples),
+				G: uint8((green + samples/2) / samples),
+				B: uint8((blue + samples/2) / samples),
+				A: uint8((alpha + samples/2) / samples),
+			})
+		}
+	}
+	return resized
 }
 
 func captureTextWidth(value string, scale int) int {
