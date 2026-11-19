@@ -460,25 +460,26 @@ async function recordBrowserCaptureSuccess(
   reserveMs: number,
   captureStartedAt: number,
 ) {
+  const capturedAt = Math.max(now, result.captured_at);
   const usedMs = result.browserMs > 0
     ? result.browserMs
     : reserveMs;
   const browserMsSource = result.browserMs > 0 ? "response_header" : "reserve";
-  if (usedMs) await addBrowserUsage(env, usedMs, now, job.job_id,
+  if (usedMs) await addBrowserUsage(env, usedMs, capturedAt, job.job_id,
     browserMsSource);
   const validatorHeadersUsable = !["disabled", "unavailable"].includes(validator.outcome);
   const validatorEtag = validatorHeadersUsable ? validator.etag : job.validator_etag;
   const validatorLastModified = validatorHeadersUsable ? validator.lastModified : job.validator_last_modified;
   await env.DB.batch([
-    markAssetLiveStatement(env.DB, result.sha256, result.size, now),
+    markAssetLiveStatement(env.DB, result.sha256, result.size, capturedAt),
     env.DB.prepare(
       "INSERT INTO capture_history (capture_id, job_id, sha256, size, captured_at, browser_ms, browser_ms_source) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    ).bind(job.capture_id, job.job_id, result.sha256, result.size, now, usedMs, result.browserMs > 0 ? "response_header" : "reserve"),
+    ).bind(job.capture_id, job.job_id, result.sha256, result.size, capturedAt, usedMs, result.browserMs > 0 ? "response_header" : "reserve"),
     captureDurationSampleStatement(env.DB, {
       jobID: job.job_id,
       captureID: job.capture_id,
       attempt,
-      sampledAt: now,
+      sampledAt: capturedAt,
       browserMs: usedMs,
       browserMsSource,
       reserveMs,
@@ -491,14 +492,14 @@ async function recordBrowserCaptureSuccess(
     env.DB.prepare(
       "UPDATE capture_targets SET current_sha256 = ?, current_size = ?, last_attempt_at = ?, last_success_at = ?, " +
       "last_error = NULL, failure_count = 0, next_due_at = ?, validator_etag = ?, validator_last_modified = ? WHERE capture_id = ?",
-    ).bind(result.sha256, result.size, now, now, now + job.capture_interval_seconds * 1000,
+    ).bind(result.sha256, result.size, now, capturedAt, capturedAt + job.capture_interval_seconds * 1000,
       validatorEtag, validatorLastModified, job.capture_id),
     env.DB.prepare(
       "UPDATE capture_jobs SET status = 'succeeded', finished_at = ?, lease_until = NULL, error = NULL WHERE job_id = ?",
-    ).bind(now, job.job_id),
+    ).bind(capturedAt, job.job_id),
     decisionObservationStatement(env.DB, job, result.sha256 === job.current_sha256 ? "unchanged" : "changed", now),
   ]);
-  await pruneCaptureHistory(env, job.capture_id, now);
+  await pruneCaptureHistory(env, job.capture_id, capturedAt);
 }
 
 async function processApiDashboardCapture(message: CaptureMessage, job: CaptureJob, env: CaptureEnv, now: number) {

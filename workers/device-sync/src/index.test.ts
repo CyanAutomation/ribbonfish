@@ -28,6 +28,7 @@ class FakeDatabase {
     this.enrollments = [this.enrollment];
     this.devices = new Map();
     this.playlists = new Map([[`${playlist.id}:${playlist.revision}`, playlist]]);
+    this.captureItems = [];
     this.activePlaylist = { playlist_id: playlist.id, revision: playlist.revision };
     this.lastSeenWrites = 0;
     this.playlistListReads = 0;
@@ -54,7 +55,7 @@ class FakeDatabase {
             playlist_id: value.id,
             revision: value.revision,
             rotation_interval: value.rotation_interval,
-            has_captures: 0,
+            has_captures: database.captureItems.length ? 1 : 0,
           } : null;
         }
         if (sql.includes("FROM active_playlist")) return database.activePlaylist;
@@ -80,6 +81,7 @@ class FakeDatabase {
         return null;
       },
       async all() {
+        if (sql.includes("FROM playlist_capture_items")) return { results: database.captureItems };
         if (sql.includes("FROM playlist_assets")) database.playlistListReads++;
         const value = database.playlists.get(`${values[0]}:${values[1]}`);
         return { results: value?.assets ?? [] };
@@ -174,6 +176,57 @@ test("version 2 playlist endpoint authenticates the device and returns a revisio
   assert.equal(db.playlistListReads, 1, "a matching ETag skips playlist asset reads");
   assert.equal(db.lastSeenWrites, 2, "polls attempt telemetry updates, while D1 applies the write interval");
   assert.equal(db.device.last_seen_at <= Date.now(), true);
+});
+
+test("v3 capture playlist assets include their UTC timestamp and revise when an unchanged image is recaptured", async () => {
+  const { env, db } = testEnvironment();
+  await authorize(db);
+  db.playlists.set("welcome:revision-1", { ...playlist, assets: [] });
+  const capturedAt = 1_798_000_000_000;
+  db.captureItems = [{ position: 0, sha256: digest, size: 4, captured_at: capturedAt }];
+  const request = (headers = {}) => new Request("https://worker.test/v3/playlist", {
+    headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office", ...headers },
+  });
+
+  const first = await fetchHandler(request(), env);
+  assert.equal(first.status, 200);
+  const firstBody = await first.json();
+  assert.equal(firstBody.version, 3);
+  assert.equal(firstBody.assets[0].captured_at, capturedAt);
+
+  db.captureItems = [{ ...db.captureItems[0], captured_at: capturedAt + 60_000 }];
+  const second = await fetchHandler(request({ "If-None-Match": first.headers.get("etag") }), env);
+  assert.equal(second.status, 200, "capture timestamp changes must invalidate the playlist ETag");
+  assert.notEqual(second.headers.get("etag"), first.headers.get("etag"));
+  const secondBody = await second.json();
+  assert.equal(secondBody.assets[0].sha256, digest, "the source screenshot hash remains unchanged");
+  assert.equal(secondBody.assets[0].captured_at, capturedAt + 60_000);
+});
+
+test("v3 capture placeholders do not receive a screenshot timestamp", async () => {
+  const { env, db } = testEnvironment();
+  await authorize(db);
+  db.playlists.set("welcome:revision-1", { ...playlist, assets: [] });
+  db.captureItems = [{ position: 0, sha256: digest, size: 4, captured_at: null }];
+  const response = await fetchHandler(new Request("https://worker.test/v3/playlist", {
+    headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office" },
+  }), env);
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).assets[0], { sha256: digest, size: 4 });
+});
+
+test("v2 playlist responses remain unchanged for strict legacy agents", async () => {
+  const { env, db } = testEnvironment();
+  await authorize(db);
+  db.playlists.set("welcome:revision-1", { ...playlist, assets: [] });
+  db.captureItems = [{ position: 0, sha256: digest, size: 4, captured_at: 1_798_000_000_000 }];
+  const response = await fetchHandler(new Request("https://worker.test/v2/playlist", {
+    headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office" },
+  }), env);
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.version, 2);
+  assert.deepEqual(body.assets[0], { sha256: digest, size: 4 });
 });
 
 test("conditional playlist reads throttle last-seen writes in D1", async () => {

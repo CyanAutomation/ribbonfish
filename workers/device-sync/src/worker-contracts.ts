@@ -60,6 +60,7 @@ export interface PlaylistAssetRow {
   position: number;
   sha256: string;
   size: number;
+  captured_at?: number | null;
 }
 
 export interface AssignedAssetRow {

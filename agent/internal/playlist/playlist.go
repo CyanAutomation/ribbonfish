@@ -8,8 +8,10 @@ import (
 
 // Entry is one item in its configured playlist order.
 type Entry struct {
-	SHA256 string
-	Path   string
+	SHA256        string
+	Path          string
+	CapturedAt    int64
+	HasCapturedAt bool
 }
 
 // Schedule is the rotation contract for one independent display.

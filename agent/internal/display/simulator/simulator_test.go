@@ -112,6 +112,32 @@ func TestSimulatorRendersFramesAtConfiguredDisplayModes(t *testing.T) {
 	}
 }
 
+func TestSimulatorDrawsCaptureBadgeAfterFittingTheFrame(t *testing.T) {
+	backend, err := NewSimulatorWithProfiles(t.TempDir(), map[string]display.ModeSpec{
+		"display-left": {Width: 320, Height: 180},
+	}, display.FitCover)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	source := solidFrame(color.RGBA{R: 80, G: 120, B: 160, A: 255})
+	capturedAt := time.Date(2026, time.November, 19, 14, 32, 0, 0, time.UTC)
+	if err := backend.PresentCaptured(context.Background(), "display-left", source, capturedAt); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, ok := backend.Snapshot("display-left")
+	if !ok {
+		t.Fatal("Snapshot(display-left) is missing")
+	}
+	if got := snapshot.Frame.Bounds(); got != image.Rect(0, 0, 320, 180) {
+		t.Fatalf("simulated frame bounds = %v, want output mode", got)
+	}
+	point := image.Pt(310, 10)
+	if got, want := color.RGBAModel.Convert(snapshot.Frame.At(point.X, point.Y)), color.RGBAModel.Convert(source.At(0, 0)); got == want {
+		t.Fatalf("capture badge was not drawn on fitted output frame: got %#v", got)
+	}
+}
+
 func TestSimulatorPublishesObservableStateAndUpdates(t *testing.T) {
 	backend, err := NewSimulator(t.TempDir())
 	if err != nil {
