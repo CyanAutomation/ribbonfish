@@ -42,8 +42,12 @@ const MAX_CAPTURE_RECOVERIES = 3;
 const MAX_CAPTURE_HISTORY = 10;
 const CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const RUNNING_LEASE_MS = 3 * 60 * 1000;
+const QUEUE_DISPATCH_LEASE_MS = 30 * 1000;
+const QUEUE_REPUBLISH_AFTER_MS = 5 * 60 * 1000;
+const QUEUE_REPUBLISH_MAX_MS = 30 * 60 * 1000;
 const RETRY_DELAYS_SECONDS = [60, 180];
 const RECOVERY_DELAYS_SECONDS = [60, 180, 300];
+const QUEUE_DISPATCH_RETRY_DELAYS_SECONDS = [15, 60, 180, 300];
 export const CAPTURE_DEAD_LETTER_QUEUE_NAME = "ribbonfish-capture-dead-letter";
 const DEFAULT_DAILY_BUDGET_MS = 600_000;
 const DEFAULT_BUDGET_RESERVE_MS = 60_000;
@@ -97,9 +101,6 @@ export class CaptureTargetNotAllowedError extends Error {
 }
 
 export async function enqueueCapture(captureID: string, env: CaptureEnv, { now = Date.now(), scheduled = false } = {}) {
-  if (!env.CAPTURE_QUEUE || typeof env.CAPTURE_QUEUE.send !== "function") {
-    throw new Error("Capture queue is not configured.");
-  }
   const target = await env.DB.prepare(
     "SELECT capture_id, url, capture_interval_seconds, enabled, next_due_at, capture_type FROM capture_targets WHERE capture_id = ?",
   ).bind(captureID).first<{ enabled: number; url: string; capture_interval_seconds: number; next_due_at: number; capture_type: string }>();
@@ -122,25 +123,15 @@ export async function enqueueCapture(captureID: string, env: CaptureEnv, { now =
     const existing = await env.DB.prepare(
       "SELECT job_id, status FROM capture_jobs WHERE capture_id = ? AND status IN ('queued', 'running') ORDER BY created_at DESC LIMIT 1",
     ).bind(captureID).first<{ job_id: string; status: string }>();
+    if (existing?.status === "queued") await dispatchCaptureOutbox(env, now, { jobID: existing.job_id });
     return existing ? { job_id: existing.job_id, queued: false, status: existing.status } : null;
   }
   if (scheduled) {
     await env.DB.prepare("UPDATE capture_targets SET next_due_at = ? WHERE capture_id = ?")
       .bind(now + target.capture_interval_seconds * 1000, captureID).run();
   }
-  try {
-    await env.CAPTURE_QUEUE.send({ job_id: jobID });
-    return { job_id: jobID, queued: true, status: "queued" };
-  } catch (error) {
-    await env.DB.prepare(
-      "UPDATE capture_jobs SET status = 'failed', finished_at = ?, error = ? WHERE job_id = ? AND status = 'queued'",
-    ).bind(now, "Queue publish failed.", jobID).run();
-    if (scheduled) {
-      await env.DB.prepare("UPDATE capture_targets SET next_due_at = ? WHERE capture_id = ?")
-        .bind(now, captureID).run();
-    }
-    throw error;
-  }
+  await dispatchCaptureOutbox(env, now, { jobID });
+  return { job_id: jobID, queued: true, status: "queued" };
 }
 
 export async function dispatchDueCaptures(env: CaptureEnv, now = Date.now()) {
@@ -195,23 +186,50 @@ export async function recoverStaleCaptureJobs(env: CaptureEnv, now = Date.now())
   return { recovered, failed };
 }
 
-/** Publishes durably staged retries. A failed queue send leaves the D1 retry due for the next Cron tick. */
-export async function dispatchCaptureRetries(env: CaptureEnv, now = Date.now()) {
+/** Publishes queued jobs from the D1 outbox, including jobs stranded before their first queue send. */
+export async function dispatchCaptureOutbox(env: CaptureEnv, now = Date.now(), { jobID }: { jobID?: string } = {}) {
   if (!env.CAPTURE_QUEUE || typeof env.CAPTURE_QUEUE.send !== "function") return { enqueued: 0, skipped: true };
   const due = await env.DB.prepare(
-    "SELECT job_id, retry_after_at FROM capture_jobs WHERE status = 'queued' AND retry_after_at <= ? " +
-    "ORDER BY retry_after_at, created_at LIMIT 100",
-  ).bind(now).all<{ job_id: string; retry_after_at: number }>();
+    "SELECT job_id, capture_id, retry_after_at, queue_dispatch_attempts FROM capture_jobs WHERE status = 'queued' " +
+    "AND (retry_after_at IS NULL OR retry_after_at <= ?) " +
+    "AND (queue_dispatch_after_at IS NULL OR queue_dispatch_after_at <= ?) " +
+    "AND (queue_dispatch_lease_until IS NULL OR queue_dispatch_lease_until <= ?) " +
+    "AND (? IS NULL OR job_id = ?) ORDER BY COALESCE(retry_after_at, queue_dispatch_after_at, created_at), created_at LIMIT 100",
+  ).bind(now, now, now, jobID ?? null, jobID ?? null).all<{
+    job_id: string; capture_id: string; retry_after_at: number | null; queue_dispatch_attempts: number;
+  }>();
   let enqueued = 0;
   for (const job of due.results ?? []) {
+    const leaseUntil = now + QUEUE_DISPATCH_LEASE_MS;
+    const claimed = await env.DB.prepare(
+      "UPDATE capture_jobs SET queue_dispatch_lease_until = ?, queue_dispatch_attempts = queue_dispatch_attempts + 1 " +
+      "WHERE job_id = ? AND status = 'queued' AND (retry_after_at IS NULL OR retry_after_at <= ?) " +
+      "AND (queue_dispatch_after_at IS NULL OR queue_dispatch_after_at <= ?) " +
+      "AND (queue_dispatch_lease_until IS NULL OR queue_dispatch_lease_until <= ?)",
+    ).bind(leaseUntil, job.job_id, now, now, now).run();
+    if (claimed.meta?.changes !== 1) continue;
+    const attempt = job.queue_dispatch_attempts + 1;
     try {
       await env.CAPTURE_QUEUE.send({ job_id: job.job_id });
+      const republishAfterAt = now + Math.min(QUEUE_REPUBLISH_AFTER_MS * 2 ** Math.min(attempt - 1, 3), QUEUE_REPUBLISH_MAX_MS);
       await env.DB.prepare(
-        "UPDATE capture_jobs SET retry_after_at = NULL WHERE job_id = ? AND status = 'queued' AND retry_after_at = ?",
-      ).bind(job.job_id, job.retry_after_at).run();
+        "UPDATE capture_jobs SET retry_after_at = NULL, queue_dispatch_after_at = ?, queue_dispatch_lease_until = NULL " +
+        "WHERE job_id = ? AND status = 'queued' AND queue_dispatch_lease_until = ?",
+      ).bind(republishAfterAt, job.job_id, leaseUntil).run();
       enqueued += 1;
+      console.log(JSON.stringify({ event: "capture_queue_published", job_id: job.job_id, capture_id: job.capture_id,
+        dispatch_attempt: attempt, republish_after_at: republishAfterAt }));
     } catch (error) {
-      console.error(JSON.stringify({ event: "capture_retry_publish_failed", job_id: job.job_id,
+      const delaySeconds = QUEUE_DISPATCH_RETRY_DELAYS_SECONDS[
+        Math.min(attempt - 1, QUEUE_DISPATCH_RETRY_DELAYS_SECONDS.length - 1)
+      ];
+      const retryAt = now + delaySeconds * 1000;
+      await env.DB.prepare(
+        "UPDATE capture_jobs SET queue_dispatch_after_at = ?, queue_dispatch_lease_until = NULL " +
+        "WHERE job_id = ? AND status = 'queued' AND queue_dispatch_lease_until = ?",
+      ).bind(retryAt, job.job_id, leaseUntil).run();
+      console.error(JSON.stringify({ event: "capture_queue_publish_failed", job_id: job.job_id, capture_id: job.capture_id,
+        dispatch_attempt: attempt, retry_after_at: retryAt,
         message: String(error instanceof Error ? error.message : error).slice(0, 160) }));
     }
   }
@@ -247,7 +265,8 @@ async function stageCaptureRecovery(env: CaptureEnv, job: RecoveryJob, now: numb
     const error = "Capture stopped after its retry recovery limit was reached.";
     const result = await env.DB.batch([
       env.DB.prepare(
-        "UPDATE capture_jobs SET status = 'failed', finished_at = ?, lease_until = NULL, retry_after_at = NULL, error = ? " +
+        "UPDATE capture_jobs SET status = 'failed', finished_at = ?, lease_until = NULL, retry_after_at = NULL, " +
+        "queue_dispatch_after_at = NULL, queue_dispatch_lease_until = NULL, error = ? " +
         "WHERE job_id = ? AND status = ? AND recovery_attempts >= ? AND (status = 'queued' OR lease_until IS NULL OR lease_until <= ?)",
       ).bind(now, error, job.job_id, job.status, MAX_CAPTURE_RECOVERIES, now),
       env.DB.prepare(
@@ -267,6 +286,7 @@ async function stageCaptureRecovery(env: CaptureEnv, job: RecoveryJob, now: numb
   const retryAfterAt = now + delaySeconds * 1000;
   const result = await env.DB.prepare(
     "UPDATE capture_jobs SET status = 'queued', retry_cycle_attempts = 0, recovery_attempts = ?, retry_after_at = ?, " +
+    "queue_dispatch_attempts = 0, queue_dispatch_after_at = NULL, queue_dispatch_lease_until = NULL, " +
     "lease_until = NULL, finished_at = NULL, error = ? WHERE job_id = ? AND status = ? AND recovery_attempts = ? " +
     "AND (status = 'queued' OR lease_until IS NULL OR lease_until <= ?)",
   ).bind(recoveryAttempts, retryAfterAt, reason, job.job_id, job.status, job.recovery_attempts, now).run();
@@ -375,7 +395,8 @@ async function claimCaptureJob(message: CaptureMessage, env: CaptureEnv, now: nu
   }
 
   const claimed = await env.DB.prepare(
-    "UPDATE capture_jobs SET status = 'running', attempts = attempts + 1, retry_cycle_attempts = retry_cycle_attempts + 1, retry_after_at = NULL, started_at = ?, lease_until = ?, error = NULL " +
+    "UPDATE capture_jobs SET status = 'running', attempts = attempts + 1, retry_cycle_attempts = retry_cycle_attempts + 1, " +
+    "retry_after_at = NULL, queue_dispatch_after_at = NULL, queue_dispatch_lease_until = NULL, started_at = ?, lease_until = ?, error = NULL " +
     "WHERE job_id = ? AND (status = 'queued' OR (status = 'running' AND lease_until <= ?))",
   ).bind(now, now + RUNNING_LEASE_MS, jobID, now).run();
   if (claimed.meta?.changes !== 1) {
@@ -826,7 +847,8 @@ async function handleCaptureFailure(env: CaptureEnv, message: CaptureMessage, jo
     const retryAfterAt = now + delaySeconds * 1000;
     await env.DB.batch([
       env.DB.prepare(
-        "UPDATE capture_jobs SET status = 'queued', lease_until = NULL, retry_after_at = ?, error = ? WHERE job_id = ? AND status = 'running'",
+        "UPDATE capture_jobs SET status = 'queued', lease_until = NULL, retry_after_at = ?, queue_dispatch_attempts = 0, " +
+        "queue_dispatch_after_at = NULL, queue_dispatch_lease_until = NULL, error = ? WHERE job_id = ? AND status = 'running'",
       ).bind(retryAfterAt, errorMessage, job.job_id),
       env.DB.prepare("UPDATE capture_targets SET last_attempt_at = ?, last_error = ? WHERE capture_id = ?")
         .bind(now, errorMessage, job.capture_id),
@@ -842,7 +864,8 @@ async function markJobFinished(env: CaptureEnv, jobID: string, captureID: string
   intervalSeconds = DEFAULT_CAPTURE_INTERVAL_SECONDS, scheduledDueAt: number | null = null) {
   await env.DB.batch([
     env.DB.prepare(
-      "UPDATE capture_jobs SET status = ?, finished_at = ?, lease_until = NULL, error = ? WHERE job_id = ?",
+      "UPDATE capture_jobs SET status = ?, finished_at = ?, lease_until = NULL, queue_dispatch_after_at = NULL, " +
+      "queue_dispatch_lease_until = NULL, error = ? WHERE job_id = ?",
     ).bind(status, now, error, jobID),
     env.DB.prepare(
       "UPDATE capture_targets SET last_attempt_at = ?, last_error = ?, failure_count = failure_count + 1, next_due_at = ? WHERE capture_id = ?",
