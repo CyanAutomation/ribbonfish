@@ -40,8 +40,9 @@ type PlaylistSnapshot struct {
 }
 
 type PlaylistAsset struct {
-	SHA256 string `json:"sha256"`
-	Size   int64  `json:"size"`
+	SHA256     string `json:"sha256"`
+	Size       int64  `json:"size"`
+	CapturedAt *int64 `json:"captured_at,omitempty"`
 }
 
 // Update carries a fully fetched and verified snapshot ready for activation.
@@ -129,20 +130,32 @@ func (c *HTTPClient) Synchronize(ctx context.Context, hardware, active config.Co
 	if err := ctx.Err(); err != nil {
 		return Update{}, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("v2/playlist"), nil)
-	if err != nil {
-		return Update{}, fmt.Errorf("create snapshot request: %w", err)
+	var response *http.Response
+	for _, endpoint := range []string{"v3/playlist", "v2/playlist"} {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint(endpoint), nil)
+		if err != nil {
+			return Update{}, fmt.Errorf("create snapshot request: %w", err)
+		}
+		request.Header.Set("Accept", "application/json")
+		if c.etag != "" {
+			request.Header.Set("If-None-Match", c.etag)
+		}
+		if err := c.authorize(request, nil); err != nil {
+			return Update{}, fmt.Errorf("sign snapshot request: %w", err)
+		}
+		response, err = c.http.Do(request)
+		if err != nil {
+			return Update{}, fmt.Errorf("fetch snapshot: %w", err)
+		}
+		if endpoint == "v3/playlist" && response.StatusCode == http.StatusNotFound {
+			_ = response.Body.Close()
+			response = nil
+			continue
+		}
+		break
 	}
-	request.Header.Set("Accept", "application/json")
-	if c.etag != "" {
-		request.Header.Set("If-None-Match", c.etag)
-	}
-	if err := c.authorize(request, nil); err != nil {
-		return Update{}, fmt.Errorf("sign snapshot request: %w", err)
-	}
-	response, err := c.http.Do(request)
-	if err != nil {
-		return Update{}, fmt.Errorf("fetch snapshot: %w", err)
+	if response == nil {
+		return Update{}, errors.New("fetch snapshot: no supported playlist endpoint")
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusNotModified {
@@ -311,7 +324,7 @@ func decodePlaylistSnapshot(reader io.Reader) (PlaylistSnapshot, error) {
 }
 
 func validatePlaylistSnapshot(snapshot PlaylistSnapshot, hardware config.Config) error {
-	if snapshot.Version != 2 {
+	if snapshot.Version != 2 && snapshot.Version != 3 {
 		return fmt.Errorf("unsupported playlist snapshot version %d", snapshot.Version)
 	}
 	if !validID(snapshot.Revision) {
@@ -340,6 +353,12 @@ func validatePlaylistSnapshot(snapshot PlaylistSnapshot, hardware config.Config)
 		}
 		if asset.Size <= 0 || asset.Size > assetLimit {
 			return fmt.Errorf("playlist %q has invalid or excessive image size %d", snapshot.ID, asset.Size)
+		}
+		if asset.CapturedAt != nil && (*asset.CapturedAt <= 0 || *asset.CapturedAt > 9_007_199_254_740_991) {
+			return fmt.Errorf("playlist %q has an invalid capture timestamp", snapshot.ID)
+		}
+		if snapshot.Version == 2 && asset.CapturedAt != nil {
+			return fmt.Errorf("playlist %q uses capture timestamps without version 3", snapshot.ID)
 		}
 		digest := strings.ToLower(asset.SHA256)
 		if previous, exists := assets[digest]; exists && previous != asset.Size {
@@ -374,7 +393,7 @@ func mergePlaylistSnapshot(hardware config.Config, snapshot PlaylistSnapshot, as
 		if !ok || asset.Path == "" {
 			return config.Config{}, fmt.Errorf("image %s is not cached", digest)
 		}
-		candidate.Playlist.Assets = append(candidate.Playlist.Assets, config.AssetConfig{Path: asset.Path, SHA256: digest})
+		candidate.Playlist.Assets = append(candidate.Playlist.Assets, config.AssetConfig{Path: asset.Path, SHA256: digest, CapturedAt: item.CapturedAt})
 	}
 	if err := candidate.Validate(); err != nil {
 		return config.Config{}, fmt.Errorf("validate merged content: %w", err)

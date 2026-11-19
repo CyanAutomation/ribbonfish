@@ -93,6 +93,15 @@ func NewSimulatorWithProfiles(outputDir string, profiles map[string]display.Mode
 // Present writes one complete PNG and then publishes the new state. Failures
 // before the atomic rename leave the previous PNG and snapshot intact.
 func (s *Simulator) Present(ctx context.Context, displayID string, frame image.Image) error {
+	return s.present(ctx, displayID, frame, nil)
+}
+
+// PresentCaptured overlays capture metadata on the fitted output frame.
+func (s *Simulator) PresentCaptured(ctx context.Context, displayID string, frame image.Image, capturedAt time.Time) error {
+	return s.present(ctx, displayID, frame, &capturedAt)
+}
+
+func (s *Simulator) present(ctx context.Context, displayID string, frame image.Image, capturedAt *time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -133,6 +142,9 @@ func (s *Simulator) Present(ctx context.Context, displayID string, frame image.I
 			return fmt.Errorf("render display %q at %dx%d: %w", displayID, mode.Width, mode.Height, err)
 		}
 		outputFrame = rendered
+	}
+	if capturedAt != nil {
+		outputFrame = display.DrawCaptureTimestampBadge(outputFrame, *capturedAt)
 	}
 	temporary, err := os.CreateTemp(s.root, ".ribbonfish-frame-")
 	if err != nil {

@@ -90,7 +90,7 @@ func TestKeyHTTPClientSignsPlaylistAndAssetRequests(t *testing.T) {
 	pngBytes := syncerPNG(t, color.RGBA{R: 60, G: 120, B: 210, A: 255})
 	digest := fmt.Sprintf("%x", sha256.Sum256(pngBytes))
 	snapshotBytes, err := json.Marshal(PlaylistSnapshot{
-		Version: 2, Revision: "revision-key", ID: "welcome", RotationInterval: "30s",
+		Version: 3, Revision: "revision-key", ID: "welcome", RotationInterval: "30s",
 		Assets: []PlaylistAsset{{SHA256: digest, Size: int64(len(pngBytes))}},
 	})
 	if err != nil {
@@ -111,7 +111,7 @@ func TestKeyHTTPClientSignsPlaylistAndAssetRequests(t *testing.T) {
 			t.Error("key-based request also sent a bearer token")
 		}
 		switch r.URL.Path {
-		case "/api/v2/playlist":
+		case "/api/v3/playlist":
 			if r.Header.Get("If-None-Match") == `"revision-key"` {
 				w.WriteHeader(http.StatusNotModified)
 				return

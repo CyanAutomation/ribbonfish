@@ -161,7 +161,7 @@ func prepareState(ctx context.Context, cfg config.Config, imageCache cache.Store
 				return nil, fmt.Errorf("snapshot asset %s is unavailable or invalid: %w", digest, err)
 			}
 			normalized.Playlist.Assets[assetIndex].SHA256 = digest
-			playlistEntries = append(playlistEntries, playlist.Entry{SHA256: digest, Path: source.Path})
+			playlistEntries = append(playlistEntries, entryForAsset(source, digest))
 			retained[digest] = struct{}{}
 			continue
 		}
@@ -169,7 +169,7 @@ func prepareState(ctx context.Context, cfg config.Config, imageCache cache.Store
 			digest := strings.ToLower(source.SHA256)
 			if _, err := imageCache.Load(ctx, cache.Asset{SHA256: digest}); err == nil {
 				normalized.Playlist.Assets[assetIndex].SHA256 = digest
-				playlistEntries = append(playlistEntries, playlist.Entry{SHA256: digest, Path: source.Path})
+				playlistEntries = append(playlistEntries, entryForAsset(source, digest))
 				retained[digest] = struct{}{}
 				continue
 			}
@@ -193,7 +193,7 @@ func prepareState(ctx context.Context, cfg config.Config, imageCache cache.Store
 			logger.Warn("could not close playlist source image", "playlist_id", cfg.Playlist.ID, "path", source.Path, "error", closeErr)
 		}
 		normalized.Playlist.Assets[assetIndex].SHA256 = asset.SHA256
-		playlistEntries = append(playlistEntries, playlist.Entry{SHA256: asset.SHA256, Path: source.Path})
+		playlistEntries = append(playlistEntries, entryForAsset(normalized.Playlist.Assets[assetIndex], asset.SHA256))
 		retained[asset.SHA256] = struct{}{}
 	}
 	if pruneBefore && ctx.Err() == nil {
@@ -229,6 +229,15 @@ func prepareState(ctx context.Context, cfg config.Config, imageCache cache.Store
 	idle := make(chan struct{})
 	close(idle)
 	return &playbackState{config: normalized, scheduler: scheduler, displays: schedules, retained: sortedKeys(retained), idle: idle}, nil
+}
+
+func entryForAsset(asset config.AssetConfig, digest string) playlist.Entry {
+	entry := playlist.Entry{SHA256: digest, Path: asset.Path}
+	if asset.CapturedAt != nil {
+		entry.CapturedAt = *asset.CapturedAt
+		entry.HasCapturedAt = true
+	}
+	return entry
 }
 
 // Run starts one independent playback loop per configured display and waits
@@ -394,15 +403,15 @@ func (a *Agent) runDynamicDisplay(ctx context.Context, displayID string) {
 			}
 			a.setOutputState(displayID, "failed", code)
 		}
-		if available && entry.SHA256 != lastDisplayed {
-			if err := a.output.Present(ctx, displayID, frame); err != nil {
+		if available && presentationKey(entry) != lastDisplayed {
+			if err := a.presentFrame(ctx, displayID, entry, frame); err != nil {
 				a.setOutputState(displayID, "failed", health.ErrorCode(err))
 				if ctx.Err() == nil {
 					a.logger.Error("could not present display frame; keeping last good output", "display_id", displayID, "error", err)
 				}
 			} else {
 				a.setOutputState(displayID, "ready", "")
-				lastDisplayed = entry.SHA256
+				lastDisplayed = presentationKey(entry)
 				a.logger.Info("display frame updated", "display_id", displayID, "asset_sha256", entry.SHA256)
 			}
 		}
@@ -464,15 +473,15 @@ func (a *Agent) runDisplay(ctx context.Context, schedule playlist.Schedule) {
 			}
 			a.setOutputState(schedule.DisplayID, "failed", code)
 		}
-		if available && entry.SHA256 != lastDisplayed {
-			if err := a.output.Present(ctx, schedule.DisplayID, frame); err != nil {
+		if available && presentationKey(entry) != lastDisplayed {
+			if err := a.presentFrame(ctx, schedule.DisplayID, entry, frame); err != nil {
 				a.setOutputState(schedule.DisplayID, "failed", health.ErrorCode(err))
 				if ctx.Err() == nil {
 					a.logger.Error("could not present display frame; keeping last good output", "display_id", schedule.DisplayID, "error", err)
 				}
 			} else {
 				a.setOutputState(schedule.DisplayID, "ready", "")
-				lastDisplayed = entry.SHA256
+				lastDisplayed = presentationKey(entry)
 				a.logger.Info("display frame updated", "display_id", schedule.DisplayID, "asset_sha256", entry.SHA256)
 			}
 		}
@@ -527,6 +536,31 @@ func (a *Agent) currentFrameFor(ctx context.Context, scheduler playlist.Schedule
 	return playlist.Entry{}, nil, false
 }
 
+func presentationKey(entry playlist.Entry) string {
+	if !entry.HasCapturedAt {
+		return entry.SHA256
+	}
+	return fmt.Sprintf("%s:%d", entry.SHA256, entry.CapturedAt)
+}
+
+func (a *Agent) presentFrame(ctx context.Context, displayID string, entry playlist.Entry, frame image.Image) error {
+	if entry.HasCapturedAt && entry.CapturedAt > 0 {
+		capturedAt := time.UnixMilli(entry.CapturedAt).UTC()
+		if timestamped, ok := a.output.(display.TimestampedOutput); ok {
+			return timestamped.PresentCaptured(ctx, displayID, frame, capturedAt)
+		}
+		frame = drawCaptureBadge(frame, entry.CapturedAt, true)
+	}
+	return a.output.Present(ctx, displayID, frame)
+}
+
+func drawCaptureBadge(source image.Image, capturedAt int64, hasCaptureTime bool) image.Image {
+	if !hasCaptureTime || capturedAt <= 0 {
+		return source
+	}
+	return display.DrawCaptureTimestampBadge(source, time.UnixMilli(capturedAt).UTC())
+}
+
 func sameHardware(left, right config.Config) bool {
 	if left.Cache.Directory != right.Cache.Directory || left.Cache.MaxBytes != right.Cache.MaxBytes ||
 		left.Output.EffectiveBackend() != right.Output.EffectiveBackend() || left.Output.Directory != right.Output.Directory ||
@@ -550,6 +584,12 @@ func sameHardware(left, right config.Config) bool {
 func cloneConfig(source config.Config) config.Config {
 	clone := source
 	clone.Playlist.Assets = append([]config.AssetConfig(nil), source.Playlist.Assets...)
+	for index := range clone.Playlist.Assets {
+		if source.Playlist.Assets[index].CapturedAt != nil {
+			capturedAt := *source.Playlist.Assets[index].CapturedAt
+			clone.Playlist.Assets[index].CapturedAt = &capturedAt
+		}
+	}
 	clone.Displays = append([]config.DisplayConfig(nil), source.Displays...)
 	return clone
 }

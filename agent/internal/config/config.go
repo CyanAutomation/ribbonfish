@@ -46,8 +46,9 @@ type PlaylistConfig struct {
 }
 
 type AssetConfig struct {
-	Path   string `json:"path"`
-	SHA256 string `json:"sha256,omitempty"`
+	Path       string `json:"path"`
+	SHA256     string `json:"sha256,omitempty"`
+	CapturedAt *int64 `json:"captured_at,omitempty"`
 }
 
 type DisplayConfig struct {
@@ -171,6 +172,9 @@ func (c Config) Validate() error {
 			if err != nil || len(decoded) != 32 {
 				problems = append(problems, fmt.Errorf("playlist.assets[%d].sha256 must be a 64-character hexadecimal SHA-256 digest", i))
 			}
+		}
+		if asset.CapturedAt != nil && (*asset.CapturedAt <= 0 || *asset.CapturedAt > 9_007_199_254_740_991) {
+			problems = append(problems, fmt.Errorf("playlist.assets[%d].captured_at must be a positive Unix millisecond timestamp", i))
 		}
 	}
 

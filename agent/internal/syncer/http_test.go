@@ -39,15 +39,27 @@ func TestValidatePlaylistSnapshotAcceptsOnlySupportedRotationIntervals(t *testin
 	}
 }
 
+func TestValidatePlaylistSnapshotRejectsInvalidCaptureTimes(t *testing.T) {
+	hardware := syncerConfig()
+	for _, capturedAt := range []int64{-1, 9_007_199_254_740_992} {
+		snapshot := PlaylistSnapshot{Version: 2, Revision: "r-1", ID: "welcome", RotationInterval: "90s",
+			Assets: []PlaylistAsset{{SHA256: strings.Repeat("a", 64), Size: 1, CapturedAt: &capturedAt}}}
+		if err := validatePlaylistSnapshot(snapshot, hardware); err == nil {
+			t.Errorf("capture time %d unexpectedly accepted", capturedAt)
+		}
+	}
+}
+
 func TestHTTPClientDownloadsVerifiedContentAndUsesETag(t *testing.T) {
 	pngBytes := syncerPNG(t, color.RGBA{G: 210, A: 255})
 	digest := fmt.Sprintf("%x", sha256.Sum256(pngBytes))
+	capturedAt := int64(1_798_000_000_000)
 	snapshot := PlaylistSnapshot{
-		Version:          2,
+		Version:          3,
 		Revision:         "revision-2",
 		ID:               "welcome",
 		RotationInterval: "30s",
-		Assets:           []PlaylistAsset{{SHA256: digest, Size: int64(len(pngBytes))}},
+		Assets:           []PlaylistAsset{{SHA256: digest, Size: int64(len(pngBytes)), CapturedAt: &capturedAt}},
 	}
 	snapshotBytes, err := json.Marshal(snapshot)
 	if err != nil {
@@ -60,7 +72,7 @@ func TestHTTPClientDownloadsVerifiedContentAndUsesETag(t *testing.T) {
 			return
 		}
 		switch r.URL.Path {
-		case "/v2/playlist":
+		case "/v3/playlist":
 			if r.Header.Get("X-Ribbonfish-Device-ID") != "pi-office" {
 				http.Error(w, "device id missing", http.StatusUnauthorized)
 				return
@@ -103,6 +115,9 @@ func TestHTTPClientDownloadsVerifiedContentAndUsesETag(t *testing.T) {
 	if asset.SHA256 != digest {
 		t.Fatalf("asset digest = %q, want %q", asset.SHA256, digest)
 	}
+	if asset.CapturedAt == nil || *asset.CapturedAt != capturedAt {
+		t.Fatalf("asset capture time = %v, want %d", asset.CapturedAt, capturedAt)
+	}
 	if _, err := store.Load(context.Background(), cache.Asset{SHA256: digest}); err != nil {
 		t.Fatalf("downloaded asset not available in cache: %v", err)
 	}
@@ -117,11 +132,55 @@ func TestHTTPClientDownloadsVerifiedContentAndUsesETag(t *testing.T) {
 	}
 }
 
+func TestHTTPClientFallsBackToV2WhenV3IsUnavailable(t *testing.T) {
+	pngBytes := syncerPNG(t, color.RGBA{B: 180, A: 255})
+	digest := fmt.Sprintf("%x", sha256.Sum256(pngBytes))
+	snapshotBytes, err := json.Marshal(PlaylistSnapshot{
+		Version: 2, Revision: "legacy-revision", ID: "welcome", RotationInterval: "30s",
+		Assets: []PlaylistAsset{{SHA256: digest, Size: int64(len(pngBytes))}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/v3/playlist":
+			http.NotFound(w, r)
+		case "/v2/playlist":
+			w.Header().Set("ETag", `"legacy-revision"`)
+			_, _ = w.Write(snapshotBytes)
+		case "/v2/assets/" + digest:
+			_, _ = w.Write(pngBytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewHTTPClient(server.URL, "pi-office", testDeviceToken, syncerStore(t), server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hardware := syncerConfig()
+	update, err := client.Synchronize(context.Background(), hardware, hardware)
+	if err != nil {
+		t.Fatalf("Synchronize() fallback error = %v", err)
+	}
+	if update.Snapshot.Version != 2 || update.Config.Playlist.Assets[0].CapturedAt != nil {
+		t.Fatalf("fallback snapshot = %#v, want timestamp-free v2 content", update.Snapshot)
+	}
+	if len(paths) < 3 || paths[0] != "/v3/playlist" || paths[1] != "/v2/playlist" {
+		t.Fatalf("request paths = %v, want v3 then v2 followed by the asset", paths)
+	}
+}
+
 func TestHTTPClientAcceptsWeakPlaylistSnapshotETag(t *testing.T) {
 	pngBytes := syncerPNG(t, color.RGBA{R: 140, B: 180, A: 255})
 	digest := fmt.Sprintf("%x", sha256.Sum256(pngBytes))
 	snapshot := PlaylistSnapshot{
-		Version:          2,
+		Version:          3,
 		Revision:         "revision-weak",
 		ID:               "welcome",
 		RotationInterval: "30s",
@@ -137,7 +196,7 @@ func TestHTTPClientAcceptsWeakPlaylistSnapshotETag(t *testing.T) {
 			return
 		}
 		switch r.URL.Path {
-		case "/v2/playlist":
+		case "/v3/playlist":
 			if r.Header.Get("If-None-Match") == `"revision-weak"` {
 				w.WriteHeader(http.StatusNotModified)
 				return
@@ -179,7 +238,7 @@ func TestHTTPClientRejectsImageDigestMismatchAndRestoresActivePins(t *testing.T)
 	pngBytes := syncerPNG(t, color.RGBA{R: 220, A: 255})
 	wrongDigest := strings.Repeat("0", 64)
 	snapshotBytes, err := json.Marshal(PlaylistSnapshot{
-		Version:          2,
+		Version:          3,
 		Revision:         "revision-bad",
 		ID:               "welcome",
 		RotationInterval: "30s",
@@ -189,7 +248,7 @@ func TestHTTPClientRejectsImageDigestMismatchAndRestoresActivePins(t *testing.T)
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v2/playlist" {
+		if r.URL.Path == "/v3/playlist" {
 			w.Header().Set("ETag", `"revision-bad"`)
 			_, _ = w.Write(snapshotBytes)
 			return
@@ -268,7 +327,7 @@ func TestHTTPClientRejectsChunkedOversizedAssetWithoutCaching(t *testing.T) {
 	pngData := syncerPNG(t, color.RGBA{R: 150, A: 255})
 	digest := fmt.Sprintf("%x", sha256.Sum256(pngData))
 	snapshotBytes, err := json.Marshal(PlaylistSnapshot{
-		Version:          2,
+		Version:          3,
 		Revision:         "wrong-size",
 		ID:               "welcome",
 		RotationInterval: "30s",
@@ -278,7 +337,7 @@ func TestHTTPClientRejectsChunkedOversizedAssetWithoutCaching(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v2/playlist" {
+		if r.URL.Path == "/v3/playlist" {
 			_, _ = w.Write(snapshotBytes)
 			return
 		}
@@ -305,7 +364,7 @@ func TestHTTPClientRejectsCachedAssetWithWrongPlaylistSnapshotSize(t *testing.T)
 	pngData := syncerPNG(t, color.RGBA{G: 150, A: 255})
 	digest := fmt.Sprintf("%x", sha256.Sum256(pngData))
 	snapshotBytes, err := json.Marshal(PlaylistSnapshot{
-		Version:          2,
+		Version:          3,
 		Revision:         "cached-wrong-size",
 		ID:               "welcome",
 		RotationInterval: "30s",
@@ -315,7 +374,7 @@ func TestHTTPClientRejectsCachedAssetWithWrongPlaylistSnapshotSize(t *testing.T)
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v2/playlist" {
+		if r.URL.Path == "/v3/playlist" {
 			_, _ = w.Write(snapshotBytes)
 			return
 		}

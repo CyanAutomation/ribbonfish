@@ -7,6 +7,7 @@ import (
 	"image"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/CyanAutomation/ribbonfish/agent/internal/display"
 )
@@ -149,6 +150,15 @@ func (output *Output) DisplayAvailable(displayID string) bool {
 
 // Present writes a frame to the configured connector for displayID.
 func (output *Output) Present(ctx context.Context, displayID string, frame image.Image) error {
+	return output.present(ctx, displayID, frame, nil)
+}
+
+// PresentCaptured overlays capture metadata after KMS mode fitting.
+func (output *Output) PresentCaptured(ctx context.Context, displayID string, frame image.Image, capturedAt time.Time) error {
+	return output.present(ctx, displayID, frame, &capturedAt)
+}
+
+func (output *Output) present(ctx context.Context, displayID string, frame image.Image, capturedAt *time.Time) error {
 	output.mu.RLock()
 	defer output.mu.RUnlock()
 	if output.closed {
@@ -162,6 +172,14 @@ func (output *Output) Present(ctx context.Context, displayID string, frame image
 			}
 		}
 		return fmt.Errorf("unknown DRM display %q", displayID)
+	}
+	if capturedAt != nil {
+		if timestamped, ok := surface.(interface {
+			PresentCaptured(context.Context, image.Image, time.Time) error
+		}); ok {
+			return timestamped.PresentCaptured(ctx, frame, *capturedAt)
+		}
+		frame = display.DrawCaptureTimestampBadge(frame, *capturedAt)
 	}
 	return surface.Present(ctx, frame)
 }
