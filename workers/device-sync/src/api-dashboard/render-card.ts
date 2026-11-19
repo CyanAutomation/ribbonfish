@@ -4,6 +4,7 @@ import {
   svgFreshnessBadge,
   svgGroupSummary,
   svgPanel,
+  svgProviderIdentity,
   svgServiceRow,
   svgSourceNotice,
   svgStatusDot,
@@ -16,7 +17,7 @@ import { dashboardColors as colors, healthOrder, sourceHealth } from "./render-h
 type ServiceDisplayRow =
   | { kind: "group"; name: string }
   | { kind: "empty"; name: string }
-  | { kind: "summary"; count: number; history: string[] }
+  | { kind: "summary"; count: number }
   | { kind: "service"; component: DashboardSource["components"][number] };
 
 type CardProps = {
@@ -94,21 +95,6 @@ function freshnessColor(source: DashboardSource): string {
   return colors.stale;
 }
 
-function recentGroupChecks(components: DashboardSource["components"], fetchedAt: string): string[] {
-  const reference = Date.parse(fetchedAt);
-  if (!Number.isFinite(reference)) return [];
-  const buckets: Array<Health | undefined> = Array.from({ length: 12 }, () => undefined);
-  const rank = (health: Health) => ({ down: 0, degraded: 1, stale: 2, pending: 3, unknown: 4, maintenance: 5, operational: 6 })[health];
-  for (const component of components) for (const beat of component.history ?? []) {
-    const age = reference - Date.parse(beat.at);
-    if (!Number.isFinite(age) || age < 0 || age >= 24 * 60 * 60_000) continue;
-    const index = 11 - Math.floor(age / (2 * 60 * 60_000));
-    const existing = buckets[index];
-    if (!existing || rank(beat.status) < rank(existing)) buckets[index] = beat.status;
-  }
-  return buckets.some(Boolean) ? buckets.map((state) => state ?? "unknown") : [];
-}
-
 function addGroupRows(
   rows: ServiceDisplayRow[],
   source: DashboardSource,
@@ -131,22 +117,15 @@ function addGroupRows(
     const visible = components.slice(0, 8);
     for (const component of visible) rows.push({ kind: "service", component });
     const operationalOverflow = components.slice(8).filter((component) => component.status === "operational").length;
-    if (operationalOverflow) rows.push({ kind: "summary", count: operationalOverflow, history: [] });
+    if (operationalOverflow) rows.push({ kind: "summary", count: operationalOverflow });
   } else if (issues.length) {
     issues.sort((a, b) => healthOrder(a.status) - healthOrder(b.status) || (a.componentOrder ?? 0) - (b.componentOrder ?? 0));
     for (const component of issues) rows.push({ kind: "service", component });
-    if (operationalCount) rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components.filter((component) => component.status === "operational"), source.fetchedAt) });
-  } else if (source.provider === "uptime-kuma" && components.length <= 16 && components.some((component) => component.history?.length)) {
-    rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components, source.fetchedAt) });
-    for (const component of components) rows.push({ kind: "service", component });
-  } else if (source.provider === "uptime-kuma" && components.length <= 16) {
-    for (const component of components) rows.push({ kind: "service", component });
+    if (operationalCount) rows.push({ kind: "summary", count: operationalCount });
   } else if (source.provider === "uptime-kuma") {
-    const visible = components.slice(0, 16);
-    for (const component of visible) rows.push({ kind: "service", component });
-    rows.push({ kind: "summary", count: components.length - visible.length, history: recentGroupChecks(components, source.fetchedAt) });
+    rows.push({ kind: "summary", count: operationalCount });
   } else {
-    rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components, source.fetchedAt) });
+    rows.push({ kind: "summary", count: operationalCount });
   }
 }
 
@@ -215,7 +194,7 @@ function buildCardLayout(props: CardProps): CardLayout {
   const visibleServices = rows.reduce((count, row) => count + (row.kind === "service" ? 1 : row.kind === "summary" ? row.count : 0), 0);
   const hiddenServices = Math.max(0, services.length - visibleServices);
   const hiddenGroups = Math.max(0, serviceRows.filter((row) => row.kind === "group").length - rows.filter((row) => row.kind === "group").length);
-  const contentY = y + s(contentOffset) + Math.max(0, (contentAreaHeight - rows.length * lineHeight) / 2);
+  const contentY = y + s(contentOffset) + s(8);
   const sourceHealthLabel = health === "stale" ? "Stale" : healthLabel[health];
   const sourceStatusLabel = source.disabled ? "Disabled" : source.freshness !== "fresh" ? "Service status unknown" : `Services: ${sourceHealthLabel}`;
   const statusTextWidth = sourceStatusLabel.length * s(compact ? 6.5 : 9);
@@ -232,7 +211,8 @@ function buildCardLayout(props: CardProps): CardLayout {
 function renderFullCardHeader(layout: CardLayout): string {
   const { source, x, y, width, scale, pad, left, health, statusDotX, statusTextX } = layout;
   const s = (n: number) => n * scale;
-  const sourceIdentity = source.hostname ?? (source.provider === "uptime-kuma" ? "Uptime Kuma" : "Statuspage");
+  const sourceProvider = source.provider === "uptime-kuma" ? "Uptime Kuma" : "Statuspage";
+  const sourceIdentity = source.hostname ?? "Public status page";
   const freshnessLabel = [freshnessDescription(source), formatFetched(source.fetchedAt)].filter(Boolean).join(" · ");
   const freshnessTextWidth = freshnessLabel.length * s(9);
   const freshnessX = x + width - pad - freshnessTextWidth - s(12);
@@ -242,7 +222,7 @@ function renderFullCardHeader(layout: CardLayout): string {
   const freshnessY = y + s(stacked ? 92 : 70);
   const statusY = y + s(stacked ? 116 : 96);
   const statusDotY = y + s(stacked ? 110 : 90);
-  let svg = `<text x="${left}" y="${y + s(70)}" fill="#d0dbea" font-size="${s(17)}">${svgText(truncateText(sourceIdentity, identityMax))}</text>`;
+  let svg = svgProviderIdentity(left, y + s(70), scale, sourceProvider, truncateText(sourceIdentity, Math.max(8, identityMax - sourceProvider.length - 3)));
   svg += svgFreshnessBadge(stacked ? left : freshnessX, freshnessY, scale, freshnessLabel, freshnessColor(source));
   svg += svgStatusDot(statusDotX, statusDotY, s(7), colors[health]);
   svg += `<text x="${statusTextX}" y="${statusY}" fill="${svgText(colors[health])}" font-size="${s(16)}" font-weight="700">${svgText(layout.sourceStatusLabel)}</text>`;
@@ -275,7 +255,7 @@ function renderServiceDisplayRow(row: ServiceDisplayRow, layout: CardLayout, row
     return `<text x="${left + s(16)}" y="${rowY}" fill="#aab8ca" font-size="${s(compact ? 11 : 14)}">No services reported</text>`;
   }
   if (row.kind === "summary") {
-    return svgGroupSummary({ x: left + s(16), y: rowY, right: x + width - pad, scale, label: "operational", count: row.count, history: row.history });
+    return svgGroupSummary({ x: left + s(16), y: rowY, scale, label: "operational", count: row.count });
   }
   const { name, status } = row.component;
   const unconfirmed = source.freshness !== "fresh" && status !== "stale";
@@ -292,7 +272,6 @@ function renderServiceDisplayRow(row: ServiceDisplayRow, layout: CardLayout, row
   const statusMeta = conciseUnconfirmed ? undefined : [
     (staleReading || unconfirmed) && sampledTime ? (lastKnown ? sampledTime : `Last check ${sampledTime}`) : stateChangeTime ? `Since ${stateChangeTime}` : status !== "operational" && sampledTime ? `Checked ${sampledTime}` : undefined,
     sampledAge,
-    !unconfirmed && typeof row.component.latencyMs === "number" && Number.isFinite(row.component.latencyMs) ? `${Math.round(row.component.latencyMs)} ms` : undefined,
   ].filter(Boolean).join(" · ") || undefined;
   const conciseAge = sampledAge?.replace(/(\d+)h (\d+)m old/, "$1h$2m").replace(/(\d+)m old/, "$1m");
   const displayStatus = conciseUnconfirmed

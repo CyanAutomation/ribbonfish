@@ -1,6 +1,6 @@
 import { Resvg, initWasm } from "@resvg/resvg-wasm";
 import { healthLabel, overallHealth, type DashboardSource, type Health } from "./model.ts";
-import { svgHealthLegend, svgHealthOverview, svgStatusBadge, svgText } from "./render-components.ts";
+import { svgHealthOverview, svgStatusBadge, svgText } from "./render-components.ts";
 import { renderCard } from "./render-card.ts";
 import { dashboardColors, healthOrder, sourceHealth } from "./render-health.ts";
 
@@ -45,7 +45,7 @@ function buildDashboardLayout(sources: DashboardSource[], width: number, height:
   const scale = Math.min(width / 1920, height / 1080);
   const pad = 48 * scale;
   const gap = 20 * scale;
-  const headerHeight = 195 * scale;
+  const headerHeight = 166 * scale;
   const minimumCardWidth = Math.max(360, 430 * scale);
   const columns = Math.min(sources.length || 1, 4, Math.max(1, Math.floor((width - 2 * pad + gap) / minimumCardWidth)));
   const rows = Math.ceil(sources.length / columns);
@@ -86,34 +86,22 @@ function summarizeSources(sources: DashboardSource[]): DashboardCounts {
 
 function renderDashboardSummary(sources: DashboardSource[], width: number, scale: number, pad: number, overall: Health): string {
   const counts = summarizeSources(sources);
-  const {
-    activeSources, totalServices, downServices, degradedServices, maintenanceServices,
-    pendingServices, unknownServices, staleServices, staleSources, unavailableSources, disabledSources,
-  } = counts;
+  const { activeSources, totalServices, disabledSources } = counts;
   let svg = `<text x="${pad}" y="${60 * scale}" fill="#ffffff" font-family="Ribbon Sans" font-size="${42 * scale}" font-weight="700">Operations status</text>`;
-  const statusCounts = [
-    [downServices, "down"], [degradedServices, "degraded"],
-    [pendingServices, "pending"], [maintenanceServices, "in maintenance"], [unknownServices, "unknown"],
-  ] as const;
-  const reportedIssues = statusCounts.filter(([count]) => count > 0).map(([count, label]) => `${count} ${label}`);
-  if (staleServices) reportedIssues.push(`${staleServices} ${staleServices === 1 ? "service" : "services"} with stale data`);
-  if (unavailableSources) reportedIssues.push(`${unavailableSources} unavailable ${unavailableSources === 1 ? "feed" : "feeds"}`);
-  const staleFeeds = staleSources - unavailableSources;
-  if (staleFeeds) reportedIssues.push(`${staleFeeds} stale ${staleFeeds === 1 ? "feed" : "feeds"}`);
-  const healthySummary = staleSources ? "" : totalServices ? `${totalServices} ${totalServices === 1 ? "service" : "services"} operational` : "No service data";
-  const summary = `${sources.length} configured ${sources.length === 1 ? "source" : "sources"} · ${totalServices} monitored ${totalServices === 1 ? "service" : "services"}${disabledSources ? ` · ${disabledSources} disabled ${disabledSources === 1 ? "source" : "sources"}` : ""} · ${reportedIssues.length ? reportedIssues.join(" · ") : healthySummary}`;
+  const summary = `${sources.length} configured ${sources.length === 1 ? "source" : "sources"} · ${totalServices} monitored ${totalServices === 1 ? "service" : "services"}${disabledSources ? ` · ${disabledSources} disabled ${disabledSources === 1 ? "source" : "sources"}` : ""}`;
   svg += `<text x="${pad}" y="${94 * scale}" fill="#c0cede" font-family="Ribbon Sans" font-size="${19 * scale}">${svgText(summary)}</text>`;
   svg += renderHealthOverview(activeSources, counts, width, scale, pad);
   const monitoringUnavailable = sources.some((source) => !source.disabled && source.freshness === "unavailable");
-  const badgeLabel = monitoringUnavailable ? "Monitoring data unavailable" : overall === "stale" ? "Monitoring data delayed" : healthLabel[overall];
+  const badgeLabel = monitoringUnavailable ? "Monitoring data unavailable" : overall === "stale" ? "Monitoring data delayed"
+    : overall === "operational" && totalServices ? `${totalServices}/${totalServices} Operational` : healthLabel[overall];
   svg += svgStatusBadge(width - pad - 390 * scale, 24 * scale, 390 * scale, 62 * scale, scale, badgeLabel, dashboardColors[overall]);
-  svg += svgHealthLegend(pad, 166 * scale, width - 2 * pad, scale);
   return svg;
 }
 
 function renderHealthOverview(activeSources: DashboardSource[], counts: DashboardCounts, width: number, scale: number, pad: number): string {
   const overview: Array<{ label: string; count: number; color: string; showCount?: boolean }> = [];
-  const freshOperational = activeSources.reduce((sum, source) => sum + (source.freshness === "fresh" ? source.components.filter((component) => !component.isGroup && component.status === "operational").length : 0), 0);
+  const hasIssues = counts.downServices + counts.degradedServices + counts.pendingServices + counts.maintenanceServices + counts.unknownServices + counts.staleServices + counts.unavailableSources + counts.staleSources > 0;
+  const freshOperational = hasIssues ? activeSources.reduce((sum, source) => sum + (source.freshness === "fresh" ? source.components.filter((component) => !component.isGroup && component.status === "operational").length : 0), 0) : 0;
   if (freshOperational) overview.push({ label: "Operational", count: freshOperational, color: dashboardColors.operational });
   const statuses: Array<[number, string, Health]> = [
     [counts.downServices, "Down", "down"], [counts.degradedServices, "Degraded", "degraded"],
@@ -124,7 +112,7 @@ function renderHealthOverview(activeSources: DashboardSource[], counts: Dashboar
   if (counts.unavailableSources) overview.push({ label: `${counts.unavailableSources} ${counts.unavailableSources === 1 ? "unavailable feed" : "unavailable feeds"}`, count: 1, color: dashboardColors.stale, showCount: false });
   const staleFeeds = counts.staleSources - counts.unavailableSources;
   if (staleFeeds) overview.push({ label: `${staleFeeds} ${staleFeeds === 1 ? "stale feed" : "stale feeds"}`, count: 1, color: dashboardColors.stale, showCount: false });
-  return svgHealthOverview(pad, 132 * scale, width - 2 * pad, scale, overview);
+  return overview.length ? svgHealthOverview(pad, 132 * scale, width - 2 * pad, scale, overview) : "";
 }
 
 function renderDashboardCards(layout: DashboardLayout): string {
