@@ -153,7 +153,7 @@ test("shared SVG primitives escape text and render status panels, dots, and badg
   assert.match(svgHealthOverview(10, 20, 1000, 1, [{ label: "Operational", count: 2, color: "#20c997" }, { label: "Down", count: 1, color: "#ff647c" }]), />2 Operational<\/text>/);
   assert.match(svgHealthOverview(10, 20, 1000, 1, [{ label: '<img onerror="x">', count: 1, color: "#20c997" }]), /&lt;img onerror=&quot;x&quot;&gt;/);
   assert.match(svgProviderIdentity(10, 20, 1, "Uptime Kuma", "status.example.com"), /Uptime Kuma<\/tspan><tspan> \| status\.example\.com/);
-  assert.doesNotMatch(svgProviderIdentity(10, 20, 1, "Uptime Kuma", "<script>"), /<script>/);
+  assert.doesNotMatch(svgProviderIdentity(10, 20, 1, "Uptime Kuma", "<SCRIPT>alert(1)</SCRIPT>"), /<\/?script\b/i);
   assert.match(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API <edge>", status: "Down", color: "#ff647c" }), /API &lt;edge&gt;/);
   const summary = svgGroupSummary({ x: 10, y: 30, right: 600, scale: 1, label: "operational", count: 2, history: ["operational", "down"] });
   assert.match(summary, />2 services operational<\/text>/);
