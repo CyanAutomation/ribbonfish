@@ -130,11 +130,11 @@ own line so it does not crowd the source hostname. The complete status key
 remains available at lower visual weight. Statuspage
 groups list affected components first and show healthy component names when
 they fit; groups list up to eight components before summarizing healthy
-overflow. Small healthy Kuma groups list each monitor with its state and
-available response time. Larger healthy Kuma groups list up to 16 monitors and
-summarize the remainder. Kuma rows for down, degraded, or maintenance states
-show their last transition time when heartbeat history contains one. Pending,
-unknown, and stale rows show their latest sample time.
+overflow. Healthy Kuma groups list each monitor with its state when there are
+at most 16 monitors; larger groups list the first 16 and summarize the
+remainder. Kuma rows do not include response times. Rows for down, degraded, or
+maintenance states show their last transition time when heartbeat history
+contains one. Pending, unknown, and stale rows show their latest sample time.
 Group summaries can show a 24-hour check strip from available Kuma heartbeats;
 missing two-hour buckets are shown as unknown, and the strip does not claim an
 uptime percentage. Shared SVG components in

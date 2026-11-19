@@ -137,6 +137,15 @@ function addGroupRows(
     issues.sort((a, b) => healthOrder(a.status) - healthOrder(b.status) || (a.componentOrder ?? 0) - (b.componentOrder ?? 0));
     for (const component of issues) rows.push({ kind: "service", component });
     if (operationalCount) rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components.filter((component) => component.status === "operational"), source.fetchedAt) });
+  } else if (source.provider === "uptime-kuma" && components.length <= 16 && components.some((component) => component.history?.length)) {
+    rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components, source.fetchedAt) });
+    for (const component of components) rows.push({ kind: "service", component });
+  } else if (source.provider === "uptime-kuma" && components.length <= 16) {
+    for (const component of components) rows.push({ kind: "service", component });
+  } else if (source.provider === "uptime-kuma") {
+    const visible = components.slice(0, 16);
+    for (const component of visible) rows.push({ kind: "service", component });
+    rows.push({ kind: "summary", count: components.length - visible.length, history: recentGroupChecks(components, source.fetchedAt) });
   } else {
     rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components, source.fetchedAt) });
   }
