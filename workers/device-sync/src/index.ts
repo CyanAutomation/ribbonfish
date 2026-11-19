@@ -26,12 +26,17 @@ import type {
   WorkerScheduledController,
 } from "./worker-contracts.ts";
 
+type ActivePlaylistAsset = {
+  sha256: string;
+  size: number;
+  captured_at?: number;
+};
 type ActivePlaylist = {
-  version: 2;
+  version: 2 | 3;
   revision: string;
   id: string;
   rotation_interval: number;
-  assets: Array<Pick<PlaylistAssetRow, "sha256" | "size">>;
+  assets: ActivePlaylistAsset[];
 };
 type PlaylistReadResult =
   | { playlist: ActivePlaylist; etag: string; notModified: false }
@@ -90,7 +95,8 @@ const fetchRoutes = new Map<string, FetchRoute>([
   ["/v1/enroll", { method: "POST", handle: (request, env) => enroll(request, env) }],
   ["/v1/enrollment-requests", { method: "POST", handle: (request, env) => requestDeviceEnrollment(request, env) }],
   ["/v1/telemetry", { method: "POST", handle: (request, env) => receiveDeviceTelemetry(request, env) }],
-  ["/v2/playlist", { method: "GET", handle: (request, env, ctx) => readPlaylist(request, env, ctx) }],
+  ["/v2/playlist", { method: "GET", handle: (request, env, ctx) => readPlaylist(request, env, ctx, 2) }],
+  ["/v3/playlist", { method: "GET", handle: (request, env, ctx) => readPlaylist(request, env, ctx, 3) }],
 ]);
 
 export async function fetchHandler(request: Request, env: WorkerEnvironment, ctx?: WorkerExecutionContext) {
@@ -133,11 +139,11 @@ async function receiveDeviceTelemetry(request: Request, env: WorkerEnvironment):
   return jsonResponse(await persistDeviceHealth(env.DB, deviceID, report, Date.now()));
 }
 
-async function readPlaylist(request: Request, env: WorkerEnvironment, ctx?: WorkerExecutionContext): Promise<Response> {
+async function readPlaylist(request: Request, env: WorkerEnvironment, ctx: WorkerExecutionContext | undefined, version: 2 | 3): Promise<Response> {
   const deviceID = request.headers.get("X-Ribbonfish-Device-ID") ?? "";
   await authenticate(request, env, deviceID);
   await updateLastSeen(env, deviceID, ctx);
-  const { playlist, etag, notModified } = await readActivePlaylist(env, request.headers.get("If-None-Match"));
+  const { playlist, etag, notModified } = await readActivePlaylist(env, request.headers.get("If-None-Match"), version);
   if (notModified) return new Response(null, { status: 304, headers: privateHeaders({ ETag: etag }) });
   if (!playlist) throw new HTTPError(502, "active playlist was not available");
   if (matchesETag(request.headers.get("If-None-Match"), etag)) {
@@ -249,8 +255,8 @@ async function authenticateDevice(
 }
 
 async function readActivePlaylist(env: WorkerEnvironment): Promise<Extract<PlaylistReadResult, { notModified: false }>>;
-async function readActivePlaylist(env: WorkerEnvironment, ifNoneMatch: string | null): Promise<PlaylistReadResult>;
-async function readActivePlaylist(env: WorkerEnvironment, ifNoneMatch: string | null = null): Promise<PlaylistReadResult> {
+async function readActivePlaylist(env: WorkerEnvironment, ifNoneMatch: string | null, version?: 2 | 3): Promise<PlaylistReadResult>;
+async function readActivePlaylist(env: WorkerEnvironment, ifNoneMatch: string | null = null, version: 2 | 3 = 2): Promise<PlaylistReadResult> {
   const active = await env.DB.prepare(
     "SELECT ap.playlist_id, ap.revision, p.rotation_interval, " +
     "EXISTS (SELECT 1 FROM playlist_capture_items pci WHERE pci.playlist_id = ap.playlist_id AND pci.revision = ap.revision) AS has_captures " +
@@ -265,6 +271,7 @@ async function readActivePlaylist(env: WorkerEnvironment, ifNoneMatch: string | 
   if (!Number(active.has_captures) && matchesETag(ifNoneMatch, staticETag)) {
     return { etag: staticETag, notModified: true };
   }
+  const captureCutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
   const [assetResult, captureResult] = await Promise.all([
     env.DB.prepare(
       "SELECT position, sha256, size FROM playlist_assets WHERE playlist_id = ? AND revision = ? ORDER BY position",
@@ -272,26 +279,31 @@ async function readActivePlaylist(env: WorkerEnvironment, ifNoneMatch: string | 
     env.DB.prepare(
       "SELECT p.position, " +
       "CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
-      "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size " +
+      "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size, " +
+      "CASE WHEN t.capture_type = 'browser-screenshot' AND t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.last_success_at ELSE NULL END AS captured_at " +
       "FROM playlist_capture_items p JOIN capture_targets t ON t.capture_id = p.capture_id " +
       "WHERE p.playlist_id = ? AND p.revision = ? ORDER BY p.position",
-    ).bind(Date.now() - 30 * 24 * 60 * 60 * 1000, Date.now() - 30 * 24 * 60 * 60 * 1000,
+    ).bind(captureCutoff, captureCutoff, captureCutoff,
       active.playlist_id, active.revision).all<PlaylistAssetRow>(),
   ]);
-  const orderedAssets = [
+  const includeCaptureTimes = version === 3;
+  const orderedAssets: Array<{ position: number; sha256: string; size: number; captured_at?: number }> = [
     ...(assetResult.results ?? []).map((asset, index) => ({ position: Number.isSafeInteger(asset.position) ? asset.position : index, sha256: asset.sha256, size: asset.size })),
-    ...(captureResult.results ?? []).map((asset) => ({ position: asset.position, sha256: asset.sha256, size: asset.size })),
+    ...(captureResult.results ?? []).map((asset) => ({ position: asset.position, sha256: asset.sha256, size: asset.size,
+      ...(includeCaptureTimes && Number.isSafeInteger(asset.captured_at) && Number(asset.captured_at) > 0 ? { captured_at: Number(asset.captured_at) } : {}) })),
   ].sort((left, right) => left.position - right.position);
   const hasCaptures = (captureResult.results ?? []).length > 0;
   const resolvedRevision = hasCaptures
-    ? (await sha256Hex(`${playlistRow.revision}\n${orderedAssets.map(({ sha256, size }) => `${sha256}:${size}`).join("\n")}`)).slice(0, 64)
+    ? (await sha256Hex(`${playlistRow.revision}\n${orderedAssets.map(({ sha256, size, captured_at }) =>
+      `${sha256}:${size}${includeCaptureTimes ? `:${captured_at ?? ""}` : ""}`).join("\n")}`)).slice(0, 64)
     : playlistRow.revision;
   const playlist = {
-    version: 2 as const,
+    version,
     revision: resolvedRevision,
     id: playlistRow.playlist_id,
     rotation_interval: playlistRow.rotation_interval,
-    assets: orderedAssets.map(({ sha256, size }) => ({ sha256, size })),
+    assets: orderedAssets.map(({ sha256, size, captured_at }) => ({ sha256, size,
+      ...(includeCaptureTimes && captured_at !== undefined ? { captured_at } : {}) })),
   };
   try {
     validatePlaylist(playlist);

@@ -411,7 +411,12 @@ Device sync and health reporting use the following device API:
   access. Pending requests expire after 24 hours; the device retries with the
   same identity. Enrollment requests are rate limited to 30 per minute per
   source IP as an abuse-control measure.
-- `GET /v2/playlist` returns the active playlist with conditional ETags.
+- `GET /v2/playlist` returns the original active playlist shape with conditional
+  ETags for strict legacy clients.
+- `GET /v3/playlist` returns the active playlist with conditional ETags and an
+  optional UTC Unix-millisecond `captured_at` on fresh browser screenshot
+  assets. Capture timestamps are included in v3 revisions; they do not alter
+  asset bytes or SHA-256 values.
 - `GET /v2/assets/{sha256}` returns an asset only when it is in the active playlist.
 - `POST /v1/telemetry` accepts an authenticated, schema-versioned health report up to 8 KiB. Reports include agent lifecycle/version, sync status and applied revision, per-display connector and last-frame status, and optional host uptime, one-minute load, available memory, state-volume free space, and CPU temperature. Error fields use a fixed code list; reports never include logs, credentials, or raw error text.
 

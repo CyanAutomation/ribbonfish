@@ -67,9 +67,14 @@ frame when no valid item remains.
 
 The Worker contract lives in `workers/device-sync`. A playlist snapshot has a
 version, revision, playlist ID, rotation interval, and ordered asset hashes and
-sizes. It contains no arbitrary URLs or local filesystem paths. Every enrolled
-device receives the same active snapshot; device profiles own their output
-settings and display IDs.
+sizes. Version 3 adds an optional UTC `captured_at` Unix-millisecond timestamp
+to browser screenshot assets. Version 2 remains available with its original
+shape for strict legacy clients, and the agent falls back to v2 when an older
+Worker returns 404 for v3. Timestamps participate in the v3 revision, so
+recapturing unchanged image bytes still updates the display badge without
+redownloading the source image. Snapshots contain no arbitrary URLs or local
+filesystem paths. Every enrolled device receives the same active snapshot;
+device profiles own their output settings and display IDs.
 
 The Go client sends a per-device bearer token, uses an ETag for unchanged
 revisions, limits snapshot and image sizes, and rejects non-HTTPS endpoints
@@ -83,6 +88,8 @@ starts the device.
 The playback runtime can switch content without reopening DRM. It waits for
 readers of the old snapshot to finish before allowing cache eviction, so a
 failed or incomplete update cannot remove the currently displayed content.
+Capture timestamps are composited only into the output frame after display-mode
+fitting; cached PNG bytes and their SHA-256 content identities remain unchanged.
 
 ## Raspberry Pi deployment
 

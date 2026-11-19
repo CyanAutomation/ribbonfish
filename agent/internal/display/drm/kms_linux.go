@@ -447,6 +447,14 @@ func (device *linuxKMSDevice) ioctl(request uintptr, argument unsafe.Pointer) er
 }
 
 func (surface *linuxScanout) Present(ctx context.Context, frame image.Image) error {
+	return surface.present(ctx, frame, nil)
+}
+
+func (surface *linuxScanout) PresentCaptured(ctx context.Context, frame image.Image, capturedAt time.Time) error {
+	return surface.present(ctx, frame, &capturedAt)
+}
+
+func (surface *linuxScanout) present(ctx context.Context, frame image.Image, capturedAt *time.Time) error {
 	surface.mu.Lock()
 	defer surface.mu.Unlock()
 	if surface.closed {
@@ -464,6 +472,9 @@ func (surface *linuxScanout) Present(ctx context.Context, frame image.Image) err
 	rendered, err := display.FitImage(frame, int(surface.mode.Width), int(surface.mode.Height), surface.fit)
 	if err != nil {
 		return err
+	}
+	if capturedAt != nil {
+		rendered = display.DrawCaptureTimestampBadge(rendered, *capturedAt)
 	}
 	next := 0
 	if surface.started {

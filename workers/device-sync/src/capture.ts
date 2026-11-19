@@ -152,12 +152,13 @@ export async function captureScreenshot(target: CaptureTarget, env: Pick<Managem
 
   const bytes = await readBoundedBody(response, MAX_ASSET_BYTES, completedRequest);
   if (!isPNG(bytes)) throw new CaptureError("Browser Run returned an invalid PNG screenshot.", completedRequest);
+  const capturedAt = Date.now();
   try {
     const asset = await storePngAsset(bytes, env.ASSETS, {
       db: env.DB,
       stagingMs: ASSET_WRITE_LEASE_MS,
     });
-    return { sha256: asset.sha256, size: asset.size, ...completedRequest };
+    return { sha256: asset.sha256, size: asset.size, captured_at: capturedAt, ...completedRequest };
   } catch (error) {
     throw new CaptureError("Screenshot could not be stored as an asset.", {
       retryable: true, ...completedRequest, cause: error,
