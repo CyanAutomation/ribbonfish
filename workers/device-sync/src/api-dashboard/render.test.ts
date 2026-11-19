@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { dashboardSVG, renderDashboardPNG } from "./render.ts";
-import { svgEventPanel, svgFreshnessBadge, svgGroupSummary, svgHealthOverview, svgPanel, svgProviderIdentity, svgServiceRow, svgSourceNotice, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
+import { svgCheckHistory, svgEventPanel, svgFreshnessBadge, svgGroupSummary, svgHealthOverview, svgPanel, svgProviderIdentity, svgServiceRow, svgSourceNotice, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
 import type { DashboardSource } from "./model.ts";
 
 const sample: DashboardSource = { id: "source-1", provider: "uptime-kuma", displayName: "<SCRIPT>alert('x')</SCRIPT>", fetchedAt: "2026-01-01T00:00:00.000Z", freshness: "fresh", status: "operational", statusDescription: "All systems operational", incidents: [], maintenance: [], components: [
@@ -155,11 +155,15 @@ test("shared SVG primitives escape text and render status panels, dots, and badg
   assert.match(svgProviderIdentity(10, 20, 1, "Uptime Kuma", "status.example.com"), /Uptime Kuma<\/tspan><tspan> \| status\.example\.com/);
   assert.doesNotMatch(svgProviderIdentity(10, 20, 1, "Uptime Kuma", "<script>"), /<script>/);
   assert.match(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API <edge>", status: "Down", color: "#ff647c" }), /API &lt;edge&gt;/);
-  assert.match(svgGroupSummary({ x: 10, y: 30, scale: 1, label: "operational", count: 2 }), />2 services operational<\/text>/);
+  const summary = svgGroupSummary({ x: 10, y: 30, right: 600, scale: 1, label: "operational", count: 2, history: ["operational", "down"] });
+  assert.match(summary, />2 services operational<\/text>/);
+  assert.match(summary, />24h<\/text>/);
+  assert.match(summary, />Now<\/text>/);
+  assert.equal((svgCheckHistory({ x: 0, y: 0, width: 100, height: 8, states: ["operational", "down"] }).match(/<rect /g) ?? []).length, 2);
   assert.doesNotMatch(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API", status: "Operational", color: "#20c997" }), /120 ms/);
 });
 
-test("healthy slide dashboards keep the overall takeaway and omit a redundant status key", () => {
+test("healthy slide dashboards keep the overall takeaway, omit the status key, and retain history bars", () => {
   const historical: DashboardSource = {
     ...sample,
     fetchedAt: "2026-01-02T03:05:00.000Z",
@@ -170,7 +174,10 @@ test("healthy slide dashboards keep the overall takeaway and omit a redundant st
   };
   const svg = dashboardSVG([historical]);
   assert.match(svg, />1\/1 Operational</);
-  assert.doesNotMatch(svg, /Status key|24h|Recent checks/);
+  assert.match(svg, />24h<\/text>/);
+  assert.match(svg, />Now<\/text>/);
+  assert.match(svg, /Recent checks from 24 hours ago to now:/);
+  assert.doesNotMatch(svg, /Status key/);
 });
 
 test("large healthy Uptime Kuma groups summarize health without listing routine monitors or latency", () => {
@@ -186,7 +193,7 @@ test("large healthy Uptime Kuma groups summarize health without listing routine 
   assert.match(svg, /<tspan fill="#f5f8fc" font-weight="700">Uptime Kuma<\/tspan><tspan> \|/);
 });
 
-test("healthy summary rows omit decorative history strips", () => {
+test("Uptime Kuma history bars include checks from all monitors in a large group", () => {
   const grouped: DashboardSource = {
     ...sample,
     groups: [{ id: "g", name: "Primary group", order: 0 }],
@@ -201,7 +208,8 @@ test("healthy summary rows omit decorative history strips", () => {
     })),
   };
   const svg = dashboardSVG([grouped]);
-  assert.doesNotMatch(svg, /Recent checks from 24 hours ago to now/);
+  assert.match(svg, />24h<\/text>/);
+  assert.match(svg, /Recent checks from 24 hours ago to now:[^\"]*Down/);
 });
 
 test("small healthy Uptime Kuma groups summarize routine monitors without response time", () => {
@@ -220,7 +228,7 @@ test("small healthy Uptime Kuma groups summarize routine monitors without respon
   assert.doesNotMatch(svg, /84 ms|121 ms/);
 });
 
-test("Kuma group summaries stay compact when monitor history is available", () => {
+test("Kuma group summaries show labelled 24-hour history when available", () => {
   const historical: DashboardSource = {
     ...sample,
     fetchedAt: "2026-01-02T03:05:00.000Z",
@@ -230,7 +238,9 @@ test("Kuma group summaries stay compact when monitor history is available", () =
     ] }],
   };
   const svg = dashboardSVG([historical]);
-  assert.doesNotMatch(svg, />24h<\/text>|Recent checks from 24 hours ago/);
+  assert.match(svg, />24h<\/text>/);
+  assert.match(svg, /<title>Recent checks from 24 hours ago to now:/);
+  assert.match(svg, /#ff647c/);
 });
 
 test("affected service rows retain a last sample timestamp while healthy rows summarize", () => {
