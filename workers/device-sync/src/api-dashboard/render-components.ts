@@ -83,10 +83,16 @@ export function svgServiceRow(input: { x: number; y: number; right: number; scal
   return row;
 }
 
-export function svgGroupSummary(input: { x: number; y: number; scale: number; label: string; count: number }): string {
-  const { x, y, scale, label, count } = input;
+export function svgGroupSummary(input: { x: number; y: number; right: number; scale: number; label: string; count: number; history?: string[] }): string {
+  const { x, y, right, scale, label, count, history = [] } = input;
   const plural = count === 1 ? "service" : "services";
-  return `<text x="${x}" y="${y}" fill="#d0dbea" font-size="${scale * 17}" font-weight="700">${svgText(`${count} ${plural} ${label}`)}</text>`;
+  let result = `<text x="${x}" y="${y}" fill="#d0dbea" font-size="${scale * 17}" font-weight="700">${svgText(`${count} ${plural} ${label}`)}</text>`;
+  if (history.length) {
+    result += `<text x="${right - scale * 178}" y="${y}" text-anchor="end" fill="#c0cede" font-size="${scale * 14}">24h</text>`;
+    result += svgCheckHistory({ x: right - scale * 166, y: y - scale * 10, width: scale * 136, height: scale * 10, states: history, scale });
+    result += `<text x="${right}" y="${y}" text-anchor="end" fill="#c0cede" font-size="${scale * 12}">Now</text>`;
+  }
+  return result;
 }
 
 export interface SvgDashboardEvent {
@@ -145,4 +151,16 @@ export function svgEventPanel(input: { x: number; y: number; width: number; heig
     result += `<text x="${x + s(16)}" y="${metaBaseline}" fill="${svgText(event.color)}" font-size="${s(15)}">${svgText(truncateText(`${meta}${suffix}`, maxChars))}</text>`;
   });
   return result;
+}
+
+/** Accessible, compact 24-hour status history shared by source group summaries. */
+export function svgCheckHistory(input: { x: number; y: number; width: number; height: number; states: string[]; scale?: number }): string {
+  const { x, y, width, height, states, scale = 1 } = input;
+  const palette: Record<string, string> = { operational: "#20c997", degraded: "#f6c453", down: "#ff647c", maintenance: "#a78bfa", pending: "#60a5fa", unknown: "#64748b", stale: "#fb923c" };
+  if (!states.length) return "";
+  const gap = scale * 2;
+  const cellWidth = (width - gap * (states.length - 1)) / states.length;
+  const labels: Record<string, string> = { operational: "Operational", degraded: "Degraded", down: "Down", maintenance: "Maintenance", pending: "Pending", unknown: "Unknown", stale: "Stale" };
+  const historyDescription = `Recent checks from 24 hours ago to now: ${states.map((state) => labels[state] ?? "Unknown").join(", ")}`;
+  return `<g role="img" aria-label="${svgText(historyDescription)}"><title>${svgText(historyDescription)}</title>${states.map((state, index) => `<rect x="${x + index * (cellWidth + gap)}" y="${y}" width="${cellWidth}" height="${height}" rx="${scale * 2}" fill="${palette[state] ?? palette.unknown}"/>`).join("")}</g>`;
 }

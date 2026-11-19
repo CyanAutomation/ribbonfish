@@ -17,7 +17,7 @@ import { dashboardColors as colors, healthOrder, sourceHealth } from "./render-h
 type ServiceDisplayRow =
   | { kind: "group"; name: string }
   | { kind: "empty"; name: string }
-  | { kind: "summary"; count: number }
+  | { kind: "summary"; count: number; history: string[] }
   | { kind: "service"; component: DashboardSource["components"][number] };
 
 type CardProps = {
@@ -95,6 +95,21 @@ function freshnessColor(source: DashboardSource): string {
   return colors.stale;
 }
 
+function recentGroupChecks(components: DashboardSource["components"], fetchedAt: string): string[] {
+  const reference = Date.parse(fetchedAt);
+  if (!Number.isFinite(reference)) return [];
+  const buckets: Array<Health | undefined> = Array.from({ length: 12 }, () => undefined);
+  const rank = (health: Health) => ({ down: 0, degraded: 1, stale: 2, pending: 3, unknown: 4, maintenance: 5, operational: 6 })[health];
+  for (const component of components) for (const beat of component.history ?? []) {
+    const age = reference - Date.parse(beat.at);
+    if (!Number.isFinite(age) || age < 0 || age >= 24 * 60 * 60_000) continue;
+    const index = 11 - Math.floor(age / (2 * 60 * 60_000));
+    const existing = buckets[index];
+    if (!existing || rank(beat.status) < rank(existing)) buckets[index] = beat.status;
+  }
+  return buckets.some(Boolean) ? buckets.map((state) => state ?? "unknown") : [];
+}
+
 function addGroupRows(
   rows: ServiceDisplayRow[],
   source: DashboardSource,
@@ -117,15 +132,15 @@ function addGroupRows(
     const visible = components.slice(0, 8);
     for (const component of visible) rows.push({ kind: "service", component });
     const operationalOverflow = components.slice(8).filter((component) => component.status === "operational").length;
-    if (operationalOverflow) rows.push({ kind: "summary", count: operationalOverflow });
+    if (operationalOverflow) rows.push({ kind: "summary", count: operationalOverflow, history: [] });
   } else if (issues.length) {
     issues.sort((a, b) => healthOrder(a.status) - healthOrder(b.status) || (a.componentOrder ?? 0) - (b.componentOrder ?? 0));
     for (const component of issues) rows.push({ kind: "service", component });
-    if (operationalCount) rows.push({ kind: "summary", count: operationalCount });
+    if (operationalCount) rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components.filter((component) => component.status === "operational"), source.fetchedAt) });
   } else if (source.provider === "uptime-kuma") {
-    rows.push({ kind: "summary", count: operationalCount });
+    rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components, source.fetchedAt) });
   } else {
-    rows.push({ kind: "summary", count: operationalCount });
+    rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components, source.fetchedAt) });
   }
 }
 
@@ -255,7 +270,7 @@ function renderServiceDisplayRow(row: ServiceDisplayRow, layout: CardLayout, row
     return `<text x="${left + s(16)}" y="${rowY}" fill="#aab8ca" font-size="${s(compact ? 11 : 14)}">No services reported</text>`;
   }
   if (row.kind === "summary") {
-    return svgGroupSummary({ x: left + s(16), y: rowY, scale, label: "operational", count: row.count });
+    return svgGroupSummary({ x: left + s(16), y: rowY, right: x + width - pad, scale, label: "operational", count: row.count, history: row.history });
   }
   const { name, status } = row.component;
   const unconfirmed = source.freshness !== "fresh" && status !== "stale";
