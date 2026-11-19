@@ -11,11 +11,6 @@ export function svgStatusDot(cx: number, cy: number, radius: number, color: stri
   return `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="${svgText(color)}"/>`;
 }
 
-const healthLegendItems = [
-  ["Operational", "#20c997"], ["Degraded", "#f6c453"], ["Down", "#ff647c"],
-  ["Maintenance", "#a78bfa"], ["Pending", "#60a5fa"], ["Unknown", "#94a3b8"], ["Stale", "#fb923c"],
-] as const;
-
 export interface SvgHealthCount {
   label: string;
   count: number;
@@ -55,20 +50,6 @@ export function svgHealthOverview(x: number, y: number, width: number, scale: nu
   return `${result}</g>`;
 }
 
-/** Shared, visible status key for dashboards that use color to encode health. */
-export function svgHealthLegend(x: number, y: number, width: number, scale: number): string {
-  const s = (value: number) => value * scale;
-  const labelWidth = s(105);
-  const itemWidth = (width - labelWidth) / healthLegendItems.length;
-  let result = `<g role="group" aria-label="Status key"><text x="${x}" y="${y}" fill="#b9c9dc" font-size="${s(14)}" font-weight="700">Status key</text>`;
-  healthLegendItems.forEach(([label, color], index) => {
-    const itemX = x + labelWidth + index * itemWidth;
-    result += svgStatusDot(itemX + s(5), y - s(4), s(4), color);
-    result += `<text x="${itemX + s(15)}" y="${y}" fill="#d0dbea" font-size="${s(14)}">${label}</text>`;
-  });
-  return `${result}</g>`;
-}
-
 export function svgPanel(x: number, y: number, width: number, height: number, scale: number, accentColor: string): string {
   return `<rect x="${x}" y="${y}" width="${width}" height="${height}" rx="${18 * scale}" fill="#142238" stroke="#344a66" stroke-width="${2 * scale}"/><rect x="${x}" y="${y}" width="${7 * scale}" height="${height}" rx="${4 * scale}" fill="${svgText(accentColor)}"/>`;
 }
@@ -80,6 +61,11 @@ export function svgStatusBadge(x: number, y: number, width: number, height: numb
 /** Compact, reusable feed-health label kept visually distinct from service status. */
 export function svgFreshnessBadge(x: number, y: number, scale: number, label: string, color: string): string {
   return `${svgStatusDot(x, y - 4 * scale, 4 * scale, color)}<text x="${x + 12 * scale}" y="${y}" fill="${svgText(color)}" font-size="${16 * scale}" font-weight="700">${svgText(label)}</text>`;
+}
+
+/** Provider identity kept visible in every source card header. */
+export function svgProviderIdentity(x: number, y: number, scale: number, provider: string, hostname: string): string {
+  return `<text x="${x}" y="${y}" fill="#d0dbea" font-size="${17 * scale}"><tspan fill="#f5f8fc" font-weight="700">${svgText(provider)}</tspan><tspan> | ${svgText(hostname)}</tspan></text>`;
 }
 
 export function svgServiceRow(input: { x: number; y: number; right: number; scale: number; name: string; status: string; color: string; statusMeta?: string; compact?: boolean; showStatus?: boolean }): string {
@@ -100,7 +86,7 @@ export function svgServiceRow(input: { x: number; y: number; right: number; scal
 export function svgGroupSummary(input: { x: number; y: number; right: number; scale: number; label: string; count: number; history?: string[] }): string {
   const { x, y, right, scale, label, count, history = [] } = input;
   const plural = count === 1 ? "service" : "services";
-  let result = `<text x="${x}" y="${y}" fill="#a9d9ca" font-size="${scale * 13}">${svgText(`${count} ${plural} ${label}`)}</text>`;
+  let result = `<text x="${x}" y="${y}" fill="#d0dbea" font-size="${scale * 17}" font-weight="700">${svgText(`${count} ${plural} ${label}`)}</text>`;
   if (history.length) {
     result += `<text x="${right - scale * 178}" y="${y}" text-anchor="end" fill="#c0cede" font-size="${scale * 14}">24h</text>`;
     result += svgCheckHistory({ x: right - scale * 166, y: y - scale * 10, width: scale * 136, height: scale * 10, states: history, scale });
@@ -167,6 +153,7 @@ export function svgEventPanel(input: { x: number; y: number; width: number; heig
   return result;
 }
 
+/** Accessible, compact 24-hour status history shared by source group summaries. */
 export function svgCheckHistory(input: { x: number; y: number; width: number; height: number; states: string[]; scale?: number }): string {
   const { x, y, width, height, states, scale = 1 } = input;
   const palette: Record<string, string> = { operational: "#20c997", degraded: "#f6c453", down: "#ff647c", maintenance: "#a78bfa", pending: "#60a5fa", unknown: "#64748b", stale: "#fb923c" };
