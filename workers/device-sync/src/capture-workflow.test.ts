@@ -943,11 +943,12 @@ test("scheduled capture updates the playlist slot to a content-addressed screens
       body: { playlist_id: "operations", revision: created.body.revision },
     }), env);
     const token = addDevice(sqlite);
-    const before = await fetchHandler(new Request("https://worker.test/v2/playlist", {
+    const before = await fetchHandler(new Request("https://worker.test/v3/playlist", {
       headers: { "X-Ribbonfish-Device-ID": "pi-office", Authorization: `Bearer ${token}` },
     }), env);
     const oldTag = before.headers.get("ETag");
 
+    const captureStartedAt = Date.now();
     await scheduledHandler({ scheduledTime: Date.now() }, env, {});
     assert.equal(messages.length, 1);
     const message = { body: messages[0], acked: false, async ack() { this.acked = true; }, retry() { throw new Error("unexpected retry"); } };
@@ -958,6 +959,10 @@ test("scheduled capture updates the playlist slot to a content-addressed screens
     assert.equal(calls[0].options.url, "https://example.com/status");
 
     const target = sqlite.prepare("SELECT current_sha256, current_size FROM capture_targets").get();
+    const capturedAt = sqlite.prepare("SELECT captured_at FROM capture_history").get().captured_at;
+    const targetCapturedAt = sqlite.prepare("SELECT last_success_at FROM capture_targets").get().last_success_at;
+    assert.ok(capturedAt >= captureStartedAt, "capture history time is recorded when the browser result returns");
+    assert.equal(targetCapturedAt, capturedAt);
     const expected = createHash("sha256").update(screenshot).digest("hex");
     assert.equal(target.current_sha256, expected);
     assert.equal(target.current_size, screenshot.byteLength);
@@ -977,7 +982,7 @@ test("scheduled capture updates the playlist slot to a content-addressed screens
     assert.equal(durationSample.readiness_mode, "domcontentloaded");
     assert.equal(durationSample.readiness_selector, null);
 
-    const after = await fetchHandler(new Request("https://worker.test/v2/playlist", {
+    const after = await fetchHandler(new Request("https://worker.test/v3/playlist", {
       headers: {
         "X-Ribbonfish-Device-ID": "pi-office",
         Authorization: `Bearer ${token}`,
@@ -987,6 +992,7 @@ test("scheduled capture updates the playlist slot to a content-addressed screens
     assert.equal(after.status, 200, "a new screenshot changes the device snapshot ETag");
     const updated = await after.json();
     assert.equal(updated.assets[0].sha256, expected);
+    assert.equal(updated.assets[0].captured_at, capturedAt);
     assert.equal(after.headers.get("ETag"), `"${updated.revision}"`);
 
     const downloaded = await fetchHandler(new Request(`https://worker.test/v2/assets/${expected}`, {

@@ -101,6 +101,7 @@ test("browser capture validates its response and stores bytes through the shared
     },
   };
 
+  const startedAt = Date.now();
   const result = await captureScreenshot({
     url: "https://example.com/",
     viewport_width: 1280,
@@ -109,6 +110,9 @@ test("browser capture validates its response and stores bytes through the shared
   }, env);
 
   assert.equal(result.size, png.byteLength);
+  assert.equal(Number.isSafeInteger(result.captured_at), true);
+  assert.equal(result.captured_at >= startedAt && result.captured_at <= Date.now(), true,
+    "capture time is recorded after Browser Run returned the screenshot");
   assert.equal(result.browserMs, 1234);
   assert.match(result.sha256, /^[a-f0-9]{64}$/);
   assert.equal(writes[0].key, `assets/${result.sha256}`);

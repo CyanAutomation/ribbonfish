@@ -125,6 +125,46 @@ func TestAgentSharesTheActivePlaylistAndIntervalAcrossDisplays(t *testing.T) {
 	_ = store.Close()
 }
 
+func TestAgentRedrawsTheSameImageWhenItsCaptureTimestampChanges(t *testing.T) {
+	dir := t.TempDir()
+	imageData := pngDataSized(t, 640, 360, color.RGBA{R: 80, G: 120, B: 160, A: 255})
+	path := filepath.Join(dir, "capture.png")
+	if err := os.WriteFile(path, imageData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	firstCapturedAt := time.Date(2026, time.November, 19, 14, 32, 0, 0, time.UTC).UnixMilli()
+	secondCapturedAt := firstCapturedAt + 60_000
+	cfg := testConfig(dir, config.PlaylistConfig{ID: "captures", Assets: []config.AssetConfig{{Path: path, CapturedAt: &firstCapturedAt}}})
+	store, err := cache.NewFileStore(cfg.Cache.Directory, cfg.Cache.MaxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := &recordingOutput{frames: make(chan frameEvent, 4)}
+	clock := newTestClock(time.Unix(0, 0).UTC())
+	app, err := New(context.Background(), cfg, store, output, slog.New(slog.NewTextHandler(io.Discard, nil)), clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- app.Run(ctx) }()
+	_ = receiveFrame(t, output.frames)
+	waitForTimers(t, clock, 1)
+
+	updated := app.CurrentConfig()
+	updated.Playlist.Assets[0].CapturedAt = &secondCapturedAt
+	if err := app.ApplyConfig(context.Background(), updated); err != nil {
+		t.Fatalf("ApplyConfig() = %v", err)
+	}
+	_ = receiveFrame(t, output.frames)
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("Run() after cancellation = %v", err)
+	}
+	_ = store.Close()
+}
+
 func TestAgentUsesCachedAssetWhenSourceIsUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	data := pngData(t, color.RGBA{G: 210, A: 255})
@@ -570,6 +610,21 @@ func pngData(t *testing.T, value color.RGBA) []byte {
 	frame := image.NewRGBA(image.Rect(0, 0, 4, 4))
 	for y := 0; y < 4; y++ {
 		for x := 0; x < 4; x++ {
+			frame.SetRGBA(x, y, value)
+		}
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, frame); err != nil {
+		t.Fatal(err)
+	}
+	return encoded.Bytes()
+}
+
+func pngDataSized(t *testing.T, width, height int, value color.RGBA) []byte {
+	t.Helper()
+	frame := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
 			frame.SetRGBA(x, y, value)
 		}
 	}
