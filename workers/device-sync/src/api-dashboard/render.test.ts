@@ -180,7 +180,7 @@ test("healthy slide dashboards keep the overall takeaway, omit the status key, a
   assert.doesNotMatch(svg, /Status key/);
 });
 
-test("large healthy Uptime Kuma groups summarize health without listing routine monitors or latency", () => {
+test("large healthy Uptime Kuma groups list representative monitors and summarize the remainder without latency", () => {
   const healthy: DashboardSource = {
     ...sample,
     groups: [{ id: "g", name: "Primary group", order: 0 }],
@@ -188,8 +188,10 @@ test("large healthy Uptime Kuma groups summarize health without listing routine 
   };
   const svg = dashboardSVG([healthy]);
   assert.match(svg, /Primary group/);
-  assert.match(svg, /32 services operational/);
-  assert.doesNotMatch(svg, /Service 0|Service 15|Service 16|99 ms/);
+  assert.match(svg, /Service 0/);
+  assert.match(svg, /Service 15/);
+  assert.match(svg, /16 services operational/);
+  assert.doesNotMatch(svg, /Service 16|99 ms/);
   assert.match(svg, /<tspan fill="#f5f8fc" font-weight="700">Uptime Kuma<\/tspan><tspan> \|/);
 });
 
@@ -212,7 +214,7 @@ test("Uptime Kuma history bars include checks from all monitors in a large group
   assert.match(svg, /Recent checks from 24 hours ago to now:[^\"]*Down/);
 });
 
-test("small healthy Uptime Kuma groups summarize routine monitors without response time", () => {
+test("small healthy Uptime Kuma groups list routine monitors without response time", () => {
   const smallGroup: DashboardSource = {
     ...sample,
     groups: [{ id: "g", name: "West Europe", order: 0 }],
@@ -222,9 +224,9 @@ test("small healthy Uptime Kuma groups summarize routine monitors without respon
     ],
   };
   const svg = dashboardSVG([smallGroup]);
-  assert.doesNotMatch(svg, /Public web|>API</);
-  assert.match(svg, /2 services operational/);
-  assert.match(svg, /Operational/);
+  assert.match(svg, /Public web/);
+  assert.match(svg, />API</);
+  assert.equal([...svg.matchAll(/>Operational<\/text>/g)].length, 2);
   assert.doesNotMatch(svg, /84 ms|121 ms/);
 });
 
