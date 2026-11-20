@@ -45,3 +45,31 @@ func TestDrawCaptureTimestampBadgeUsesHalfCurrentSize(t *testing.T) {
 		t.Fatalf("badge bounds = %v, want half-size bounds %v", got, want)
 	}
 }
+
+func TestDrawCaptureTimestampBadgeRightAlignsBothTextLines(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 640, 360))
+	for y := 0; y < source.Bounds().Dy(); y++ {
+		for x := 0; x < source.Bounds().Dx(); x++ {
+			source.SetRGBA(x, y, color.RGBA{R: 80, G: 120, B: 160, A: 255})
+		}
+	}
+
+	frame := DrawCaptureTimestampBadge(source, time.Date(2026, time.November, 19, 14, 32, 0, 0, time.UTC))
+	titleRight := lastWhitePixelX(frame, 8, 15)
+	dateRight := lastWhitePixelX(frame, 17, 24)
+	if want := frame.Bounds().Max.X - 4 - 4 - 1; titleRight != want || dateRight != want {
+		t.Fatalf("rightmost text pixels = title %d, date %d; want both at %d", titleRight, dateRight, want)
+	}
+}
+
+func lastWhitePixelX(frame *image.RGBA, minY, maxY int) int {
+	last := -1
+	for y := minY; y < maxY; y++ {
+		for x := frame.Bounds().Min.X; x < frame.Bounds().Max.X; x++ {
+			if frame.RGBAAt(x, y) == (color.RGBA{R: 255, G: 255, B: 255, A: 255}) && x > last {
+				last = x
+			}
+		}
+	}
+	return last
+}
