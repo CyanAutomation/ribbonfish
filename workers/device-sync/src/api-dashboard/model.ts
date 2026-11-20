@@ -26,6 +26,12 @@ export interface ApiSourceRequestStats {
   durationMs: number;
 }
 
+export interface KumaHeartbeatSummary {
+  heartbeatCount: number;
+  oldestAgeMinutes: number | null;
+  windowsWithData: number;
+}
+
 export interface DashboardComponent {
   id: string;
   name: string;
@@ -65,6 +71,7 @@ export interface DashboardSource {
     heartbeat?: EndpointCacheMetadata;
   };
   requestStats?: ApiSourceRequestStats;
+  heartbeatSummary?: KumaHeartbeatSummary;
   components: DashboardComponent[];
   groups?: DashboardGroup[];
   incidents: DashboardIncident[];

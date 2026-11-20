@@ -1,6 +1,6 @@
 import type { SourceConfig } from "./config.ts";
 import { sourceConfigErrors } from "./config.ts";
-import { kumaHealth, parseTimestamp, statuspageHealth, type ApiSourceRequestStats, type DashboardComponent, type DashboardGroup, type DashboardIncident, type DashboardSource, type EndpointCacheMetadata, type Provider } from "./model.ts";
+import { kumaHealth, parseTimestamp, statuspageHealth, type ApiSourceRequestStats, type DashboardComponent, type DashboardGroup, type DashboardIncident, type DashboardSource, type EndpointCacheMetadata, type KumaHeartbeatSummary, type Provider } from "./model.ts";
 
 export type { SourceConfig } from "./config.ts";
 
@@ -197,7 +197,7 @@ type SourceFetchContext = {
   sameSource: boolean;
 };
 type FreshSourceData = Pick<DashboardSource, "status" | "statusDescription" | "components" | "incidents" | "maintenance"> &
-  Partial<Pick<DashboardSource, "freshness" | "cache" | "groups" | "etag">>;
+  Partial<Pick<DashboardSource, "freshness" | "cache" | "groups" | "etag" | "heartbeatSummary">>;
 
 function freshSource(context: SourceFetchContext, data: FreshSourceData): DashboardSource {
   return {
@@ -312,8 +312,14 @@ function kumaHeartbeatHistory(records: Array<{ beat: Record<string, any>; at: st
   return records.map((item) => ({ at: item.at, status: kumaHealth(item.beat.status) }));
 }
 
-function freshKumaComponent(definition: DashboardComponent, heartbeatMap: Record<string, any>): DashboardComponent {
-  const records = kumaHeartbeatRecords(heartbeatMap[definition.id]);
+function freshKumaComponent(definition: DashboardComponent, heartbeatMap: Record<string, any>, previous: DashboardComponent | undefined, now: Date): DashboardComponent {
+  const freshRecords = kumaHeartbeatRecords(heartbeatMap[definition.id]);
+  const byTimestamp = new Map<string, { beat: Record<string, any>; at: string }>();
+  for (const item of previous?.history ?? []) byTimestamp.set(item.at, { beat: { status: item.status }, at: item.at });
+  for (const item of freshRecords) byTimestamp.set(item.at, item);
+  const cutoff = now.getTime() - 24 * 60 * 60_000;
+  const records = [...byTimestamp.values()].filter((item) => Date.parse(item.at) > cutoff && Date.parse(item.at) <= now.getTime())
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   const latest = records.at(-1);
   const latestStatus = latest ? kumaHealth(latest.beat.status) : undefined;
   const statusChangedAt = kumaStatusChangedAt(records, latestStatus);
@@ -331,10 +337,20 @@ function kumaComponent(
   heartbeatMap: Record<string, any>,
   heartbeatNotModified: boolean,
   previousByID: Map<string, DashboardComponent>,
+  now: Date,
 ): DashboardComponent {
   return heartbeatNotModified
     ? cachedKumaComponent(definition, previousByID)
-    : freshKumaComponent(definition, heartbeatMap);
+    : freshKumaComponent(definition, heartbeatMap, previousByID.get(definition.id), now);
+}
+
+function kumaHeartbeatSummary(heartbeatMap: Record<string, any>, now: Date): KumaHeartbeatSummary {
+  const timestamps = Object.values(heartbeatMap).flatMap((values) => kumaHeartbeatRecords(values).map((item) => Date.parse(item.at)));
+  const windows = new Set(timestamps.filter((time) => time <= now.getTime() && time > now.getTime() - 24 * 60 * 60_000)
+    .map((time) => Math.floor((now.getTime() - time) / (2 * 60 * 60_000))));
+  return { heartbeatCount: Object.values(heartbeatMap).reduce((sum, values) => sum + (Array.isArray(values) ? values.length : 0), 0),
+    oldestAgeMinutes: timestamps.length ? Math.max(0, Math.round((now.getTime() - Math.min(...timestamps)) / 60_000)) : null,
+    windowsWithData: windows.size };
 }
 
 function kumaHealthStatus(components: DashboardComponent[]): DashboardSource["status"] {
@@ -344,6 +360,14 @@ function kumaHealthStatus(components: DashboardComponent[]): DashboardSource["st
   if (states.includes("maintenance")) return "maintenance";
   if (states.includes("pending")) return "pending";
   return states.length && states.every((state) => state === "operational") ? "operational" : "unknown";
+}
+
+function boundKumaHistory(components: DashboardComponent[]): DashboardComponent[] {
+  const observations = components.flatMap((component) => (component.history ?? []).map((beat) => ({ id: component.id, at: beat.at })));
+  if (observations.length <= MAX_HEARTBEAT_RECORDS) return components;
+  observations.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  const keep = new Set(observations.slice(0, MAX_HEARTBEAT_RECORDS).map((item) => `${item.id}\u0000${item.at}`));
+  return components.map((component) => ({ ...component, history: (component.history ?? []).filter((beat) => keep.has(`${component.id}\u0000${beat.at}`)) }));
 }
 
 function markStaleKumaHeartbeats(components: DashboardComponent[], now: Date): { components: DashboardComponent[]; stale: boolean } {
@@ -377,13 +401,16 @@ async function fetchKumaSource(context: SourceFetchContext): Promise<DashboardSo
   const heartbeatMap = kumaHeartbeatMap(heartbeatResponse, previous);
   assertKumaHeartbeatLimit(heartbeatMap);
   const previousByID = new Map((previous?.components ?? []).map((component) => [component.id, component]));
-  const components = normalized.definitions.map((definition) => kumaComponent(definition, heartbeatMap, heartbeatResponse.notModified, previousByID));
+  const components = boundKumaHistory(normalized.definitions.map((definition) => kumaComponent(definition, heartbeatMap, heartbeatResponse.notModified, previousByID, now)));
   const aged = markStaleKumaHeartbeats(components, now);
   const statusData = statusResponse.notModified ? null : record(statusResponse.value);
   return freshSource(context, {
     freshness: aged.stale ? "stale" : "fresh",
     status: aged.stale ? "stale" : kumaHealthStatus(components),
     statusDescription: "Latest monitor heartbeats",
+    heartbeatSummary: heartbeatResponse.notModified
+      ? previous?.heartbeatSummary ?? kumaHeartbeatSummary(heartbeatMap, now)
+      : kumaHeartbeatSummary(heartbeatMap, now),
     cache: { statusPage: statusResponse.cache ?? undefined, heartbeat: heartbeatResponse.cache ?? undefined },
     components: aged.components,
     groups: normalized.groups,
