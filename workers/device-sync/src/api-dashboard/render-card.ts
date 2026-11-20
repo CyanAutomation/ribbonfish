@@ -17,7 +17,7 @@ import { dashboardColors as colors, healthOrder, sourceHealth } from "./render-h
 type ServiceDisplayRow =
   | { kind: "group"; name: string }
   | { kind: "empty"; name: string }
-  | { kind: "summary"; count: number; history: string[] }
+  | { kind: "summary"; count: number; history: Array<Health | null> }
   | { kind: "service"; component: DashboardSource["components"][number] };
 
 type CardProps = {
@@ -95,10 +95,10 @@ function freshnessColor(source: DashboardSource): string {
   return colors.stale;
 }
 
-function recentGroupChecks(components: DashboardSource["components"], fetchedAt: string): string[] {
+function recentGroupChecks(components: DashboardSource["components"], fetchedAt: string): Array<Health | null> {
   const reference = Date.parse(fetchedAt);
   if (!Number.isFinite(reference)) return [];
-  const buckets: Array<Health | undefined> = Array.from({ length: 12 }, () => undefined);
+  const buckets: Array<Health | null> = Array.from({ length: 12 }, () => null);
   const rank = (health: Health) => ({ down: 0, degraded: 1, stale: 2, pending: 3, unknown: 4, maintenance: 5, operational: 6 })[health];
   for (const component of components) for (const beat of component.history ?? []) {
     const age = reference - Date.parse(beat.at);
@@ -107,7 +107,7 @@ function recentGroupChecks(components: DashboardSource["components"], fetchedAt:
     const existing = buckets[index];
     if (!existing || rank(beat.status) < rank(existing)) buckets[index] = beat.status;
   }
-  return buckets.some(Boolean) ? buckets.map((state) => state ?? "unknown") : [];
+  return buckets;
 }
 
 function addGroupRows(
@@ -136,7 +136,9 @@ function addGroupRows(
   } else if (issues.length) {
     issues.sort((a, b) => healthOrder(a.status) - healthOrder(b.status) || (a.componentOrder ?? 0) - (b.componentOrder ?? 0));
     for (const component of issues) rows.push({ kind: "service", component });
-    if (operationalCount) rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components.filter((component) => component.status === "operational"), source.fetchedAt) });
+    if (operationalCount || components.some((component) => component.history?.length)) {
+      rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components, source.fetchedAt) });
+    }
   } else if (source.provider === "uptime-kuma" && components.length <= 16 && components.some((component) => component.history?.length)) {
     rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components, source.fetchedAt) });
     for (const component of components) rows.push({ kind: "service", component });
