@@ -1,3 +1,4 @@
+// @typecheck-node-test
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
@@ -61,7 +62,7 @@ test("Kuma state-change time is the first heartbeat in the current consecutive s
 
 test("Kuma merges bounded, timestamp-deduplicated history and reports sanitized response coverage", async () => {
   const [config, heartbeat] = await Promise.all([fixture("kuma-config.json"), fixture("kuma-heartbeat.json")]);
-  const fetchWith = (payload: any) => async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input).includes("heartbeat") ? payload : config), { headers: { "Content-Type": "application/json" } });
+  const fetchWith = (payload: any) => async (input: URL | string) => new Response(JSON.stringify(String(input).includes("heartbeat") ? payload : config), { headers: { "Content-Type": "application/json" } });
   const initial = await fetchSource(kumaConfig, allowed, fetchWith({ heartbeatList: { "101": [
     { status: 1, time: "2026-01-02T01:00:00Z" }, { status: 0, time: "2026-01-02T01:00:00Z" },
     { status: 0, time: "2026-01-01T00:00:00Z" },
