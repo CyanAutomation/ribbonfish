@@ -1,3 +1,4 @@
+// @typecheck-node-test
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { dashboardSVG, renderDashboardPNG } from "./render.ts";
@@ -176,7 +177,7 @@ test("healthy slide dashboards keep the overall takeaway, omit the status key, a
   assert.match(svg, />1\/1 Operational</);
   assert.match(svg, />24h<\/text>/);
   assert.match(svg, />Now<\/text>/);
-  assert.match(svg, /Recent checks from 24 hours ago to now:/);
+  assert.match(svg, /24-hour history in 12 two-hour windows/);
   assert.doesNotMatch(svg, /Status key/);
 });
 
@@ -211,7 +212,7 @@ test("Uptime Kuma history bars include checks from all monitors in a large group
   };
   const svg = dashboardSVG([grouped]);
   assert.match(svg, />24h<\/text>/);
-  assert.match(svg, /Recent checks from 24 hours ago to now:[^\"]*Down/);
+  assert.match(svg, /24-hour history in 12 two-hour windows[^\"]*Down/);
 });
 
 test("small healthy Uptime Kuma groups list routine monitors without response time", () => {
@@ -241,8 +242,33 @@ test("Kuma group summaries show labelled 24-hour history when available", () => 
   };
   const svg = dashboardSVG([historical]);
   assert.match(svg, />24h<\/text>/);
-  assert.match(svg, /<title>Recent checks from 24 hours ago to now:/);
+  assert.match(svg, /<title>24-hour history in 12 two-hour windows/);
   assert.match(svg, /#ff647c/);
+});
+
+test("history bars distinguish no data, report sparse coverage, and name each two-hour window", () => {
+  const svg = svgGroupSummary({ x: 10, y: 30, right: 600, scale: 1, label: "operational", count: 2,
+    history: ["down", null, null, null, null, null, null, null, null, null, null, "operational"] });
+  assert.match(svg, /Limited history · 24h · 2\/12 windows with data/);
+  assert.match(svg, /aria-label="24-hour history in 12 two-hour windows, oldest to newest:/);
+  assert.match(svg, /22–24 hours ago: Down/);
+  assert.match(svg, /0–2 hours ago: Operational/);
+  assert.match(svg, /2–4 hours ago: No data/);
+  assert.match(svg, /fill="#334155"/);
+});
+
+test("full coverage and mixed-monitor group history use the worst observed status per window", () => {
+  const full = svgGroupSummary({ x: 10, y: 30, right: 600, scale: 1, label: "operational", count: 2, history: Array(12).fill("operational") });
+  assert.match(full, /24h · 12\/12 windows with data/);
+  assert.doesNotMatch(full, /Limited history/);
+
+  const mixed: DashboardSource = { ...sample, fetchedAt: "2026-01-02T03:05:00.000Z", components: [
+    { ...sample.components[0], id: "api", status: "down", history: [{ at: "2026-01-02T00:00:00.000Z", status: "down" }] },
+    { ...sample.components[0], id: "web", status: "operational", history: [{ at: "2026-01-02T00:00:00.000Z", status: "operational" }] },
+  ] };
+  const svg = dashboardSVG([mixed]);
+  assert.match(svg, /2–4 hours ago: Down/);
+  assert.match(svg, /Limited history · 24h · 1\/12 windows with data/);
 });
 
 test("affected service rows retain a last sample timestamp while healthy rows summarize", () => {
