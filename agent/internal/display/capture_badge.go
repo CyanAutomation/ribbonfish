@@ -62,8 +62,11 @@ func DrawCaptureTimestampBadge(source image.Image, capturedAt time.Time) *image.
 	margin := 4 * scale
 	badge := image.NewRGBA(image.Rect(0, 0, boxWidth, boxHeight))
 	draw.Draw(badge, badge.Bounds(), image.NewUniform(color.RGBA{R: 12, G: 20, B: 28, A: 232}), image.Point{}, draw.Src)
-	drawCaptureBadgeText(badge, image.Pt(padding, padding), lines[0], scale)
-	drawCaptureBadgeText(badge, image.Pt(padding, padding+7*scale+lineGap), lines[1], scale)
+	lineY := [2]int{padding, padding + 7*scale + lineGap}
+	for index, line := range lines {
+		lineX := padding + textWidth - captureTextWidth(line, scale)
+		drawCaptureBadgeText(badge, image.Pt(lineX, lineY[index]), line, scale)
+	}
 	badge = halfSizeCaptureBadge(badge)
 
 	margin = (margin + 1) / 2
