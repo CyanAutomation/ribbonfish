@@ -83,11 +83,12 @@ overview reports when its snapshot was generated. The former fleet-wide model
 advisory has been removed because its broad labels did not explain the signals
 or provide a useful next step.
 
-The fleet summary still uses an internal, read-only OpenUI program backed by
-the framework-independent `@openuidev/lang-core` package. The management panel
-does not expose the editor or generation prompt. JEV decisions use a separate
-server-side adapter and do not generate or parse OpenUI Lang. The optional
-per-target screenshot assessment uses bounded operational metadata and recent
+The fleet summary renders a deterministic, read-only A2UI v1.0 surface using
+`@a2ui/web_core` and a small native DOM adapter. It is built from the existing
+overview response; its catalog allows only `Card`, `Column`, and `Text`, with no
+actions or functions. No model provider is configured for the fleet UI. JEV
+decisions use a separate server-side adapter. The optional per-target screenshot
+assessment uses bounded operational metadata and recent
 screenshot hash-change counts. A pre-due shadow assessment also receives
 measured Browser Run duration summaries, reserve coverage, attempt failures, and
 retry counts. It validates JEV's answer types, choices, probabilities,
@@ -108,10 +109,8 @@ complete. The JEV reserve suggestion never applies a new value.
 Configure `OPENROUTER_API_KEY` as a secret on the management Worker before using
 JEV. The key is read only by the Worker. Requests use the pinned
 `~typesafe/jev-latest` model and send structured state objects with server-owned
-question schemas. The OpenUI fleet snapshot remains
-read-only and deterministic; no OpenUI generation provider is configured. The
-native DOM adapter is bundled with esbuild; no OpenUI framework renderer is
-installed.
+question schemas. The fleet A2UI renderer is bundled with esbuild and keeps its
+navigation targets fixed in application code.
 
 Background capture assessment runs in shadow mode when `CAPTURE_ANALYSIS_MODE` is
 `shadow` on the scheduled management Worker. It assesses up to three active

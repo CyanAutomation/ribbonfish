@@ -20,7 +20,7 @@ Use this skill for `workers/device-sync/src/admin.js`, `workers/device-sync/publ
 
 ## UI and API changes
 
-- Keep the browser panel read-only where documented; do not wire generated OpenUI output to mutation tools or model-backed actions.
+- Keep fleet A2UI surfaces read-only; do not expose mutation operations or model-backed actions through their component catalog.
 - Escape user-controlled content and preserve the restrictive content security policy. Avoid injecting HTML from device names, audit events, URLs, or Worker errors.
 - Keep the UI's expectations aligned with the API response and error contracts. A UI affordance is not authorization.
 - Use the local R2 asset publishing path for admin static assets; do not expose the private asset bucket publicly to simplify previews.
