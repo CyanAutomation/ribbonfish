@@ -9,7 +9,7 @@ At the start, the migration was already underway. Shared Worker modules, capture
 The remaining tracked JavaScript comprises:
 
 - Worker: `src/admin.js` and `src/index.js`. Both Wrangler configurations use `src/index.js`.
-- Browser: `public/admin/app.js`. OpenUI integration and the other extracted UI modules are already TypeScript. The esbuild source entry is `app.js`; the published `/admin/app.js` URL and R2 key must remain stable.
+- Browser: `public/admin/app.js`. The A2UI fleet overview renderer and other extracted UI modules are TypeScript. The esbuild source entry is `app.js`; the published `/admin/app.js` URL and R2 key must remain stable.
 - Eleven `src/*.test.js` files covering the admin UI and API, entry point, capture workflow, enrollment, health, and asset maintenance. JEV tests are already TypeScript.
 
 The Node test typechecker emits Worker declarations and checks tests marked `@typecheck-node-test`, keeping Node globals separate from Worker globals. Existing strict Node tests and the new validation test opt in; dynamic legacy fixtures are verified by runtime tests. The new browser DOM primitive tests use a separate DOM type project. The large legacy page controller has a no-emit transition check with `noImplicitAny` and `strictNullChecks` disabled. The existing `.mts` automation is included by the scripts project; it does not need a second migration.

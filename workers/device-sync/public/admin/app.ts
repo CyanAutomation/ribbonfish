@@ -21,7 +21,7 @@ import { parseApiDashboardConfig } from "../../src/api-dashboard/config.ts";
 import { renderApiDashboards } from "./api-dashboard-view.ts";
 import { createCaptureTargetRenderer } from "./capture-sites-view.ts";
 import { renderCaptureEfficiencyModule } from "./capture-efficiency-module.ts";
-import { renderFleetOverviewMetrics } from "./fleet-overview.ts";
+import { renderFleetOverviewA2ui } from "./fleet-overview.ts";
 import {
   createBrandLockup,
   createActionGroup,
@@ -1015,7 +1015,7 @@ async function refreshData(): Promise<boolean> {
   renderEnvironment(overview.environment);
   renderHealth(overview.asset_health);
   renderFleetAttention(overview, enrollmentRequests);
-  renderFleetOverviewMetrics(fleetSummary, overview, enrollmentRequests);
+  renderFleetOverviewA2ui(fleetSummary, overview, enrollmentRequests);
   renderPlaylists(overview.playlists);
   renderCaptureEfficiencyModule(
     requiredElement(document, "#capture-efficiency-content"),
