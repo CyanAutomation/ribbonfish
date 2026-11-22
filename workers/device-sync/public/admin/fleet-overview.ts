@@ -12,6 +12,7 @@ import { formatRunTime } from "./capture-presentation.ts";
 const FLEET_CATALOG_ID = "https://ribbonfish.dev/a2ui/catalogs/fleet-overview-v1.json";
 const FLEET_SURFACE_ID = "fleetOverview";
 const MAX_FLEET_COMPONENTS = 64;
+const MAX_FLEET_COMPONENT_DEPTH = 10;
 const MAX_FLEET_DATA_BYTES = 16_384;
 
 const FLEET_COMPONENT_NAMES = ["Card", "Column", "Text"] as const;
@@ -239,13 +240,20 @@ function assertFleetMessageBounds(messages: readonly unknown[]) {
     surface.components.length > MAX_FLEET_COMPONENTS || !isRecord(surface.dataModel)) {
     throw new Error("A2UI fleet overview surface is outside the supported contract");
   }
+  if (!surface.components.every((component: unknown) =>
+    isRecord(component) && typeof component.id === "string" && typeof component.component === "string")) {
+    throw new Error("A2UI fleet overview contains an invalid component");
+  }
   const dataModelBytes = new TextEncoder().encode(JSON.stringify(surface.dataModel)).byteLength;
   if (dataModelBytes > MAX_FLEET_DATA_BYTES) {
     throw new Error("A2UI fleet overview data exceeds the supported size");
   }
 }
 
-function renderComponent(value: unknown, document: Document): HTMLElement {
+function renderComponent(value: unknown, document: Document, depth = 1): HTMLElement {
+  if (depth > MAX_FLEET_COMPONENT_DEPTH) {
+    throw new Error("A2UI fleet overview exceeds the supported component depth");
+  }
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.type !== "string") {
     throw new Error("A2UI fleet overview contains an invalid component");
   }
@@ -255,7 +263,7 @@ function renderComponent(value: unknown, document: Document): HTMLElement {
       const column = document.createElement("div");
       column.className = value.id === "root" ? "fleet-summary-grid" : "overview-metric__content";
       if (!Array.isArray(value.children)) throw new Error("A2UI Column requires child components");
-      for (const child of value.children) column.append(renderComponent(child, document));
+      for (const child of value.children) column.append(renderComponent(child, document, depth + 1));
       return column;
     }
     case "Card": {
@@ -264,7 +272,7 @@ function renderComponent(value: unknown, document: Document): HTMLElement {
       card.className = "overview-metric";
       if (href) card.setAttribute("href", href);
       if (!isRecord(value.child)) throw new Error("A2UI Card requires one child component");
-      card.append(renderComponent(value.child, document));
+      card.append(renderComponent(value.child, document, depth + 1));
       return card;
     }
     case "Text": {

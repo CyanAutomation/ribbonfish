@@ -108,6 +108,46 @@ test("A2UI renderer rejects unknown components without replacing the current UI"
   dom.window.close();
 });
 
+test("A2UI bounds reject malformed component entries before processing", () => {
+  const dom = new JSDOM("<div id='metrics'><p>previous</p></div>");
+  const container = dom.window.document.querySelector<HTMLElement>("#metrics");
+  assert.ok(container);
+  const message = createFleetOverviewA2uiMessage({}, []);
+  const components = message.createSurface.components as unknown[];
+  components[0] = { component: "Column", children: [] };
+
+  assert.throws(
+    () => renderA2uiMessages(container, [message]),
+    /A2UI fleet overview contains an invalid component/,
+  );
+  assert.equal(container.textContent, "previous");
+  dom.window.close();
+});
+
+test("A2UI renderer rejects component trees deeper than the safe limit", () => {
+  const dom = new JSDOM("<div id='metrics'><p>previous</p></div>");
+  const container = dom.window.document.querySelector<HTMLElement>("#metrics");
+  assert.ok(container);
+  const message = createFleetOverviewA2uiMessage({}, []);
+  const nestedColumns = Array.from({ length: 11 }, (_, index) => ({
+    id: `column${index + 1}`,
+    component: "Column" as const,
+    children: [index === 10 ? "leaf" : `column${index + 2}`],
+  }));
+  message.createSurface.components = [
+    { id: "root", component: "Column", children: ["column1"] },
+    ...nestedColumns,
+    { id: "leaf", component: "Text", text: "leaf" },
+  ];
+
+  assert.throws(
+    () => renderA2uiMessages(container, [message]),
+    /A2UI fleet overview exceeds the supported component depth/,
+  );
+  assert.equal(container.textContent, "previous");
+  dom.window.close();
+});
+
 test("A2UI fleet catalog rejects interactive components", () => {
   const dom = new JSDOM("<div id='metrics'><p>previous</p></div>");
   const container = dom.window.document.querySelector<HTMLElement>("#metrics");
