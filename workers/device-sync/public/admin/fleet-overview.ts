@@ -9,15 +9,17 @@ import { NodeResolver } from "@a2ui/web_core/resolution";
 import { CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS } from "../../src/capture-forecast.ts";
 import { formatRunTime } from "./capture-presentation.ts";
 import { getPlaylistSyncState } from "../../src/playlist-sync-state.ts";
+import { a2uiCard, a2uiColumn, a2uiText } from "./a2ui-components.ts";
 
 const FLEET_CATALOG_ID = "https://ribbonfish.dev/a2ui/catalogs/management-v2.json";
 const FLEET_SURFACE_ID = "fleetOverview";
 const CAPTURE_WORKBENCH_SURFACE_ID = "captureWorkbench";
+const PLAYLIST_READINESS_SURFACE_ID = "playlistReadiness";
 const MAX_FLEET_COMPONENTS = 64;
 const MAX_FLEET_COMPONENT_DEPTH = 10;
 const MAX_FLEET_DATA_BYTES = 16_384;
 
-const MANAGEMENT_COMPONENT_NAMES = ["Card", "Column", "Text", "Button"] as const;
+const MANAGEMENT_COMPONENT_NAMES = ["Card", "Column", "Text", "Badge", "Button"] as const;
 const fleetCatalog = Catalog.fromJson({
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: FLEET_CATALOG_ID,
@@ -52,6 +54,16 @@ const fleetCatalog = Catalog.fromJson({
         variant: { type: "string", enum: ["caption", "body"] },
       },
       required: ["component", "text"],
+      additionalProperties: false,
+    },
+    Badge: {
+      type: "object",
+      properties: {
+        component: { const: "Badge" },
+        text: { $ref: "common_types.json#/$defs/DynamicString" },
+        tone: { type: "string", enum: ["success", "warning", "error", "neutral"] },
+      },
+      required: ["component", "text", "tone"],
       additionalProperties: false,
     },
     Button: {
@@ -117,7 +129,7 @@ type FleetOverviewData = {
 
 type EnrollmentRequest = { request_id?: string };
 type FleetMetric = { label: string; value: string; detail: string; rows?: Array<{ text: string }>; [key: string]: unknown };
-type FleetComponent = { id: string; component: "Column" | "Card" | "Text"; [key: string]: unknown };
+type FleetComponent = { id: string; component: "Column" | "Card" | "Text" | "Badge" | "Button"; [key: string]: unknown };
 
 export type FleetOverviewA2uiMessage = {
   version: "1.0";
@@ -203,35 +215,27 @@ function isOnActivePlaylist(device: NonNullable<FleetOverviewData["devices"]>[nu
   }, active) === "in_sync";
 }
 
-function dataBinding(path: string) {
-  return { "@path": path };
-}
-
 function createComponents(): FleetComponent[] {
   const components: FleetComponent[] = [{
-    id: "root",
-    component: "Column",
-    children: METRIC_COMPONENTS.map(({ id }) => `${id}Card`),
+    ...a2uiColumn("root", METRIC_COMPONENTS.map(({ id }) => `${id}Card`)),
   }];
 
   for (const [index, { id }] of METRIC_COMPONENTS.entries()) {
     components.push(
-      { id: `${id}Card`, component: "Card", child: `${id}Content` },
-      { id: `${id}Content`, component: "Column", children: [
+      a2uiCard(`${id}Card`, `${id}Content`),
+      a2uiColumn(`${id}Content`, [
         `${id}Label`, `${id}Value`, `${id}Detail`,
         ...(id === "health" ? healthStatusIds : id === "playlistSync" ? playlistSyncIds : []).map((rowId) => `${id}${rowId}`),
-      ] },
-      { id: `${id}Label`, component: "Text", variant: "caption", text: dataBinding(`/metrics/${index}/label`) },
-      { id: `${id}Value`, component: "Text", variant: "body", text: dataBinding(`/metrics/${index}/value`) },
-      { id: `${id}Detail`, component: "Text", variant: "caption", text: dataBinding(`/metrics/${index}/detail`) },
+      ]),
+      a2uiText(`${id}Label`, `/metrics/${index}/label`),
+      a2uiText(`${id}Value`, `/metrics/${index}/value`, "body"),
+      a2uiText(`${id}Detail`, `/metrics/${index}/detail`),
     );
     const rowIds = id === "health" ? healthStatusIds : id === "playlistSync" ? playlistSyncIds : [];
-    rowIds.forEach((rowId, rowIndex) => components.push({
-      id: `${id}${rowId}`,
-      component: "Text",
-      variant: "caption",
-      text: dataBinding(`/metrics/${index}/rows/${rowIndex}/text`),
-    }));
+    rowIds.forEach((rowId, rowIndex) => components.push(a2uiText(
+      `${id}${rowId}`,
+      `/metrics/${index}/rows/${rowIndex}/text`,
+    )));
   }
 
   return components;
@@ -273,7 +277,7 @@ export function renderA2uiMessages(
   options: { surfaceId?: string; onAction?: (action: A2uiUserAction) => void | Promise<void> } = {},
 ) {
   const surfaceId = options.surfaceId ?? FLEET_SURFACE_ID;
-  const allowActions = surfaceId === CAPTURE_WORKBENCH_SURFACE_ID;
+  const allowActions = surfaceId === CAPTURE_WORKBENCH_SURFACE_ID || surfaceId === PLAYLIST_READINESS_SURFACE_ID;
   assertManagementMessageBounds(messages, surfaceId, allowActions);
   const firstMessage = messages[0] as { createSurface: { components: Array<Record<string, unknown>> } };
   const actionById = new Map(firstMessage.createSurface.components
@@ -309,10 +313,11 @@ export function renderA2uiMessages(
 }
 
 function assertManagementMessageBounds(messages: readonly unknown[], surfaceId: string, allowActions: boolean) {
-  if (surfaceId !== FLEET_SURFACE_ID && surfaceId !== CAPTURE_WORKBENCH_SURFACE_ID) {
+  if (![FLEET_SURFACE_ID, CAPTURE_WORKBENCH_SURFACE_ID, PLAYLIST_READINESS_SURFACE_ID].includes(surfaceId)) {
     throw new Error("A2UI management UI requested an unsupported surface");
   }
-  const surfaceLabel = surfaceId === FLEET_SURFACE_ID ? "fleet overview" : "capture workbench";
+  const surfaceLabel = surfaceId === FLEET_SURFACE_ID ? "fleet overview"
+    : surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "capture workbench" : "playlist readiness";
   if (messages.length !== 1) throw new Error(`A2UI ${surfaceLabel} accepts one v1.0 createSurface message`);
   const message = messages[0];
   if (!isRecord(message) || message.version !== "1.0" || !isRecord(message.createSurface) ||
@@ -330,7 +335,8 @@ function assertManagementMessageBounds(messages: readonly unknown[], surfaceId: 
     isRecord(component) && typeof component.id === "string" && typeof component.component === "string")) {
     throw new Error(`A2UI ${surfaceLabel} contains an invalid component`);
   }
-  const allowed: readonly string[] = allowActions ? MANAGEMENT_COMPONENT_NAMES : ["Card", "Column", "Text"];
+  const allowed: readonly string[] = surfaceId === FLEET_SURFACE_ID
+    ? ["Card", "Column", "Text", "Badge"] : MANAGEMENT_COMPONENT_NAMES;
   if (!surface.components.every((component: Record<string, unknown>) => allowed.includes(String(component.component)))) {
     throw new Error(`A2UI ${surfaceLabel} contains an unsupported component`);
   }
@@ -338,8 +344,32 @@ function assertManagementMessageBounds(messages: readonly unknown[], surfaceId: 
   if (dataModelBytes > MAX_FLEET_DATA_BYTES) {
     throw new Error(`A2UI ${surfaceLabel} data exceeds the supported size`);
   }
-  if (allowActions) {
+  if (surfaceId === CAPTURE_WORKBENCH_SURFACE_ID) {
     assertCaptureWorkbenchActions(surface.components, surface.dataModel);
+  } else if (surfaceId === PLAYLIST_READINESS_SURFACE_ID) {
+    assertPlaylistReadinessActions(surface.components, surface.dataModel);
+  }
+}
+
+function assertPlaylistReadinessActions(components: Record<string, unknown>[], dataModel: Record<string, any>) {
+  const buttons = components.filter((item) => item.component === "Button");
+  if (!buttons.length) return;
+  const validID = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value);
+  if (!validID(dataModel.playlist_id) || !validID(dataModel.revision)) {
+    throw new Error("A2UI playlist readiness action must be bound to a playlist revision");
+  }
+  for (const component of buttons) {
+    const action = component.action;
+    if (!isRecord(action) || !isRecord(action.event) || Object.keys(action).length !== 1 ||
+      Object.keys(action.event).some((key) => !["name", "context"].includes(key))) {
+      throw new Error("A2UI playlist readiness contains an unsupported action");
+    }
+    const event = action.event;
+    if (event.name !== "assess_readiness" || component.id !== "assessReadinessButton" || !isRecord(event.context) ||
+      Object.keys(event.context).length !== 2 || event.context.playlist_id !== dataModel.playlist_id ||
+      event.context.revision !== dataModel.revision) {
+      throw new Error("A2UI playlist readiness contains an unsupported action");
+    }
   }
 }
 
@@ -391,16 +421,20 @@ function renderComponent(
     case "Column": {
       const column = document.createElement("div");
       column.className = value.id === "root"
-        ? options.surfaceId === FLEET_SURFACE_ID ? "fleet-summary-grid" : "capture-workbench-a2ui"
-        : options.surfaceId === FLEET_SURFACE_ID ? "overview-metric__content" : "capture-workbench-a2ui__content";
+        ? options.surfaceId === FLEET_SURFACE_ID ? "fleet-summary-grid"
+          : options.surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "capture-workbench-a2ui" : "playlist-readiness-a2ui"
+        : options.surfaceId === FLEET_SURFACE_ID ? "overview-metric__content"
+          : options.surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "capture-workbench-a2ui__content" : "playlist-readiness-a2ui__content";
       if (!Array.isArray(value.children)) throw new Error("A2UI Column requires child components");
       for (const child of value.children) column.append(renderComponent(child, document, { ...options, depth: depth + 1 }));
       return column;
     }
     case "Card": {
-      const href = navigationTargets.get(value.id);
+      const href = options.surfaceId === FLEET_SURFACE_ID ? navigationTargets.get(value.id) : undefined;
       const card = document.createElement(href ? "a" : "article");
-      card.className = href ? "overview-metric" : options.surfaceId === FLEET_SURFACE_ID ? "overview-metric" : "capture-workbench-a2ui__card";
+      card.className = href ? "overview-metric"
+        : options.surfaceId === FLEET_SURFACE_ID ? "overview-metric"
+          : options.surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "capture-workbench-a2ui__card" : "playlist-readiness-a2ui__card";
       if (href) card.setAttribute("href", href);
       if (!isRecord(value.child)) throw new Error("A2UI Card requires one child component");
       card.append(renderComponent(value.child, document, { ...options, depth: depth + 1 }));
@@ -410,7 +444,8 @@ function renderComponent(
       if (options.surfaceId !== FLEET_SURFACE_ID) {
         const text = typeof value.text === "string" ? value.text : "";
         const element = document.createElement(value.variant === "body" ? "p" : "span");
-        element.className = `capture-workbench-a2ui__text capture-workbench-a2ui__text--${value.variant === "body" ? "body" : "caption"}`;
+        const prefix = options.surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "capture-workbench-a2ui" : "playlist-readiness-a2ui";
+        element.className = `${prefix}__text ${prefix}__text--${value.variant === "body" ? "body" : "caption"}`;
         element.textContent = text;
         return element;
       }
@@ -433,15 +468,44 @@ function renderComponent(
       }
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "button button--secondary capture-workbench-a2ui__button";
+      button.className = options.surfaceId === CAPTURE_WORKBENCH_SURFACE_ID
+        ? "button button--secondary capture-workbench-a2ui__button"
+        : "button button--secondary playlist-readiness-a2ui__button";
       button.dataset.a2uiEvent = String(action.event.name);
       button.append(renderComponent(value.child, document, { ...options, depth: depth + 1 }));
-      button.addEventListener("click", () => {
+      const label = button.textContent ?? "";
+      const pendingLabels: Record<string, string> = {
+        assess_readiness: "Assessing readiness…",
+        assess_capture: "Assessing capture…",
+        confirm_skip_once: "Confirming skip…",
+      };
+      button.addEventListener("click", async () => {
+        if (button.disabled) return;
+        button.disabled = true;
+        button.setAttribute("aria-busy", "true");
+        button.textContent = pendingLabels[String(action.event.name)] ?? "Working…";
         const event = action.event;
         const context = isRecord(event.context) ? event.context : {};
-        void options.onAction?.({ name: event.name, context, sourceComponentId: value.id });
+        try {
+          await options.onAction?.({ name: event.name, context, sourceComponentId: value.id });
+          button.textContent = label;
+        } catch {
+          button.textContent = "Could not complete. Try again.";
+          button.setAttribute("aria-live", "polite");
+        } finally {
+          button.disabled = false;
+          button.removeAttribute("aria-busy");
+        }
       });
       return button;
+    }
+    case "Badge": {
+      const text = typeof value.text === "string" ? value.text : "";
+      const tone = ["success", "warning", "error", "neutral"].includes(String(value.tone)) ? String(value.tone) : "neutral";
+      const badge = document.createElement("span");
+      badge.className = tone === "success" ? "badge" : `badge badge--${tone}`;
+      badge.textContent = text;
+      return badge;
     }
     default:
       throw new Error(`Unsupported A2UI management component: ${value.type}`);

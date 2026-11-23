@@ -1,12 +1,19 @@
 export interface CaptureHistoryEntry {
   captured_at: number;
   sha256: string | null;
+  job_id?: string;
+  quality_review?: "complete" | "incomplete" | "uncertain" | null;
 }
 
 export interface CaptureHistorySummary {
   recent_change_count: number;
   unchanged_capture_streak: number;
-  recent_history: Array<{ captured_at: number; changed: boolean | null }>;
+  recent_history: Array<{
+    captured_at: number;
+    changed: boolean | null;
+    job_id?: string;
+    quality_review?: "complete" | "incomplete" | "uncertain" | null;
+  }>;
 }
 
 /** Reduce screenshot history to bounded change facts without exposing content hashes. */
@@ -17,6 +24,10 @@ export function summarizeCaptureHistory(rows: readonly CaptureHistoryEntry[]): C
     return {
       captured_at: item.captured_at,
       changed: !previous || !item.sha256 || !previous.sha256 ? null : item.sha256 !== previous.sha256,
+      ...(item.job_id ? {
+        job_id: item.job_id,
+        quality_review: item.quality_review ?? null,
+      } : {}),
     };
   });
   let unchangedCaptureStreak = 0;

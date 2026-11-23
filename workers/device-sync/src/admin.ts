@@ -284,6 +284,36 @@ async function handleAdminCaptureRoutes({ request, url, env, actorID }: AdminRou
       return jsonResponse(await readCaptureDurationSamples(captureID.toLowerCase(), url.searchParams, env));
     });
   }
+  const qualityReviewMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/quality-review$/i);
+  if (qualityReviewMatch) {
+    return await withAdminMethod(request, "POST", async () => {
+      const captureID = qualityReviewMatch[1]!.toLowerCase();
+      const data = await readJSON(request);
+      const qualities = ["complete", "incomplete", "uncertain"];
+      if (!hasExactKeys(data, ["job_id", "quality"]) || typeof data.job_id !== "string" ||
+        !UUID_PATTERN.test(data.job_id) || typeof data.quality !== "string" || !qualities.includes(data.quality)) {
+        throw new HTTPError(400, "request body must contain a valid job_id and screenshot quality label");
+      }
+      const jobID = data.job_id.toLowerCase();
+      const reviewedAt = Date.now();
+      const results = await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO capture_quality_reviews (capture_id, job_id, quality, reviewer, reviewed_at) " +
+          "SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM capture_history h " +
+          "JOIN capture_targets t ON t.capture_id = h.capture_id " +
+          "WHERE h.capture_id = ? AND h.job_id = ? AND t.capture_type = 'browser-screenshot') " +
+          "ON CONFLICT(capture_id, job_id) DO UPDATE SET quality = excluded.quality, " +
+          "reviewer = excluded.reviewer, reviewed_at = excluded.reviewed_at",
+        ).bind(captureID, jobID, data.quality, actorID, reviewedAt, captureID, jobID),
+        auditStatement(env, actorID, "capture.quality_reviewed", "capture", captureID, {
+          job_id: jobID,
+          quality: data.quality,
+        }, { onlyWhenPreviousChanged: true }),
+      ]);
+      if (results[0]?.meta?.changes !== 1) throw new HTTPError(404, "that screenshot is no longer available for review");
+      return jsonResponse({ capture_id: captureID, job_id: jobID, quality: data.quality, reviewed_at: reviewedAt });
+    });
+  }
   const skipMatch = url.pathname.match(/^\/admin\/api\/captures\/([0-9a-f-]{36})\/skip-once$/i);
   if (skipMatch) {
     return await withAdminMethod(request, "POST", async () => {

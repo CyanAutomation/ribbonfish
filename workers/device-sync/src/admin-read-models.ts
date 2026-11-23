@@ -66,7 +66,7 @@ function finiteNonNegativeOrNull(value: unknown): number | null {
 export async function readOverview(env: WorkerEnvironment) {
   const now = Date.now();
   const windowStart = now - 30 * 24 * 60 * 60 * 1000;
-  const [devices, playlists, active, audit, captureTargets, captureRuntimeAverages, integrityIssues, captureJobs, captureChangeHistory, captureHistory, captureDurationSummaries, captureUsage, captureDecisions] = await Promise.all([
+  const [devices, playlists, active, audit, captureTargets, captureRuntimeAverages, integrityIssues, captureJobs, captureChangeHistory, captureHistory, captureDurationSummaries, captureUsage, captureDecisions, captureQualityReviews] = await Promise.all([
     env.DB.prepare(
       "SELECT d.device_id, d.enabled, d.created_at, d.last_seen_at, " +
       "CASE WHEN d.public_key IS NULL THEN 'token' ELSE 'key' END AS auth_type, " +
@@ -128,9 +128,11 @@ export async function readOverview(env: WorkerEnvironment) {
       "FROM capture_jobs WHERE created_at >= ? AND capture_id IN (SELECT capture_id FROM capture_targets WHERE capture_type = 'browser-screenshot')",
     ).bind(windowStart).first(),
     env.DB.prepare(
-      "SELECT capture_id, captured_at, sha256 FROM (" +
-      "SELECT capture_id, captured_at, sha256, ROW_NUMBER() OVER (PARTITION BY capture_id ORDER BY captured_at DESC) AS recent_rank " +
-      "FROM capture_history) WHERE recent_rank <= 10 ORDER BY capture_id, captured_at DESC",
+      "SELECT capture_id, job_id, captured_at, sha256, quality AS quality_review FROM (" +
+      "SELECT h.capture_id, h.job_id, h.captured_at, h.sha256, r.quality, " +
+      "ROW_NUMBER() OVER (PARTITION BY h.capture_id ORDER BY h.captured_at DESC) AS recent_rank " +
+      "FROM capture_history h LEFT JOIN capture_quality_reviews r ON r.capture_id = h.capture_id AND r.job_id = h.job_id" +
+      ") WHERE recent_rank <= 10 ORDER BY capture_id, captured_at DESC",
     ).all(),
     env.DB.prepare(
       "SELECT " +
@@ -182,6 +184,13 @@ export async function readOverview(env: WorkerEnvironment) {
       "SUM(CASE WHEN action = 'error' THEN 1 ELSE 0 END) AS errors " +
       "FROM capture_decisions WHERE assessed_at >= ? AND action != 'pending'",
     ).bind(windowStart).first(),
+    env.DB.prepare(
+      "SELECT " +
+      "SUM(CASE WHEN quality = 'complete' THEN 1 ELSE 0 END) AS complete, " +
+      "SUM(CASE WHEN quality = 'incomplete' THEN 1 ELSE 0 END) AS incomplete, " +
+      "SUM(CASE WHEN quality = 'uncertain' THEN 1 ELSE 0 END) AS uncertain " +
+      "FROM capture_quality_reviews WHERE reviewed_at >= ?",
+    ).bind(windowStart).first(),
   ]);
 
   const missing = await readMissingActiveAssets(env, active, windowStart);
@@ -205,7 +214,7 @@ export async function readOverview(env: WorkerEnvironment) {
     active_playlist: activePlaylist,
     capture_targets: captureTargetSummaries,
     capture_efficiency: summarizeOverviewCaptureEfficiency(
-      captureTargetSummaries, captureUsage, budgetMs, now, captureJobs, captureHistory, captureDecisions,
+      captureTargetSummaries, captureUsage, budgetMs, now, captureJobs, captureHistory, captureDecisions, captureQualityReviews,
     ),
     asset_health: {
       missing,
@@ -262,6 +271,9 @@ function summarizeOverviewCaptureTargets(
     const history = summarizeCaptureHistory((historyByCapture.get(target.capture_id) ?? []).map((row) => ({
       captured_at: Number(row.captured_at),
       sha256: typeof row.sha256 === "string" ? row.sha256 : null,
+      job_id: typeof row.job_id === "string" ? row.job_id : undefined,
+      quality_review: row.quality_review === "complete" || row.quality_review === "incomplete" || row.quality_review === "uncertain"
+        ? row.quality_review : null,
     })));
     const lastSuccessAt = finiteNonNegativeOrNull(target.last_success_at);
     return {
@@ -302,12 +314,13 @@ function summarizeOverviewCaptureEfficiency(
   captureJobs: SqlRow | null,
   captureHistory: SqlRow | null,
   captureDecisions: SqlRow | null,
+  captureQualityReviews: SqlRow | null,
 ) {
   const summary = buildCaptureUsageSummary(captureTargets.filter((target) => target.capture_type !== "api-dashboard"), captureUsage, budgetMs, now);
   return {
     daily_usage: summary.daily_usage,
     forecast: summary.forecast,
-    last_30_days: summarizeOverviewLast30Days(captureJobs, captureHistory, captureDecisions),
+    last_30_days: summarizeOverviewLast30Days(captureJobs, captureHistory, captureDecisions, captureQualityReviews),
   };
 }
 
@@ -315,7 +328,7 @@ function overviewCount(row: SqlRow | null, key: string) {
   return row?.[key] ?? 0;
 }
 
-function summarizeOverviewLast30Days(captureJobs: SqlRow | null, captureHistory: SqlRow | null, captureDecisions: SqlRow | null) {
+function summarizeOverviewLast30Days(captureJobs: SqlRow | null, captureHistory: SqlRow | null, captureDecisions: SqlRow | null, captureQualityReviews: SqlRow | null) {
   return {
     successful_screenshots: overviewCount(captureJobs, "successful_screenshots"),
     validator_unchanged: overviewCount(captureJobs, "validator_unchanged"),
@@ -330,6 +343,11 @@ function summarizeOverviewLast30Days(captureJobs: SqlRow | null, captureHistory:
     jev_candidate_unobserved: overviewCount(captureDecisions, "candidate_unobserved"),
     jev_candidate_unverified: overviewCount(captureDecisions, "candidate_unverified"),
     jev_errors: overviewCount(captureDecisions, "errors"),
+    screenshot_quality_reviews: {
+      complete: overviewCount(captureQualityReviews, "complete"),
+      incomplete: overviewCount(captureQualityReviews, "incomplete"),
+      uncertain: overviewCount(captureQualityReviews, "uncertain"),
+    },
     validator_outcomes: {
       disabled: overviewCount(captureJobs, "validator_disabled"),
       changed: overviewCount(captureJobs, "validator_changed"),

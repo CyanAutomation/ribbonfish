@@ -48,6 +48,7 @@ test("Capture Efficiency keeps per-site timing details in a collapsed table and 
       jev_candidate_budget_deferred: 0,
       jev_candidate_failed: 0,
       jev_candidate_unobserved: 0,
+      screenshot_quality_reviews: { complete: 5, incomplete: 1, uncertain: 2 },
     },
   });
 
@@ -86,6 +87,9 @@ test("Capture Efficiency keeps per-site timing details in a collapsed table and 
   assert.match(recentTable.textContent, /2m 0s/);
   assert.match(recentTable.textContent, /JEV advisory assessments4 assessments/);
   assert.match(recentTable.textContent, /JEV suggestions with changed screenshots1 screenshot/);
+  assert.match(recentTable.textContent, /Human-reviewed screenshots marked complete5 screenshots/);
+  assert.match(recentTable.textContent, /Human-reviewed screenshots marked incomplete1 screenshot/);
+  assert.match(recentTable.textContent, /Human-reviewed screenshots marked uncertain2 screenshots/);
   assert.match(advanced.querySelector("[data-table='schedule-estimates']")?.textContent ?? "", /1 hour.*24\.0.*4m 12s per day/);
 });
 

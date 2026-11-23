@@ -167,3 +167,58 @@ test("playlist readiness migration stores bounded shadow decisions by playlist r
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, /Resource location: local/);
 });
+
+test("screenshot quality review migration binds review labels to retained capture history", async (t) => {
+  const persistTo = await mkdtemp(join(tmpdir(), "ribbonfish-local-d1-"));
+  t.after(() => rm(persistTo, { recursive: true, force: true }));
+  const migration = await readFile(join(packageRoot, "migrations/0022_capture_quality_reviews.sql"), "utf8");
+  const fixture = join(persistTo, "capture-quality-reviews.sql");
+  await writeFile(fixture, `
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE capture_targets (capture_id TEXT PRIMARY KEY);
+    CREATE TABLE capture_jobs (job_id TEXT PRIMARY KEY);
+    CREATE TABLE capture_history (
+      capture_id TEXT NOT NULL,
+      job_id TEXT NOT NULL,
+      sha256 TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      captured_at INTEGER NOT NULL,
+      PRIMARY KEY (capture_id, job_id),
+      FOREIGN KEY (capture_id) REFERENCES capture_targets(capture_id),
+      FOREIGN KEY (job_id) REFERENCES capture_jobs(job_id)
+    );
+    INSERT INTO capture_targets VALUES ('capture-1');
+    INSERT INTO capture_jobs VALUES ('job-1');
+    INSERT INTO capture_history VALUES ('capture-1', 'job-1', '${"a".repeat(64)}', 4, 100);
+    ${migration}
+    INSERT INTO capture_quality_reviews (capture_id, job_id, quality, reviewer, reviewed_at)
+      VALUES ('capture-1', 'job-1', 'complete', 'operator@example.test', 200);
+    UPDATE capture_quality_reviews SET quality = 'uncertain', reviewed_at = 300
+      WHERE capture_id = 'capture-1' AND job_id = 'job-1';
+    CREATE TABLE quality_migration_assertions (passed INTEGER NOT NULL CHECK (passed = 1));
+    INSERT INTO quality_migration_assertions
+    SELECT CASE WHEN
+      (SELECT COUNT(*) FROM capture_quality_reviews WHERE capture_id = 'capture-1' AND job_id = 'job-1') = 1 AND
+      (SELECT quality FROM capture_quality_reviews WHERE capture_id = 'capture-1' AND job_id = 'job-1') = 'uncertain' AND
+      (SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'capture_quality_reviews_reviewed_idx') = 1
+    THEN 1 ELSE 0 END;
+    DELETE FROM capture_history WHERE capture_id = 'capture-1' AND job_id = 'job-1';
+    CREATE TABLE quality_cascade_assertions (passed INTEGER NOT NULL CHECK (passed = 1));
+    INSERT INTO quality_cascade_assertions
+    SELECT CASE WHEN (SELECT COUNT(*) FROM capture_quality_reviews) = 0 THEN 1 ELSE 0 END;
+  `);
+
+  const result = spawnSync(process.execPath, [
+    wrangler, "d1", "execute", "ribbonfish-devices", "--local", "--persist-to", persistTo,
+    "--config", "wrangler.management.toml", "--file", fixture,
+  ], {
+    cwd: packageRoot,
+    env: { ...process.env, CI: "1" },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /Resource location: local/);
+});
