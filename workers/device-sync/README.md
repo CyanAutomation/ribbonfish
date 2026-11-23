@@ -84,9 +84,10 @@ advisory has been removed because its broad labels did not explain the signals
 or provide a useful next step.
 
 The management panel uses a shared, bounded A2UI v1.0 catalog and native DOM
-adapter for the fleet summary, capture workbench, and playlist-readiness
-surfaces. Reusable component builders provide cards, columns, text, badges, and
-buttons. The fleet summary remains read-only; links are fixed in application
+adapter for the fleet summary, capture workbench, playlist-readiness, and Capture
+Efficiency evidence summary surfaces. Reusable metric-card builders compose
+cards, columns, and text across the fleet and Capture Efficiency views. The fleet
+and Capture Efficiency summaries remain read-only; links are fixed in application
 code. The playlist-readiness surface presents deterministic checks and the JEV
 shadow assessment, with only a revision-bound action to request another
 assessment.
@@ -126,9 +127,12 @@ screenshot as complete, incomplete, or uncertain. Reviews are tied to a
 specific retained capture, include the reviewer and timestamp in the audit
 trail, and do not change the capture schedule. Capture Efficiency reports the
 three review-label counts separately from JEV's changed, unchanged, validator,
-budget, failed, and unobserved outcomes. These labels provide evidence for a
-future page-readiness recommendation; they do not currently enable JEV to
-change readiness settings.
+budget, failed, and unobserved outcomes. It also counts reviewed screenshots for
+JEV skip suggestions only when the successful screenshot job matches the
+suggestion's scheduled due time. Validator-only results, failures, budget
+deferrals, and unmatched screenshots do not count as reviewed JEV outcomes.
+These summaries are observational; quality labels are not yet sent to JEV and
+do not enable JEV to change readiness settings.
 
 Configure `OPENROUTER_API_KEY` as a secret on the management Worker before using
 JEV. The key is read only by the Worker. Requests use the pinned

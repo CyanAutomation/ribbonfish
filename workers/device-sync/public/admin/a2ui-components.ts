@@ -19,6 +19,20 @@ export function a2uiCard(id: string, child: string): ManagementA2uiComponent {
   return { id, component: "Card", child };
 }
 
+/** Compose the shared label, value, and detail subtree used by read-only metric cards. */
+export function a2uiMetricCardComponents(id: string, metricIndex: number, extraTextIds: string[] = []): ManagementA2uiComponent[] {
+  const labelID = `${id}Label`;
+  const valueID = `${id}Value`;
+  const detailID = `${id}Detail`;
+  return [
+    a2uiCard(`${id}Card`, `${id}Content`),
+    a2uiColumn(`${id}Content`, [labelID, valueID, detailID, ...extraTextIds]),
+    a2uiText(labelID, `/metrics/${metricIndex}/label`),
+    a2uiText(valueID, `/metrics/${metricIndex}/value`, "body"),
+    a2uiText(detailID, `/metrics/${metricIndex}/detail`),
+  ];
+}
+
 export function a2uiText(id: string, path: string, variant: A2uiTextVariant = "caption"): ManagementA2uiComponent {
   return { id, component: "Text", variant, text: a2uiBinding(path) };
 }

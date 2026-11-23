@@ -48,6 +48,7 @@ test("Capture Efficiency keeps per-site timing details in a collapsed table and 
       jev_candidate_budget_deferred: 0,
       jev_candidate_failed: 0,
       jev_candidate_unobserved: 0,
+      jev_candidate_quality_reviews: { complete: 1, incomplete: 0, uncertain: 0, total: 1 },
       screenshot_quality_reviews: { complete: 5, incomplete: 1, uncertain: 2 },
     },
   });
@@ -58,6 +59,10 @@ test("Capture Efficiency keeps per-site timing details in a collapsed table and 
   assert.equal(advanced.querySelector("summary")?.textContent, "Advanced details");
   assert.match(container.querySelector(".capture-efficiency-summary")?.textContent ?? "", /10s of 10m 0s Browser Run minutes used today/);
   assert.match(container.querySelector(".browser-usage-budget-note")?.textContent ?? "", /forecast to stay within the.*daily budget/i);
+  const evidenceSummary = container.querySelector(".capture-efficiency-a2ui");
+  assert.ok(evidenceSummary);
+  assert.match(evidenceSummary.textContent ?? "", /1 reviewed screenshot/);
+  assert.match(evidenceSummary.textContent ?? "", /Complete 1 · incomplete 0 · uncertain 0/);
 
   const durationTable = advanced.querySelector("[data-table='per-site-duration']");
   assert.ok(durationTable);
@@ -90,6 +95,7 @@ test("Capture Efficiency keeps per-site timing details in a collapsed table and 
   assert.match(recentTable.textContent, /Human-reviewed screenshots marked complete5 screenshots/);
   assert.match(recentTable.textContent, /Human-reviewed screenshots marked incomplete1 screenshot/);
   assert.match(recentTable.textContent, /Human-reviewed screenshots marked uncertain2 screenshots/);
+  assert.match(recentTable.textContent, /JEV suggestions with reviewed screenshots marked complete1 screenshot/);
   assert.match(advanced.querySelector("[data-table='schedule-estimates']")?.textContent ?? "", /1 hour.*24\.0.*4m 12s per day/);
 });
 

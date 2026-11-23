@@ -9,12 +9,13 @@ import { NodeResolver } from "@a2ui/web_core/resolution";
 import { CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS } from "../../src/capture-forecast.ts";
 import { formatRunTime } from "./capture-presentation.ts";
 import { getPlaylistSyncState } from "../../src/playlist-sync-state.ts";
-import { a2uiCard, a2uiColumn, a2uiText } from "./a2ui-components.ts";
+import { a2uiColumn, a2uiMetricCardComponents, a2uiText } from "./a2ui-components.ts";
 
 const FLEET_CATALOG_ID = "https://ribbonfish.dev/a2ui/catalogs/management-v2.json";
 const FLEET_SURFACE_ID = "fleetOverview";
 const CAPTURE_WORKBENCH_SURFACE_ID = "captureWorkbench";
 const PLAYLIST_READINESS_SURFACE_ID = "playlistReadiness";
+const CAPTURE_EFFICIENCY_SURFACE_ID = "captureEfficiency";
 const MAX_FLEET_COMPONENTS = 64;
 const MAX_FLEET_COMPONENT_DEPTH = 10;
 const MAX_FLEET_DATA_BYTES = 16_384;
@@ -221,17 +222,8 @@ function createComponents(): FleetComponent[] {
   }];
 
   for (const [index, { id }] of METRIC_COMPONENTS.entries()) {
-    components.push(
-      a2uiCard(`${id}Card`, `${id}Content`),
-      a2uiColumn(`${id}Content`, [
-        `${id}Label`, `${id}Value`, `${id}Detail`,
-        ...(id === "health" ? healthStatusIds : id === "playlistSync" ? playlistSyncIds : []).map((rowId) => `${id}${rowId}`),
-      ]),
-      a2uiText(`${id}Label`, `/metrics/${index}/label`),
-      a2uiText(`${id}Value`, `/metrics/${index}/value`, "body"),
-      a2uiText(`${id}Detail`, `/metrics/${index}/detail`),
-    );
     const rowIds = id === "health" ? healthStatusIds : id === "playlistSync" ? playlistSyncIds : [];
+    components.push(...a2uiMetricCardComponents(id, index, rowIds.map((rowId) => `${id}${rowId}`)));
     rowIds.forEach((rowId, rowIndex) => components.push(a2uiText(
       `${id}${rowId}`,
       `/metrics/${index}/rows/${rowIndex}/text`,
@@ -313,11 +305,12 @@ export function renderA2uiMessages(
 }
 
 function assertManagementMessageBounds(messages: readonly unknown[], surfaceId: string, allowActions: boolean) {
-  if (![FLEET_SURFACE_ID, CAPTURE_WORKBENCH_SURFACE_ID, PLAYLIST_READINESS_SURFACE_ID].includes(surfaceId)) {
+  if (![FLEET_SURFACE_ID, CAPTURE_WORKBENCH_SURFACE_ID, PLAYLIST_READINESS_SURFACE_ID, CAPTURE_EFFICIENCY_SURFACE_ID].includes(surfaceId)) {
     throw new Error("A2UI management UI requested an unsupported surface");
   }
   const surfaceLabel = surfaceId === FLEET_SURFACE_ID ? "fleet overview"
-    : surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "capture workbench" : "playlist readiness";
+    : surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "capture workbench"
+      : surfaceId === PLAYLIST_READINESS_SURFACE_ID ? "playlist readiness" : "capture efficiency";
   if (messages.length !== 1) throw new Error(`A2UI ${surfaceLabel} accepts one v1.0 createSurface message`);
   const message = messages[0];
   if (!isRecord(message) || message.version !== "1.0" || !isRecord(message.createSurface) ||
@@ -335,8 +328,8 @@ function assertManagementMessageBounds(messages: readonly unknown[], surfaceId: 
     isRecord(component) && typeof component.id === "string" && typeof component.component === "string")) {
     throw new Error(`A2UI ${surfaceLabel} contains an invalid component`);
   }
-  const allowed: readonly string[] = surfaceId === FLEET_SURFACE_ID
-    ? ["Card", "Column", "Text", "Badge"] : MANAGEMENT_COMPONENT_NAMES;
+  const readOnlySurface = surfaceId === FLEET_SURFACE_ID || surfaceId === CAPTURE_EFFICIENCY_SURFACE_ID;
+  const allowed: readonly string[] = readOnlySurface ? ["Card", "Column", "Text", "Badge"] : MANAGEMENT_COMPONENT_NAMES;
   if (!surface.components.every((component: Record<string, unknown>) => allowed.includes(String(component.component)))) {
     throw new Error(`A2UI ${surfaceLabel} contains an unsupported component`);
   }
@@ -411,7 +404,9 @@ function renderComponent(
   if (depth > MAX_FLEET_COMPONENT_DEPTH) {
     throw new Error(options.surfaceId === FLEET_SURFACE_ID
       ? "A2UI fleet overview exceeds the supported component depth"
-      : "A2UI capture workbench exceeds the supported component depth");
+      : options.surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "A2UI capture workbench exceeds the supported component depth"
+        : options.surfaceId === PLAYLIST_READINESS_SURFACE_ID ? "A2UI playlist readiness exceeds the supported component depth"
+          : "A2UI capture efficiency exceeds the supported component depth");
   }
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.type !== "string") {
     throw new Error("A2UI management UI contains an invalid component");
@@ -422,9 +417,15 @@ function renderComponent(
       const column = document.createElement("div");
       column.className = value.id === "root"
         ? options.surfaceId === FLEET_SURFACE_ID ? "fleet-summary-grid"
-          : options.surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "capture-workbench-a2ui" : "playlist-readiness-a2ui"
+          : options.surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "capture-workbench-a2ui"
+            : options.surfaceId === PLAYLIST_READINESS_SURFACE_ID ? "playlist-readiness-a2ui" : "capture-efficiency-a2ui"
         : options.surfaceId === FLEET_SURFACE_ID ? "overview-metric__content"
-          : options.surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "capture-workbench-a2ui__content" : "playlist-readiness-a2ui__content";
+          : options.surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "capture-workbench-a2ui__content"
+            : options.surfaceId === PLAYLIST_READINESS_SURFACE_ID ? "playlist-readiness-a2ui__content" : "capture-efficiency-a2ui__content";
+      if (options.surfaceId === CAPTURE_EFFICIENCY_SURFACE_ID && value.id === "root") {
+        column.setAttribute("role", "group");
+        column.setAttribute("aria-label", "Capture efficiency evidence summary");
+      }
       if (!Array.isArray(value.children)) throw new Error("A2UI Column requires child components");
       for (const child of value.children) column.append(renderComponent(child, document, { ...options, depth: depth + 1 }));
       return column;
@@ -434,7 +435,8 @@ function renderComponent(
       const card = document.createElement(href ? "a" : "article");
       card.className = href ? "overview-metric"
         : options.surfaceId === FLEET_SURFACE_ID ? "overview-metric"
-          : options.surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "capture-workbench-a2ui__card" : "playlist-readiness-a2ui__card";
+          : options.surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "capture-workbench-a2ui__card"
+            : options.surfaceId === PLAYLIST_READINESS_SURFACE_ID ? "playlist-readiness-a2ui__card" : "capture-efficiency-a2ui__card";
       if (href) card.setAttribute("href", href);
       if (!isRecord(value.child)) throw new Error("A2UI Card requires one child component");
       card.append(renderComponent(value.child, document, { ...options, depth: depth + 1 }));
@@ -444,7 +446,8 @@ function renderComponent(
       if (options.surfaceId !== FLEET_SURFACE_ID) {
         const text = typeof value.text === "string" ? value.text : "";
         const element = document.createElement(value.variant === "body" ? "p" : "span");
-        const prefix = options.surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "capture-workbench-a2ui" : "playlist-readiness-a2ui";
+        const prefix = options.surfaceId === CAPTURE_WORKBENCH_SURFACE_ID ? "capture-workbench-a2ui"
+          : options.surfaceId === PLAYLIST_READINESS_SURFACE_ID ? "playlist-readiness-a2ui" : "capture-efficiency-a2ui";
         element.className = `${prefix}__text ${prefix}__text--${value.variant === "body" ? "body" : "caption"}`;
         element.textContent = text;
         return element;

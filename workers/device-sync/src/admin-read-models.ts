@@ -66,7 +66,7 @@ function finiteNonNegativeOrNull(value: unknown): number | null {
 export async function readOverview(env: WorkerEnvironment) {
   const now = Date.now();
   const windowStart = now - 30 * 24 * 60 * 60 * 1000;
-  const [devices, playlists, active, audit, captureTargets, captureRuntimeAverages, integrityIssues, captureJobs, captureChangeHistory, captureHistory, captureDurationSummaries, captureUsage, captureDecisions, captureQualityReviews] = await Promise.all([
+  const [devices, playlists, active, audit, captureTargets, captureRuntimeAverages, integrityIssues, captureJobs, captureChangeHistory, captureHistory, captureDurationSummaries, captureUsage, captureDecisions, captureQualityReviews, jevCandidateQualityReviews] = await Promise.all([
     env.DB.prepare(
       "SELECT d.device_id, d.enabled, d.created_at, d.last_seen_at, " +
       "CASE WHEN d.public_key IS NULL THEN 'token' ELSE 'key' END AS auth_type, " +
@@ -191,6 +191,19 @@ export async function readOverview(env: WorkerEnvironment) {
       "SUM(CASE WHEN quality = 'uncertain' THEN 1 ELSE 0 END) AS uncertain " +
       "FROM capture_quality_reviews WHERE reviewed_at >= ?",
     ).bind(windowStart).first(),
+    env.DB.prepare(
+      "SELECT COUNT(*) AS total, " +
+      "SUM(CASE WHEN r.quality = 'complete' THEN 1 ELSE 0 END) AS complete, " +
+      "SUM(CASE WHEN r.quality = 'incomplete' THEN 1 ELSE 0 END) AS incomplete, " +
+      "SUM(CASE WHEN r.quality = 'uncertain' THEN 1 ELSE 0 END) AS uncertain " +
+      "FROM capture_quality_reviews r INDEXED BY capture_quality_reviews_reviewed_idx " +
+      "JOIN capture_history h ON h.capture_id = r.capture_id AND h.job_id = r.job_id " +
+      "JOIN capture_jobs j ON j.job_id = h.job_id AND j.capture_id = h.capture_id " +
+      "JOIN capture_decisions d ON d.capture_id = j.capture_id AND d.due_at = j.scheduled_due_at " +
+      "WHERE r.reviewed_at >= ? AND d.assessed_at >= ? " +
+      "AND j.status = 'succeeded' AND j.result_kind = 'screenshot' " +
+      "AND d.action = 'defer_once'",
+    ).bind(windowStart, windowStart).first(),
   ]);
 
   const missing = await readMissingActiveAssets(env, active, windowStart);
@@ -214,7 +227,8 @@ export async function readOverview(env: WorkerEnvironment) {
     active_playlist: activePlaylist,
     capture_targets: captureTargetSummaries,
     capture_efficiency: summarizeOverviewCaptureEfficiency(
-      captureTargetSummaries, captureUsage, budgetMs, now, captureJobs, captureHistory, captureDecisions, captureQualityReviews,
+      captureTargetSummaries, captureUsage, budgetMs, now, captureJobs, captureHistory, captureDecisions,
+      captureQualityReviews, jevCandidateQualityReviews,
     ),
     asset_health: {
       missing,
@@ -315,12 +329,15 @@ function summarizeOverviewCaptureEfficiency(
   captureHistory: SqlRow | null,
   captureDecisions: SqlRow | null,
   captureQualityReviews: SqlRow | null,
+  jevCandidateQualityReviews: SqlRow | null,
 ) {
   const summary = buildCaptureUsageSummary(captureTargets.filter((target) => target.capture_type !== "api-dashboard"), captureUsage, budgetMs, now);
   return {
     daily_usage: summary.daily_usage,
     forecast: summary.forecast,
-    last_30_days: summarizeOverviewLast30Days(captureJobs, captureHistory, captureDecisions, captureQualityReviews),
+    last_30_days: summarizeOverviewLast30Days(
+      captureJobs, captureHistory, captureDecisions, captureQualityReviews, jevCandidateQualityReviews,
+    ),
   };
 }
 
@@ -328,7 +345,13 @@ function overviewCount(row: SqlRow | null, key: string) {
   return row?.[key] ?? 0;
 }
 
-function summarizeOverviewLast30Days(captureJobs: SqlRow | null, captureHistory: SqlRow | null, captureDecisions: SqlRow | null, captureQualityReviews: SqlRow | null) {
+function summarizeOverviewLast30Days(
+  captureJobs: SqlRow | null,
+  captureHistory: SqlRow | null,
+  captureDecisions: SqlRow | null,
+  captureQualityReviews: SqlRow | null,
+  jevCandidateQualityReviews: SqlRow | null,
+) {
   return {
     successful_screenshots: overviewCount(captureJobs, "successful_screenshots"),
     validator_unchanged: overviewCount(captureJobs, "validator_unchanged"),
@@ -347,6 +370,12 @@ function summarizeOverviewLast30Days(captureJobs: SqlRow | null, captureHistory:
       complete: overviewCount(captureQualityReviews, "complete"),
       incomplete: overviewCount(captureQualityReviews, "incomplete"),
       uncertain: overviewCount(captureQualityReviews, "uncertain"),
+    },
+    jev_candidate_quality_reviews: {
+      complete: overviewCount(jevCandidateQualityReviews, "complete"),
+      incomplete: overviewCount(jevCandidateQualityReviews, "incomplete"),
+      uncertain: overviewCount(jevCandidateQualityReviews, "uncertain"),
+      total: overviewCount(jevCandidateQualityReviews, "total"),
     },
     validator_outcomes: {
       disabled: overviewCount(captureJobs, "validator_disabled"),

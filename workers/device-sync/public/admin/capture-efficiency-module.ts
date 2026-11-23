@@ -6,6 +6,7 @@ import {
 } from "../../src/capture-forecast.ts";
 import { formatRunTime } from "./capture-presentation.ts";
 import { renderCaptureUsageForecast } from "./capture-forecast-view.ts";
+import { renderCaptureEfficiencyA2ui } from "./capture-efficiency-a2ui.ts";
 import { node } from "./ui-primitives.ts";
 import { formatCaptureInterval } from "./ui-formatters.ts";
 import type { CaptureDurationSummary } from "../../src/capture-duration.ts";
@@ -13,6 +14,7 @@ import type { CaptureDurationSummary } from "../../src/capture-duration.ts";
 interface CaptureTargetSummary {
   capture_id: string;
   display_url: string;
+  capture_type?: string;
   name?: string | null;
   capture_interval_seconds: number;
   wait_for_selector?: string | null;
@@ -161,6 +163,7 @@ function scheduleRows(sites: CaptureSiteForecast[]): string[][] {
 function recentOutcomeRows(efficiency: CaptureEfficiencySummary): string[][] {
   const recent = efficiency.last_30_days ?? {};
   const runTime = recent.browser_run_ms ?? {};
+  const jevQuality = recent.jev_candidate_quality_reviews ?? {};
   const labelCount = (value: unknown, singular: string, plural = `${singular}s`) => {
     const amount = count(value);
     return `${amount} ${amount === 1 ? singular : plural}`;
@@ -183,6 +186,9 @@ function recentOutcomeRows(efficiency: CaptureEfficiencySummary): string[][] {
     ["Human-reviewed screenshots marked complete", labelCount(recent.screenshot_quality_reviews?.complete, "screenshot")],
     ["Human-reviewed screenshots marked incomplete", labelCount(recent.screenshot_quality_reviews?.incomplete, "screenshot")],
     ["Human-reviewed screenshots marked uncertain", labelCount(recent.screenshot_quality_reviews?.uncertain, "screenshot")],
+    ["JEV suggestions with reviewed screenshots marked complete", labelCount(jevQuality.complete, "screenshot")],
+    ["JEV suggestions with reviewed screenshots marked incomplete", labelCount(jevQuality.incomplete, "screenshot")],
+    ["JEV suggestions with reviewed screenshots marked uncertain", labelCount(jevQuality.uncertain, "screenshot")],
     ["Schedule changes made by JEV", "None; suggestions are advisory"],
   ];
 }
@@ -239,6 +245,10 @@ export function renderCaptureEfficiencyModule(
       ? CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS
       : milliseconds(dailyUsage.free_plan_limit_ms),
   });
+  const evidenceSummary = node("section", undefined, "capture-efficiency-evidence", ownerDocument);
+  evidenceSummary.setAttribute("aria-label", "Capture advice and reviewed outcome summary");
+  renderCaptureEfficiencyA2ui(evidenceSummary, targets, efficiency);
+  container.append(evidenceSummary);
   container.append(renderAdvancedDetails(targets, forecast, efficiency, ownerDocument));
   return forecast;
 }
