@@ -1,7 +1,8 @@
-import { createMetricGrid, node, statusBadge } from "./ui-primitives.ts";
+import { createMetricGrid, inlineCode, node, statusBadge } from "./ui-primitives.ts";
+import { createPlaylistSyncStatus } from "./ui-components.ts";
 
 export type PlaylistReadinessViewData = {
-  revision?: { playlist_id?: string; revision?: string };
+  revision?: { playlist_id?: string; revision?: string; effective_revision?: string };
   status: "ready" | "review" | "blocked" | string;
   summary: {
     total_items: number;
@@ -110,7 +111,10 @@ export function renderPlaylistReadiness(
     const list = node("ul", undefined, "playlist-readiness__devices", ownerDocument);
     readiness.devices_to_update.forEach((device) => {
       const row = node("li", undefined, undefined, ownerDocument);
-      row.append(node("code", device.device_id, undefined, ownerDocument), node("span", humanize(device.sync_status), "muted", ownerDocument));
+      row.append(inlineCode(device.device_id, { ownerDocument }), createPlaylistSyncStatus({
+        state: device.sync_status as "behind" | "unreported",
+        ownerDocument,
+      }));
       list.append(row);
     });
     recipients.append(list);

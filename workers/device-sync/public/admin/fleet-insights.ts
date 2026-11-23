@@ -1,4 +1,5 @@
 import { formatTimestamp } from "./admin-formatters.ts";
+import { getPlaylistSyncState } from "../../src/playlist-sync-state.ts";
 
 type CaptureSummary = {
   name?: string | null;
@@ -20,7 +21,7 @@ type FleetDevice = {
   } | null;
 };
 type FleetOverview = {
-  active_playlist?: { playlist_id?: string; revision?: string | number } | null;
+  active_playlist?: { playlist_id?: string; revision?: string | number; effective_revision?: string | number } | null;
   devices?: FleetDevice[];
   asset_health?: { missing?: { sha256?: string; last_seen_at?: number }[]; integrity_issues?: { sha256?: string; last_seen_at?: number }[] };
   capture_targets?: CaptureSummary[];
@@ -181,13 +182,19 @@ function latestTimestamp(values: unknown[]) {
 }
 
 function isBehindActivePlaylist(device: FleetDevice, activePlaylist: FleetOverview["active_playlist"]) {
-  return Boolean(activePlaylist && activePlaylist.revision !== undefined && activePlaylist.revision !== null &&
-    device.health?.applied_playlist_id && device.health?.applied_revision !== undefined && device.health?.applied_revision !== null &&
-    (device.health.applied_playlist_id !== activePlaylist.playlist_id || String(device.health.applied_revision) !== String(activePlaylist.revision)));
+  return getPlaylistSyncState({
+    enabled: device.enabled,
+    applied_playlist_id: device.health?.applied_playlist_id,
+    applied_revision: device.health?.applied_revision,
+  }, activePlaylist) === "behind";
 }
 
 function isPlaylistSyncUnknown(device: FleetDevice, activePlaylist: FleetOverview["active_playlist"]) {
-  return Boolean(activePlaylist && (!device.health?.applied_playlist_id || device.health?.applied_revision === undefined || device.health.applied_revision === null));
+  return getPlaylistSyncState({
+    enabled: device.enabled,
+    applied_playlist_id: device.health?.applied_playlist_id,
+    applied_revision: device.health?.applied_revision,
+  }, activePlaylist) === "unreported";
 }
 
 function formatAffectedLabels(labels: unknown[]) {

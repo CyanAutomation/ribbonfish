@@ -40,6 +40,7 @@ import {
   playlistReadinessQuestions,
 } from "./jev-use-cases.ts";
 import { assessPlaylistReadiness } from "./playlist-readiness.ts";
+import { readPlaylistContent } from "./playlist-revision.ts";
 import type { SqlRow, WorkerEnvironment, WorkerExecutionContext } from "./worker-contracts.ts";
 
 type AdminRequestContext = Partial<Pick<WorkerExecutionContext, "access" | "waitUntil">>;
@@ -997,8 +998,9 @@ async function readPlaylistReadiness(playlistID: string, revision: string, env: 
       asset_present: await assetMatches(env, imageHash, imageSize),
     };
   }));
+  const content = await readPlaylistContent(env, playlistID, revision, now);
   const readiness = assessPlaylistReadiness({
-    revision: { playlist_id: playlistID, revision },
+    revision: { playlist_id: playlistID, revision, effective_revision: content.effective_revision },
     assets,
     captures,
     devices: (deviceRows.results ?? []).map((device) => ({

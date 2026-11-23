@@ -8,6 +8,7 @@ import { getValue } from "@a2ui/web_core/reactivity";
 import { NodeResolver } from "@a2ui/web_core/resolution";
 import { CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS } from "../../src/capture-forecast.ts";
 import { formatRunTime } from "./capture-presentation.ts";
+import { getPlaylistSyncState } from "../../src/playlist-sync-state.ts";
 
 const FLEET_CATALOG_ID = "https://ribbonfish.dev/a2ui/catalogs/management-v2.json";
 const FLEET_SURFACE_ID = "fleetOverview";
@@ -104,7 +105,7 @@ type FleetOverviewData = {
       applied_revision?: string | number | null;
     } | null;
   }>;
-  active_playlist?: { playlist_id?: string; revision?: string | number } | null;
+  active_playlist?: { playlist_id?: string; revision?: string | number; effective_revision?: string | number } | null;
   capture_efficiency?: {
     daily_usage?: {
       accounted_ms?: number;
@@ -134,10 +135,11 @@ function validMilliseconds(value: unknown): value is number {
 }
 
 function isBehindActivePlaylist(device: NonNullable<FleetOverviewData["devices"]>[number], active: FleetOverviewData["active_playlist"]) {
-  const health = device.health;
-  if (!active || active.revision === undefined || active.revision === null || !health?.applied_playlist_id ||
-    health.applied_revision === undefined || health.applied_revision === null) return false;
-  return health.applied_playlist_id !== active.playlist_id || String(health.applied_revision) !== String(active.revision);
+  return getPlaylistSyncState({
+    enabled: device.enabled,
+    applied_playlist_id: device.health?.applied_playlist_id,
+    applied_revision: device.health?.applied_revision,
+  }, active) === "behind";
 }
 
 function buildOverviewMetrics(overview: FleetOverviewData, enrollmentRequests: EnrollmentRequest[]): FleetMetric[] {
@@ -194,8 +196,11 @@ function isReported(device: NonNullable<FleetOverviewData["devices"]>[number]) {
 }
 
 function isOnActivePlaylist(device: NonNullable<FleetOverviewData["devices"]>[number], active: FleetOverviewData["active_playlist"]) {
-  return Boolean(active && active.revision !== undefined && active.revision !== null && isReported(device) &&
-    device.health?.applied_playlist_id === active.playlist_id && String(device.health?.applied_revision) === String(active.revision));
+  return isReported(device) && getPlaylistSyncState({
+    enabled: device.enabled,
+    applied_playlist_id: device.health?.applied_playlist_id,
+    applied_revision: device.health?.applied_revision,
+  }, active) === "in_sync";
 }
 
 function dataBinding(path: string) {

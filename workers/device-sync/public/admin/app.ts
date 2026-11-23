@@ -2,6 +2,7 @@ import { api } from "./api.ts";
 import { formatTimestamp } from "./admin-formatters.ts";
 import { formatDeviceHealthDetails } from "./health-details.ts";
 import { deviceNeedsReview } from "./device-needs-review.ts";
+import { getPlaylistSyncState } from "../../src/playlist-sync-state.ts";
 import { buildFleetInsights } from "./fleet-insights.ts";
 import { requiredElement, requiredElements, requiredFormControl } from "./dom.ts";
 import {
@@ -32,6 +33,7 @@ import {
   createToolbar,
   renderFindingList,
   setPageHeaderMetadata,
+  createPlaylistSyncStatus,
   type RefreshMode,
 } from "./ui-components.ts";
 import { initModuleNavigation } from "./module-navigation.ts";
@@ -806,7 +808,7 @@ function healthDetails(device) {
   return details;
 }
 
-function deviceDetails(device) {
+function deviceDetails(device, activePlaylist) {
   const details = node("details", undefined, "device-details");
   details.append(node("summary", "Device details"));
   let playlist: HTMLElement | string = "Not reported";
@@ -822,6 +824,16 @@ function deviceDetails(device) {
     { label: "Authentication", value: device.auth_type === "key" ? "Key-based" : "Legacy token" },
     { label: "Last report", value: formatTimestamp(device.health?.received_at) },
     { label: "Playlist", value: playlist },
+    { label: "Playlist sync", value: createPlaylistSyncStatus({
+      state: getPlaylistSyncState({
+        enabled: device.enabled,
+        applied_playlist_id: device.health?.applied_playlist_id,
+        applied_revision: device.health?.applied_revision,
+      }, activePlaylist),
+      appliedRevision: device.health?.applied_revision,
+      activeRevision: activePlaylist?.effective_revision ?? activePlaylist?.revision,
+      ownerDocument: document,
+    }) },
   ], { className: "device-details__list", ownerDocument: document });
   details.append(list, healthDetails(device));
   return details;
@@ -848,7 +860,7 @@ function renderDevices(devices, activePlaylist) {
         if (!output) return "—";
         return output.error_code ? `${output.display_id}: ${output.error_code}` : `${output.display_id}: ${output.status}`;
       } },
-      { label: "Details", render: (device) => deviceDetails(device) },
+      { label: "Details", render: (device) => deviceDetails(device, activePlaylist) },
       { label: "Actions", render: (device, layout) => deviceActionButtons(device, layout) },
     ],
     emptyState: {

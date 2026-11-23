@@ -43,6 +43,18 @@ test("playlist readiness treats unreported enabled devices as recipients and emp
   assert.equal(result.devices_to_update[0]?.sync_status, "unreported");
 });
 
+test("playlist readiness compares capture recipients with the effective revision", () => {
+  const result = assessPlaylistReadiness({
+    revision: { playlist_id: "office", revision: "r-stored", effective_revision: "content-hash" },
+    assets: [],
+    captures: [{ capture_id: "capture-1", fresh: true, enabled: true, schedule_reviewed: true, asset_present: true }],
+    devices: [{ device_id: "pi-current", enabled: true, applied_playlist_id: "office", applied_revision: "content-hash" }],
+  });
+
+  assert.equal(result.summary.devices_to_update, 0);
+  assert.deepEqual(result.devices_to_update, []);
+});
+
 test("playlist readiness warns about unreviewed schedules and blocks disabled capture items", () => {
   const result = assessPlaylistReadiness({
     revision,

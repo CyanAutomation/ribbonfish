@@ -8,6 +8,7 @@ import {
   createFormField,
   createMetricGrid,
   createSettingsGroup,
+  inlineCode,
   metricCard,
   scaleMeter,
   setStatusNotice,
@@ -21,6 +22,7 @@ import {
   createPageHeader,
   createRefreshCoordinator,
   createToolbar,
+  createPlaylistSyncStatus,
   setPageHeaderMetadata,
 } from "../public/admin/ui-components.ts";
 import { createSingleFlight } from "../public/admin/ui-utils.ts";
@@ -132,6 +134,34 @@ test("metric cards render labels and values as text in a reusable semantic compo
   assert.equal(requiredMatch<HTMLElement>(card, ".metric-card__label").textContent, "<img src=x onerror=alert(1)>");
   assert.equal(requiredMatch<HTMLElement>(card, ".metric-card__value").textContent, "10m 0s");
   assert.equal(card.querySelector("img"), null, "label text is not parsed as markup");
+  dom.window.close();
+});
+
+test("inline code is a reusable safe primitive for revision identifiers", () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const code = inlineCode("<img src=x onerror=alert(1)>", { ownerDocument: dom.window.document });
+
+  assert.equal(code.tagName, "CODE");
+  assert.equal(code.textContent, "<img src=x onerror=alert(1)>");
+  assert.equal(code.querySelector("img"), null);
+  dom.window.close();
+});
+
+test("playlist sync status is a reusable accessible component with revision context", () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const status = createPlaylistSyncStatus({
+    state: "in_sync",
+    appliedRevision: "content-hash",
+    activeRevision: "content-hash",
+    ownerDocument: dom.window.document,
+  });
+
+  assert.equal(status.getAttribute("role"), "group");
+  assert.equal(status.getAttribute("aria-label"), "Playlist sync status");
+  assert.match(status.textContent ?? "", /In sync/);
+  assert.equal(status.querySelectorAll("code").length, 2);
+  assert.match(status.textContent ?? "", /Applied/);
+  assert.match(status.textContent ?? "", /Active/);
   dom.window.close();
 });
 

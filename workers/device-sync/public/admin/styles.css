@@ -260,6 +260,12 @@ main > section[id], main > details[id], main > section[id] > section[id] { scrol
 .badge { display: inline-flex; align-items: center; padding: .2rem .5rem; border-radius: var(--radius-pill); background: var(--color-success-bg); color: var(--color-success); font-size: var(--font-size-caption); font-weight: 700; white-space: nowrap; }
 .badge--neutral { background: var(--color-neutral-bg); color: var(--color-muted); }
 .badge--warning { background: var(--color-warning-bg); color: var(--color-warning); }
+.playlist-sync-status { display: grid; gap: 0.35rem; justify-items: start; }
+.playlist-sync-status__revisions { display: flex; flex-wrap: wrap; gap: 0.25rem 0.65rem; margin: 0; }
+.playlist-sync-status__revisions > div { display: flex; gap: 0.25rem; }
+.playlist-sync-status__revisions dt { color: var(--color-muted); }
+.playlist-sync-status__revisions dd { margin: 0; }
+.inline-code { overflow-wrap: anywhere; }
 .badge--error { background: var(--color-danger-bg); color: var(--color-danger); }
 .device-health-details { min-width: 12rem; }
 .device-health-details summary { cursor: pointer; color: var(--color-brand); font-weight: 600; }
