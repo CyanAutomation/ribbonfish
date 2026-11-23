@@ -32,6 +32,8 @@ class FakeDatabase {
     this.readinessDevices = [];
     this.playlistReadinessAssessments = [];
     this.playlistReadinessPlaylistReads = 0;
+    this.captureHistory = [];
+    this.captureQualityReviews = [];
     this.mutationCalls = 0;
   }
 
@@ -43,6 +45,7 @@ class FakeDatabase {
       bind(...boundValues) { values = boundValues; return this; },
       get values() { return values; },
       async first() {
+        if (sql.includes("FROM capture_quality_reviews WHERE reviewed_at")) return database.captureQualityReviewSummary ?? null;
         if (sql.includes("FROM playlist_readiness_assessments")) return database.playlistReadinessAssessments.at(-1) ?? null;
         if (sql.includes("FROM capture_usage")) return database.captureUsage ?? null;
         if (sql.includes("FROM capture_targets")) return database.captureTarget ?? null;
@@ -143,6 +146,15 @@ class FakeDatabase {
     if (sql.startsWith("INSERT INTO playlist_readiness_assessments")) {
       const [assessment_id, playlist_id, revision, assessed_at, deterministic_status, decision_json, model] = values;
       this.playlistReadinessAssessments.push({ assessment_id, playlist_id, revision, assessed_at, deterministic_status, decision_json, model });
+    } else if (sql.startsWith("INSERT INTO capture_quality_reviews")) {
+      const [capture_id, job_id, quality, reviewer, reviewed_at, guarded_capture_id, guarded_job_id] = values;
+      const exists = this.captureHistory.some((row) => row.capture_id === guarded_capture_id && row.job_id === guarded_job_id) &&
+        this.captureTarget?.capture_id === guarded_capture_id && this.captureTarget?.capture_type === "browser-screenshot";
+      if (!exists) return 0;
+      const existing = this.captureQualityReviews.find((row) => row.capture_id === capture_id && row.job_id === job_id);
+      if (existing) Object.assign(existing, { quality, reviewer, reviewed_at });
+      else this.captureQualityReviews.push({ capture_id, job_id, quality, reviewer, reviewed_at });
+      return 1;
     } else if (sql.startsWith("INSERT INTO playlists")) {
       const [playlist_id, revision, rotation_interval, created_at] = values;
       this.playlists.set(playlist_id + ":" + revision, {
@@ -265,6 +277,42 @@ test("obsolete fleet analysis endpoint is not available", async () => {
   const env = testEnvironment();
   const response = await handleAdminRequest(request("/admin/api/jev/fleet-analysis", { method: "POST", body: {} }), env);
   assert.equal(response.status, 404);
+});
+
+test("screenshot quality reviews are tied to an existing capture and audited", async () => {
+  const env = testEnvironment();
+  const jobID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  env.DB.captureTarget = { capture_id: captureID, capture_type: "browser-screenshot" };
+  env.DB.captureHistory.push({ capture_id: captureID, job_id: jobID });
+
+  const response = await handleAdminRequest(request(`/admin/api/captures/${captureID}/quality-review`, {
+    method: "POST", body: { job_id: jobID, quality: "complete" },
+  }), env);
+
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.deepEqual(result, { capture_id: captureID, job_id: jobID, quality: "complete", reviewed_at: result.reviewed_at });
+  assert.equal(Number.isSafeInteger(result.reviewed_at), true);
+  assert.deepEqual(env.DB.captureQualityReviews.map(({ capture_id, job_id, quality, reviewer }) => ({ capture_id, job_id, quality, reviewer })), [
+    { capture_id: captureID, job_id: jobID, quality: "complete", reviewer: "anonymous" },
+  ]);
+  assert.equal(env.DB.auditEvents.at(-1)?.event_type, "capture.quality_reviewed");
+});
+
+test("screenshot quality review rejects invalid labels and screenshots outside stored history", async () => {
+  const env = testEnvironment();
+  const jobID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const invalid = await handleAdminRequest(request(`/admin/api/captures/${captureID}/quality-review`, {
+    method: "POST", body: { job_id: jobID, quality: "healthy" },
+  }), env);
+  assert.equal(invalid.status, 400);
+  assert.equal(env.DB.captureQualityReviews.length, 0);
+
+  const missing = await handleAdminRequest(request(`/admin/api/captures/${captureID}/quality-review`, {
+    method: "POST", body: { job_id: jobID, quality: "uncertain" },
+  }), env);
+  assert.equal(missing.status, 404);
+  assert.equal(env.DB.auditEvents.length, 0);
 });
 
 test("JEV provider failures do not expose provider authentication or response details", async () => {
@@ -698,10 +746,11 @@ test("overview exposes bounded screenshot change history and a deterministic scr
     active_in_playlist: 1,
   }];
   env.DB.captureHistory = [
-    { capture_id: captureID, captured_at: 10_000, sha256: "c".repeat(64) },
+    { capture_id: captureID, job_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", captured_at: 10_000, sha256: "c".repeat(64), quality_review: "complete" },
     { capture_id: captureID, captured_at: 9_000, sha256: "b".repeat(64) },
     { capture_id: captureID, captured_at: 8_000, sha256: "b".repeat(64) },
   ];
+  env.DB.captureQualityReviewSummary = { complete: 1, incomplete: 0, uncertain: 0 };
   const originalNow = Date.now;
   Date.now = () => now;
   try {
@@ -710,10 +759,13 @@ test("overview exposes bounded screenshot change history and a deterministic scr
     assert.equal(response.status, 200);
     assert.equal(body.capture_targets[0].screenshot_age_seconds, 10);
     assert.deepEqual(body.capture_targets[0].recent_history, [
-      { captured_at: 10_000, changed: true },
+      { captured_at: 10_000, changed: true, job_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", quality_review: "complete" },
       { captured_at: 9_000, changed: false },
       { captured_at: 8_000, changed: null },
     ]);
+    assert.deepEqual(body.capture_efficiency.last_30_days.screenshot_quality_reviews, {
+      complete: 1, incomplete: 0, uncertain: 0,
+    });
     assert.equal(body.capture_targets[0].recent_change_count, 1);
     assert.doesNotMatch(JSON.stringify(body.capture_targets[0]), /sha256/);
   } finally { Date.now = originalNow; }

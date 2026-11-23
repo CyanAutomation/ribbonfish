@@ -4,11 +4,84 @@ import {
   createDefinitionList,
   inlineCode,
   linkButton,
+  button,
   node,
   statusBadge,
   type DefinitionListItem,
 } from "./ui-primitives.ts";
 import type { PlaylistSyncState } from "../../src/playlist-sync-state.ts";
+
+export type ScreenshotQuality = "complete" | "incomplete" | "uncertain";
+
+export interface ScreenshotQualityReviewOptions {
+  value?: ScreenshotQuality | null;
+  ownerDocument?: Document;
+  onSave(quality: ScreenshotQuality): void | Promise<void>;
+}
+
+let generatedQualityReviewID = 0;
+
+/** Render a reusable, accessible control for human review of captured page completeness. */
+export function createScreenshotQualityReview(options: ScreenshotQualityReviewOptions): HTMLElement {
+  const ownerDocument = options.ownerDocument ?? document;
+  const id = `screenshot-quality-review-${++generatedQualityReviewID}`;
+  const fieldset = node("fieldset", undefined, "screenshot-quality-review", ownerDocument);
+  fieldset.append(node("legend", "Screenshot completeness", undefined, ownerDocument));
+
+  const label = node("label", "Review label", "screenshot-quality-review__label", ownerDocument);
+  const select = node("select", undefined, "field-control screenshot-quality-review__select", ownerDocument);
+  select.id = id;
+  select.setAttribute("aria-label", "Screenshot completeness");
+  select.required = true;
+  const empty = node("option", "Choose a review label", undefined, ownerDocument);
+  empty.value = "";
+  select.append(empty);
+  const labels: Array<[ScreenshotQuality, string]> = [
+    ["complete", "Complete"],
+    ["incomplete", "Incomplete"],
+    ["uncertain", "Uncertain"],
+  ];
+  for (const [quality, text] of labels) {
+    const option = node("option", text, undefined, ownerDocument);
+    option.value = quality;
+    select.append(option);
+  }
+  if (options.value) select.value = options.value;
+  label.append(select);
+
+  const save = button("Save review", "secondary", ownerDocument);
+  const status = node("p", options.value ? `Latest screenshot reviewed as ${options.value}.` : "No completeness review recorded.",
+    "screenshot-quality-review__status", ownerDocument);
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  save.addEventListener("click", () => { void submit(); });
+  fieldset.append(label, save, status);
+
+  async function submit() {
+    const quality = select.value;
+    if (!labels.some(([value]) => value === quality)) {
+      status.textContent = "Choose a screenshot completeness label before saving.";
+      status.setAttribute("role", "status");
+      return;
+    }
+    save.disabled = true;
+    save.textContent = "Saving review…";
+    status.textContent = "Saving screenshot review…";
+    status.setAttribute("role", "status");
+    try {
+      await options.onSave(quality as ScreenshotQuality);
+      status.textContent = `Review saved as ${quality}.`;
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : "Screenshot review could not be saved.";
+      status.setAttribute("role", "alert");
+    } finally {
+      save.disabled = false;
+      save.textContent = "Save review";
+    }
+  }
+
+  return fieldset;
+}
 
 export interface BrandLockupOptions {
   brandName?: string;

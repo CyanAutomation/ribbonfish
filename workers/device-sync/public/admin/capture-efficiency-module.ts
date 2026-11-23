@@ -180,6 +180,9 @@ function recentOutcomeRows(efficiency: CaptureEfficiencySummary): string[][] {
     ["JEV suggestions deferred by budget", labelCount(recent.jev_candidate_budget_deferred, "capture")],
     ["JEV suggestions with failed captures", labelCount(recent.jev_candidate_failed, "capture")],
     ["JEV suggestions without an observed outcome", labelCount(recent.jev_candidate_unobserved, "suggestion")],
+    ["Human-reviewed screenshots marked complete", labelCount(recent.screenshot_quality_reviews?.complete, "screenshot")],
+    ["Human-reviewed screenshots marked incomplete", labelCount(recent.screenshot_quality_reviews?.incomplete, "screenshot")],
+    ["Human-reviewed screenshots marked uncertain", labelCount(recent.screenshot_quality_reviews?.uncertain, "screenshot")],
     ["Schedule changes made by JEV", "None; suggestions are advisory"],
   ];
 }

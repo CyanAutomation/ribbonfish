@@ -5,6 +5,7 @@ import { beginButtonBusy, button, createDisclosure, node, statusBadge } from "./
 import { formatTimestamp } from "./admin-formatters.ts";
 import { renderCaptureWorkbenchA2ui, parseCaptureWorkbenchAction, type CaptureWorkbenchDecision, type CaptureWorkbenchSite } from "./capture-workbench-a2ui.ts";
 import { confirmBeforeAction } from "./ui-confirmation.ts";
+import { createScreenshotQualityReview } from "./ui-components.ts";
 import {
   compactIdentifier,
   formatCaptureInterval,
@@ -322,6 +323,8 @@ function renderCaptureTargetCard(
   content.append(node("p", `${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`, "muted"));
   if (target.last_error) content.append(node("p", `Screenshot error: ${target.last_error}`, "capture-target__error error-title"));
   content.append(createSiteActions(target, decision, options, openEditor));
+  const qualityReview = createScreenshotQualityReviewDisclosure(target, options);
+  if (qualityReview) content.append(qualityReview);
   const workbench = createCaptureWorkbenchDisclosure(target, decision, options);
   if (workbench) content.append(workbench);
   card.append(preview, content);
@@ -341,6 +344,8 @@ function renderMobileSiteRow(target: any, decision: any, options: CaptureTargetR
   row.append(heading, data);
   if (target.last_error) row.append(node("p", `Screenshot error: ${target.last_error}`, "capture-target__error error-title"));
   row.append(createSiteActions(target, decision, options, openEditor));
+  const qualityReview = createScreenshotQualityReviewDisclosure(target, options);
+  if (qualityReview) row.append(qualityReview);
   const workbench = createCaptureWorkbenchDisclosure(target, decision, options);
   if (workbench) row.append(workbench);
   return row;
@@ -377,6 +382,8 @@ function createSiteTable(targets: any[], decisions: Map<string, any>, options: C
     const interval = node("td", `${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`);
     const actions = node("td");
     actions.append(createSiteActions(target, decisions.get(target.capture_id), options, openEditor));
+    const qualityReview = createScreenshotQualityReviewDisclosure(target, options);
+    if (qualityReview) actions.append(qualityReview);
     const workbench = createCaptureWorkbenchDisclosure(target, decisions.get(target.capture_id), options);
     if (workbench) actions.append(workbench);
     row.append(name, statusCell, lastCapture, interval, actions);
@@ -432,6 +439,41 @@ function createSiteActions(target: any, decision: any, options: CaptureTargetRen
   overflow.append(menu);
   actions.append(capture, edit, overflow);
   return actions;
+}
+
+function createScreenshotQualityReviewDisclosure(target: any, options: CaptureTargetRendererOptions) {
+  const latest = target.recent_history?.[0];
+  if (target.capture_type === "api-dashboard" ||
+    typeof target.capture_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(target.capture_id) ||
+    typeof target.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(target.sha256) ||
+    typeof latest?.job_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(latest.job_id) ||
+    !Number.isSafeInteger(latest.captured_at) || latest.captured_at !== target.last_success_at ||
+    typeof target.screenshot_age_seconds !== "number" || target.screenshot_age_seconds > 30 * 24 * 60 * 60) return null;
+
+  const preview = node("img", undefined, "screenshot-quality-review__preview");
+  preview.src = `/admin/api/assets/${target.sha256}`;
+  preview.alt = `Screenshot captured ${formatTimestamp(latest.captured_at)}`;
+  preview.loading = "lazy";
+  preview.decoding = "async";
+  preview.addEventListener("error", () => { preview.hidden = true; }, { once: true });
+  const quality = createScreenshotQualityReview({
+    value: latest.quality_review,
+    onSave: async (label) => {
+      await api(`/admin/api/captures/${encodeURIComponent(target.capture_id)}/quality-review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: latest.job_id, quality: label }),
+      });
+      options.showMessage("Screenshot completeness review saved.", false, "sites");
+      await options.refresh();
+    },
+  });
+  const content = node("div", undefined, "screenshot-quality-review-disclosure__content");
+  content.append(preview, quality);
+  return createDisclosure("Review screenshot completeness", [content], {
+    className: "screenshot-quality-review-disclosure",
+    contentClassName: "screenshot-quality-review-disclosure__body",
+  });
 }
 
 function createCaptureWorkbenchDisclosure(target: any, decision: any, options: CaptureTargetRendererOptions) {

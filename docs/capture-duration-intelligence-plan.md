@@ -1,6 +1,6 @@
 # Capture duration intelligence plan
 
-**As of:** 4 November 2026
+**As of:** 23 November 2026
 
 ## Assessment
 
@@ -19,6 +19,8 @@ The current configuration has no adjustable post-navigation delay: its generic b
 Before this work, the read-only `/admin/api/capture-forecast` and overview API exposed per-site averages and counts, but the forecast averaged successful history rows across measured, reserve-estimated, and older unknown sources. The overview exposed source totals only across the fleet. There was no API for individual duration samples. Screenshot history retains at most 10 successful capture records per target within a 30-day age window, and `capture_jobs` stores Browser Run time totals across retries rather than one row per attempt.
 
 JEV already has a pre-due shadow path. It evaluates up to three targets within five minutes of their due time, receives a bounded summary with a median of measured samples and recent screenshot hashes, and can suggest a one-time skip. It does not receive screenshot pixels or quality labels. Deterministic checks keep it advisory. The current production assessment has 46 assessments across 9 targets, one unobserved skip suggestion, and too few labelled outcomes to support automatic changes; see [jev-shadow-mode-assessment-2026-11-04.md](jev-shadow-mode-assessment-2026-11-04.md).
+
+The 4 November JEV assessment figures above are a dated snapshot. The November 23 implementation adds an audited control for labeling recent screenshots as complete, incomplete, or uncertain, plus separate 30-day label counts. Those labels are not yet used as JEV input; enough reviewed examples must be collected first.
 
 The existing conditional ETag/Last-Modified check can reuse a valid cached screenshot and avoid Browser Run when the server confirms the resource is unchanged. This is useful only when those validators track all changes that affect the rendered page.
 
@@ -42,6 +44,12 @@ The existing conditional ETag/Last-Modified check can reuse a valid cached scree
 
 The existing daily forecast still uses its successful-history average, which can include legacy and reserve-estimated rows. The new per-site duration section and API expose the source mix for analysis; splitting the forecast projection by source remains follow-up work.
 
+### Implemented 23 November 2026
+
+- Added a reusable A2UI component builder set and a shared bounded catalog for the fleet summary, capture workbench, and playlist-readiness surface. The readiness assessment action is bound to the current playlist revision.
+- Added an accessible screenshot completeness review control to recent browser screenshots. Labels are stored against the retained capture and job, with reviewer, time, and audit history; the Capture Efficiency view reports the last-30-day label counts separately from JEV observation outcomes.
+- The review controls begin collecting evidence. They do not yet establish a reviewed set for any candidate readiness policy or enable JEV page-readiness recommendations.
+
 ### 1. Add queryable duration evidence
 
 - [x] Add a read-only admin API with bounded date and page-size filters.
@@ -59,15 +67,16 @@ The existing daily forecast still uses its successful-history average, which can
 
 - [x] Record the readiness mode and exact admin-authored selector with each timing sample; keep JEV input limited to the readiness mode.
 - [x] Keep selectors admin-authored and target-specific.
+- [x] Add a review control that labels a retained recent screenshot complete, incomplete, or uncertain, tied to its capture and audited reviewer.
 - Confirm and benchmark the options supported by the deployed Browser Run Quick Actions version. The current `domcontentloaded` policy is already an early generic condition; `networkidle0`/`networkidle2` can wait longer. Do not lower the navigation timeout as a speed optimization: that can turn slow successes into failures without making successful captures faster.
-- Build a small reviewed set of screenshots for each candidate policy. Mark whether key visible content is complete, incomplete, or uncertain; compare the candidate with a reviewed settled view and representative content changes. Use visual comparison or page-specific content markers. Hash equality alone is insufficient.
+- Build a small reviewed set of screenshots for each candidate policy. The review UI and 30-day evidence counters are implemented, but the reviewed set and comparison with settled views still need to be collected. Mark whether key visible content is complete, incomplete, or uncertain; compare the candidate with a reviewed settled view and representative content changes. Use visual comparison or page-specific content markers. Hash equality alone is insufficient.
 - Only retain a faster policy for a target when repeated reviewed captures show the same required visible content and no new failure or placeholder pattern.
 
 ### 4. Extend JEV pre-capture advice, then add readiness recommendations
 
 - [x] Extend the pre-due JEV schema with an advisory to keep the current reserve or request direction-specific operator review. Include measured timing distribution, source coverage, attempt failures/retries, and readiness mode; omit URLs, selectors, and screenshot pixels.
 - [x] Save the advisory with the existing due-time shadow decision; low confidence, insufficient evidence, or provider failure leaves settings and schedule unchanged.
-- [ ] Collect reviewed screenshot completeness outcomes before asking JEV to advise page-readiness policy.
+- [ ] Collect enough reviewed screenshot completeness outcomes before adding those labels to JEV input or asking it to advise page-readiness policy. The label storage and counters are implemented; outcome collection is still pending.
 - [ ] Only compare recommendations with completed, content-verified or human-reviewed outcomes; validator-only skips, budget deferrals, and failures do not verify screenshot quality.
 
 ### 5. Enable bounded canary tuning, then automation

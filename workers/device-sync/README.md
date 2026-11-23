@@ -83,11 +83,13 @@ overview reports when its snapshot was generated. The former fleet-wide model
 advisory has been removed because its broad labels did not explain the signals
 or provide a useful next step.
 
-The fleet summary renders a deterministic, read-only A2UI v1.0 surface using
-`@a2ui/web_core` and a small native DOM adapter. It is built from the existing
-overview response; its surface allows only `Card`, `Column`, and `Text`, with no
-actions or functions. Counts for device health and playlist sync are
-deterministic and link to the device management section.
+The management panel uses a shared, bounded A2UI v1.0 catalog and native DOM
+adapter for the fleet summary, capture workbench, and playlist-readiness
+surfaces. Reusable component builders provide cards, columns, text, badges, and
+buttons. The fleet summary remains read-only; links are fixed in application
+code. The playlist-readiness surface presents deterministic checks and the JEV
+shadow assessment, with only a revision-bound action to request another
+assessment.
 
 Each screenshot site also has a capture intelligence workbench. It presents
 next due time, screenshot age, up to ten recent change markers, measured and
@@ -118,6 +120,15 @@ block activation. The Worker checks readiness again during activation and
 rejects deterministic blockers. Apply migration
 `0021_playlist_readiness_assessments.sql` along with the capture migrations
 below before deploying the management Worker and admin assets.
+
+Screenshot site cards also let an administrator review the latest stored
+screenshot as complete, incomplete, or uncertain. Reviews are tied to a
+specific retained capture, include the reviewer and timestamp in the audit
+trail, and do not change the capture schedule. Capture Efficiency reports the
+three review-label counts separately from JEV's changed, unchanged, validator,
+budget, failed, and unobserved outcomes. These labels provide evidence for a
+future page-readiness recommendation; they do not currently enable JEV to
+change readiness settings.
 
 Configure `OPENROUTER_API_KEY` as a secret on the management Worker before using
 JEV. The key is read only by the Worker. Requests use the pinned
@@ -196,6 +207,11 @@ schedules while preserving existing capture targets and their related records.
 Apply it with `npm run migrate:management` before deploying code that accepts
 the expanded interval set.
 
+Migration `0022_capture_quality_reviews.sql` stores audited completeness
+labels for retained browser screenshots and removes a label when its screenshot
+history row is pruned. Apply it with `npm run migrate:management` before
+deploying the screenshot review control or the quality-label summary.
+
 API driven dashboards use the shared capture queue, target/history records, R2
 asset store and playlist delivery flow. Uptime Kuma and Atlassian Statuspage
 sources normalize into a common model and render to PNG with resvg WebAssembly
@@ -245,7 +261,8 @@ Then apply migrations `0005_webpage_capture.sql`, `0006_asset_reconciliation.sql
 `0007_capture_validators.sql`, `0011_interval_defaults.sql`, and
 `0016_capture_intervals.sql`, `0017_api_dashboards.sql`,
 `0018_api_dashboard_metrics.sql`, `0019_capture_queue_recovery.sql`, and
-`0020_capture_queue_outbox.sql` with `npm run migrate:management` before
+`0020_capture_queue_outbox.sql`, `0021_playlist_readiness_assessments.sql`, and
+`0022_capture_quality_reviews.sql` with `npm run migrate:management` before
 deploying code that depends on them. For a new environment, enable captures
 only after the Browser Run binding, queues, host allowlist, and account quotas
 are ready.

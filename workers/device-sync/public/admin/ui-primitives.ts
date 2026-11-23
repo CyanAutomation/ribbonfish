@@ -11,8 +11,8 @@ export function node<K extends keyof HTMLElementTagNameMap>(
   return element;
 }
 
-export function button(text: string, variant = "primary"): HTMLButtonElement {
-  const element = node("button", text, "button button--" + variant);
+export function button(text: string, variant = "primary", ownerDocument: Document = document): HTMLButtonElement {
+  const element = node("button", text, "button button--" + variant, ownerDocument);
   element.type = "button";
   return element;
 }

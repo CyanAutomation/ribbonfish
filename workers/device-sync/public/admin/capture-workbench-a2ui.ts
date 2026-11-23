@@ -1,5 +1,6 @@
 import { formatRunTime } from "./capture-presentation.ts";
 import { renderA2uiMessages, type A2uiUserAction } from "./fleet-overview.ts";
+import { a2uiButton, a2uiCard, a2uiColumn, a2uiText } from "./a2ui-components.ts";
 
 const SURFACE_ID = "captureWorkbench";
 const CATALOG_ID = "https://ribbonfish.dev/a2ui/catalogs/management-v2.json";
@@ -71,31 +72,6 @@ export interface CaptureWorkbenchA2uiMessage {
   };
 }
 
-function binding(path: string) {
-  return { "@path": path };
-}
-
-function valueText(id: string, path: string, variant: "caption" | "body" = "caption") {
-  return { id, component: "Text", variant, text: binding(path) };
-}
-
-function card(id: string, child: string) {
-  return { id, component: "Card", child };
-}
-
-function column(id: string, children: string[]) {
-  return { id, component: "Column", children };
-}
-
-function button(id: string, textId: string, event: string, context: Record<string, unknown>) {
-  return {
-    id,
-    component: "Button",
-    child: textId,
-    action: { event: { name: event, context } },
-  };
-}
-
 function formatAge(seconds: number | null | undefined) {
   if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return "No successful screenshot yet";
   return formatRunTime(seconds * 1000);
@@ -142,40 +118,40 @@ export function createCaptureWorkbenchA2uiMessage(
   const duration = site.duration_summary;
   const assessment = formatDecision(decision);
   const components: Array<Record<string, unknown>> = [
-    column("root", ["siteCard", "durationCard", "historyCard", "decisionCard", "assessButton"]),
-    card("siteCard", "siteContent"),
-    column("siteContent", ["siteTitle", "siteDue", "siteAge", "siteChanges"]),
-    valueText("siteTitle", "/site/title", "body"),
-    valueText("siteDue", "/site/next_due"),
-    valueText("siteAge", "/site/screenshot_age"),
-    valueText("siteChanges", "/site/change_summary"),
-    card("durationCard", "durationContent"),
-    column("durationContent", ["durationTitle", "durationMeasured", "durationEstimated", "durationFailures"]),
-    valueText("durationTitle", "/duration/title", "body"),
-    valueText("durationMeasured", "/duration/measured"),
-    valueText("durationEstimated", "/duration/estimated"),
-    valueText("durationFailures", "/duration/failures"),
-    card("historyCard", "historyContent"),
-    column("historyContent", ["historyTitle", "historyItems"]),
-    valueText("historyTitle", "/history/title", "body"),
-    valueText("historyItems", "/history/items"),
-    card("decisionCard", "decisionContent"),
-    column("decisionContent", ["decisionTitle", "decisionSuggestion", "decisionRisk", "decisionDurationReview", "decisionReason", "decisionOutcome"]),
-    valueText("decisionTitle", "/decision/title", "body"),
-    valueText("decisionSuggestion", "/decision/suggestion"),
-    valueText("decisionRisk", "/decision/risk"),
-    valueText("decisionDurationReview", "/decision/duration_review"),
-    valueText("decisionReason", "/decision/reason"),
-    valueText("decisionOutcome", "/decision/outcome"),
-    valueText("assessButtonText", "/actions/assess_label"),
-    button("assessButton", "assessButtonText", "assess_capture", { capture_id: site.capture_id }),
+    a2uiColumn("root", ["siteCard", "durationCard", "historyCard", "decisionCard", "assessButton"]),
+    a2uiCard("siteCard", "siteContent"),
+    a2uiColumn("siteContent", ["siteTitle", "siteDue", "siteAge", "siteChanges"]),
+    a2uiText("siteTitle", "/site/title", "body"),
+    a2uiText("siteDue", "/site/next_due"),
+    a2uiText("siteAge", "/site/screenshot_age"),
+    a2uiText("siteChanges", "/site/change_summary"),
+    a2uiCard("durationCard", "durationContent"),
+    a2uiColumn("durationContent", ["durationTitle", "durationMeasured", "durationEstimated", "durationFailures"]),
+    a2uiText("durationTitle", "/duration/title", "body"),
+    a2uiText("durationMeasured", "/duration/measured"),
+    a2uiText("durationEstimated", "/duration/estimated"),
+    a2uiText("durationFailures", "/duration/failures"),
+    a2uiCard("historyCard", "historyContent"),
+    a2uiColumn("historyContent", ["historyTitle", "historyItems"]),
+    a2uiText("historyTitle", "/history/title", "body"),
+    a2uiText("historyItems", "/history/items"),
+    a2uiCard("decisionCard", "decisionContent"),
+    a2uiColumn("decisionContent", ["decisionTitle", "decisionSuggestion", "decisionRisk", "decisionDurationReview", "decisionReason", "decisionOutcome"]),
+    a2uiText("decisionTitle", "/decision/title", "body"),
+    a2uiText("decisionSuggestion", "/decision/suggestion"),
+    a2uiText("decisionRisk", "/decision/risk"),
+    a2uiText("decisionDurationReview", "/decision/duration_review"),
+    a2uiText("decisionReason", "/decision/reason"),
+    a2uiText("decisionOutcome", "/decision/outcome"),
+    a2uiText("assessButtonText", "/actions/assess_label"),
+    a2uiButton("assessButton", "assessButtonText", "assess_capture", { capture_id: site.capture_id }),
   ];
   if (decision?.suggestion === "skip_once" && decision.skip_eligibility?.eligible === true &&
     Number.isSafeInteger(decision.skip_eligibility.due_at)) {
     (components[0]?.children as string[] | undefined)?.push("confirmSkipButton");
     components.push(
-      valueText("confirmSkipButtonText", "/actions/skip_label"),
-      button("confirmSkipButton", "confirmSkipButtonText", "confirm_skip_once", {
+      a2uiText("confirmSkipButtonText", "/actions/skip_label"),
+      a2uiButton("confirmSkipButton", "confirmSkipButtonText", "confirm_skip_once", {
         capture_id: site.capture_id,
         due_at: decision.skip_eligibility.due_at,
       }),
