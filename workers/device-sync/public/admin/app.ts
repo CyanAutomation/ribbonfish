@@ -4,13 +4,13 @@ import { formatDeviceHealthDetails } from "./health-details.ts";
 import { deviceNeedsReview } from "./device-needs-review.ts";
 import { buildFleetInsights } from "./fleet-insights.ts";
 import { requiredElement, requiredElements, requiredFormControl } from "./dom.ts";
-import { formatCaptureObservation, formatRunTime } from "./capture-presentation.ts";
 import {
   node,
   button,
   statusBadge,
   actionDisclosure,
   createDefinitionList,
+  createDisclosure,
   createFormField,
   createSettingsGroup,
   beginButtonBusy,
@@ -20,6 +20,7 @@ import { createApiDashboardSourceEditor } from "./api-dashboard-editor.ts";
 import { parseApiDashboardConfig } from "../../src/api-dashboard/config.ts";
 import { renderApiDashboards } from "./api-dashboard-view.ts";
 import { createCaptureTargetRenderer } from "./capture-sites-view.ts";
+import { renderPlaylistReadiness, type PlaylistReadinessViewData } from "./playlist-readiness-view.ts";
 import { renderCaptureEfficiencyModule } from "./capture-efficiency-module.ts";
 import { renderFleetOverviewA2ui } from "./fleet-overview.ts";
 import {
@@ -50,8 +51,6 @@ import {
   formatPlaylistState,
   playlistDeleteActionStates,
   formatScreenshotStatus,
-  describeJevAnswer,
-  formatJevAnswerLabel,
   prioritizeCaptureTargets,
   summarizeCaptureErrors,
 } from "./ui-utils.ts";
@@ -358,6 +357,53 @@ async function startPlaylistEdit(playlist) {
   }
 }
 
+function createPlaylistReadinessDisclosure(playlist) {
+  const content = node("div", "Open this panel to check assets, capture freshness, and device recipients.", "muted");
+  const disclosure = createDisclosure("Review readiness", [content], {
+    className: "playlist-readiness-disclosure",
+    contentClassName: "playlist-readiness-disclosure__content",
+  });
+  let latest: PlaylistReadinessViewData | null = null;
+  let pending: Promise<PlaylistReadinessViewData> | null = null;
+
+  const render = (readiness: PlaylistReadinessViewData) => {
+    latest = readiness;
+    content.replaceChildren(renderPlaylistReadiness(readiness, {
+      ownerDocument: document,
+      onAssess: async () => {
+        const assessed = await api<PlaylistReadinessViewData>("/admin/api/jev/playlist-readiness-assessment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ playlist_id: playlist.playlist_id, revision: playlist.revision }),
+        });
+        render(assessed);
+        showMessage("JEV shadow assessment saved. Deterministic readiness checks remain authoritative.", false, "playlist");
+      },
+    }));
+  };
+
+  const load = async (force = false) => {
+    if (pending) return pending;
+    if (latest && !force) return latest;
+    content.replaceChildren(node("p", "Checking playlist readiness…", "muted"));
+    pending = api<PlaylistReadinessViewData>(
+      `/admin/api/playlists/${encodeURIComponent(playlist.playlist_id)}/${encodeURIComponent(playlist.revision)}/readiness`,
+    ).then((readiness) => {
+      render(readiness);
+      return readiness;
+    }).catch((error) => {
+      content.replaceChildren(node("p", error instanceof Error ? error.message : String(error), "error-title"));
+      throw error;
+    }).finally(() => { pending = null; });
+    return pending;
+  };
+
+  disclosure.addEventListener("toggle", () => {
+    if (disclosure.open) void load().catch(() => {});
+  });
+  return { element: disclosure, load };
+}
+
 function playlistActionButtons(playlist, deleteAction, layout) {
   const actions = [];
   const edit = button("Edit", "secondary");
@@ -366,10 +412,20 @@ function playlistActionButtons(playlist, deleteAction, layout) {
   actions.push(edit);
 
   if (!playlist.active) {
+    const readinessDisclosure = createPlaylistReadinessDisclosure(playlist);
     const activate = button("Activate version", "primary");
     activate.addEventListener("click", async () => {
-      const description = `Make playlist ${playlist.playlist_id}, version ${compactIdentifier(playlist.revision)}, active. Enrolled devices will receive it the next time they sync.`;
       try {
+        readinessDisclosure.element.open = true;
+        const readiness = await readinessDisclosure.load(true);
+        if (readiness.blockers.length) {
+          showMessage(`This revision is blocked: ${readiness.blockers.join(", ")}. Review the readiness panel before activation.`, true, "playlist");
+          return;
+        }
+        const reviewNote = readiness.warnings.length
+          ? ` Deterministic checks found items to review: ${readiness.warnings.join(", ")}.`
+          : " Deterministic readiness checks found no blockers or warnings.";
+        const description = `Make playlist ${playlist.playlist_id}, version ${compactIdentifier(playlist.revision)}, active. Enrolled devices will receive it the next time they sync.${reviewNote}`;
         const confirmed = await confirmBeforeAction(
           (text) => showConfirmDialog({
             title: "Activate playlist version?",
@@ -388,7 +444,7 @@ function playlistActionButtons(playlist, deleteAction, layout) {
         await refresh();
       } catch (error) { showMessage(error.message, true, "playlist"); }
     });
-    actions.push(activate);
+    actions.push(readinessDisclosure.element, activate);
   }
 
   if (deleteAction?.visible) {
@@ -570,7 +626,6 @@ const renderCaptureTargets = createCaptureTargetRenderer({
   showMessage,
   refresh: () => refresh(),
   showConfirmDialog,
-  renderJevDecision,
 });
 
 function renderAvailableSites(targets, selectedIDs = null) {
@@ -1067,65 +1122,6 @@ function renderEnvironment(environment) {
     environmentNotice.dataset.message = message;
   }
   environmentNotice.hidden = false;
-}
-
-function renderJevDecision(
-  result: {
-    answers?: Record<string, { type?: string; choice?: string; score?: number; legend?: Record<string, string> }>;
-    duration_review?: string;
-    skip_eligibility?: { eligible?: boolean; due_at?: number; reason?: string };
-  },
-  title: string,
-  { captureID }: { captureID?: string } = {},
-) {
-  const card = node("article", undefined, "jev-result");
-  card.append(node("h3", title));
-  const answers = node("div", undefined, "jev-result__answers");
-  for (const [key, answer] of Object.entries(result.answers ?? {})) {
-    const item = node("section", undefined, "jev-result__answer");
-    item.append(node("h4", formatJevAnswerLabel(key)));
-    const description = describeJevAnswer(key, answer, result.duration_review);
-    if (description) item.append(node("p", description));
-    answers.append(item);
-  }
-  card.append(answers, node("p", "Advisory only", "jev-advisory"));
-  appendSkipOnceRecommendation(card, result, captureID);
-  return card;
-}
-
-function appendSkipOnceRecommendation(card, result, captureID) {
-  if (!captureID || result.answers?.recommendation?.choice !== "skip_once") return;
-  const eligibility = result.skip_eligibility;
-  if (!eligibility?.eligible || !Number.isSafeInteger(eligibility.due_at)) {
-    card.append(node("p", `This suggestion cannot be confirmed safely: ${eligibility?.reason || "the screenshot schedule changed"}`, "muted"));
-    return;
-  }
-  const confirmSkip = button("Confirm skip this screenshot once", "secondary");
-  confirmSkip.addEventListener("click", () => confirmSkipOnce(confirmSkip, eligibility.due_at, captureID));
-  card.append(confirmSkip);
-}
-
-async function confirmSkipOnce(confirmSkip, dueAt, captureID) {
-  const confirmed = await showConfirmDialog({
-    title: "Skip one scheduled screenshot?",
-    description: `This skips the screenshot due ${formatTimestamp(dueAt)} once. The current image stays in use, and the next scheduled screenshot remains due as normal.`,
-    confirmLabel: "Skip once",
-  });
-  if (!confirmed) return;
-  confirmSkip.disabled = true;
-  try {
-    await api(`/admin/api/captures/${encodeURIComponent(captureID)}/skip-once`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ due_at: dueAt }),
-    });
-    confirmSkip.textContent = "Skip confirmed";
-    showMessage("One scheduled screenshot skip is confirmed.", false, "playlist");
-    await refresh();
-  } catch (error) {
-    confirmSkip.disabled = false;
-    showMessage(error.message, true, "playlist");
-  }
 }
 
 function showConfirmDialog({ title, description, confirmLabel, destructive = false }) {

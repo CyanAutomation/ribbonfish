@@ -112,6 +112,7 @@ async function freshDatabase() {
   sqlite.exec(await readFile(new URL("../schema.sql", import.meta.url), "utf8"));
   sqlite.exec(await readFile(new URL("../migrations/0005_webpage_capture.sql", import.meta.url), "utf8"));
   sqlite.exec(await readFile(new URL("../migrations/0009_capture_skip_approvals.sql", import.meta.url), "utf8"));
+  sqlite.exec(await readFile(new URL("../migrations/0021_playlist_readiness_assessments.sql", import.meta.url), "utf8"));
   return sqlite;
 }
 
@@ -1509,7 +1510,8 @@ test("Browser Run failures use bounded delayed retries and leave the holding ima
     });
 
     messages.length = 0;
-    let now = Date.now();
+    const nextUtcDay = Math.floor(Date.now() / 86_400_000) * 86_400_000 + 86_400_000;
+    let now = nextUtcDay + 60_000;
     for (let attempt = 1; attempt <= 3; attempt++) {
       const current = delivery();
       await handleCaptureQueue({ messages: [current] }, env, now);

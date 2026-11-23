@@ -19,6 +19,8 @@ export interface CaptureDurationSummary {
   measured_p50_ms: number | null;
   measured_p90_ms: number | null;
   measured_average_ms: number | null;
+  reserve_estimated_p50_ms?: number | null;
+  reserve_estimated_p90_ms?: number | null;
   reserve_estimated_total_ms: number;
   configured_reserve_ms: number;
   reserve_review: "possible_overestimate" | "possible_underestimate" | "insufficient_data" | "not_flagged";
@@ -33,6 +35,7 @@ export function summarizeCaptureDurations(
   configuredReserveMs: number,
 ): CaptureDurationSummary {
   const measured: number[] = [];
+  const reserveEstimated: number[] = [];
   let reserveEstimatedSampleCount = 0;
   let unknownSampleCount = 0;
   let reserveEstimatedTotalMs = 0;
@@ -43,6 +46,7 @@ export function summarizeCaptureDurations(
     const duration = nonNegative(sample.browser_ms);
     if (sample.browser_ms_source === "response_header") measured.push(duration);
     else if (sample.browser_ms_source === "reserve") {
+      reserveEstimated.push(duration);
       reserveEstimatedSampleCount += 1;
       reserveEstimatedTotalMs += duration;
     } else unknownSampleCount += 1;
@@ -51,6 +55,7 @@ export function summarizeCaptureDurations(
   }
 
   measured.sort((left, right) => left - right);
+  reserveEstimated.sort((left, right) => left - right);
   const measuredCount = measured.length;
   const measuredHeaderCoverage = samples.length ? measuredCount / samples.length : 0;
   const reserveMs = nonNegative(configuredReserveMs);
@@ -75,6 +80,8 @@ export function summarizeCaptureDurations(
     measured_p50_ms: median(measured),
     measured_p90_ms: p90,
     measured_average_ms: measuredCount ? measured.reduce((sum, value) => sum + value, 0) / measuredCount : null,
+    reserve_estimated_p50_ms: median(reserveEstimated),
+    reserve_estimated_p90_ms: percentile(reserveEstimated, 0.9),
     reserve_estimated_total_ms: reserveEstimatedTotalMs,
     configured_reserve_ms: reserveMs,
     reserve_review: reserveReview,

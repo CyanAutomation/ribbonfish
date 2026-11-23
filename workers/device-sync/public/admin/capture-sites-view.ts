@@ -1,8 +1,9 @@
 import { api } from "./api.ts";
 import { requiredElement, requiredElements } from "./dom.ts";
 import { formatCaptureObservation } from "./capture-presentation.ts";
-import { beginButtonBusy, button, node, statusBadge } from "./ui-primitives.ts";
+import { beginButtonBusy, button, createDisclosure, node, statusBadge } from "./ui-primitives.ts";
 import { formatTimestamp } from "./admin-formatters.ts";
+import { renderCaptureWorkbenchA2ui, parseCaptureWorkbenchAction, type CaptureWorkbenchDecision, type CaptureWorkbenchSite } from "./capture-workbench-a2ui.ts";
 import {
   compactIdentifier,
   confirmBeforeAction,
@@ -19,7 +20,6 @@ type CaptureTargetRendererOptions = {
   showMessage: (message: string, isError?: boolean, section?: string) => void;
   refresh: () => Promise<unknown>;
   showConfirmDialog: (options: any) => Promise<boolean>;
-  renderJevDecision: (decision: any, title: string, options: any) => Node;
 };
 
 type SiteView = "cards" | "list";
@@ -121,7 +121,7 @@ export function createCaptureTargetRenderer(options: CaptureTargetRendererOption
     editSave.textContent = baseline.reviewed ? "Save changes" : "Confirm schedule";
   }
 
-  function openSiteEditor(target: any | null, decision?: any, runAssessment = false) {
+  function openSiteEditor(target: any | null, decision?: any) {
     const isEditing = target !== null;
     state.currentTarget = target;
     state.baseline = target ? {
@@ -164,24 +164,6 @@ export function createCaptureTargetRenderer(options: CaptureTargetRendererOption
     }
 
     showDialog();
-    if (target && runAssessment) void requestAssessment(target);
-  }
-
-  async function requestAssessment(target: any) {
-    assessmentResult.hidden = false;
-    assessmentResult.setAttribute("aria-busy", "true");
-    assessmentContent.replaceChildren(node("p", "Assessing current screenshot signals…", "muted"));
-    try {
-      const decision = await api("/admin/api/jev/capture-assessment", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ capture_id: target.capture_id }),
-      });
-      assessmentContent.replaceChildren(options.renderJevDecision(decision, "Screenshot skip assessment", { captureID: target.capture_id }));
-    } catch (error) {
-      assessmentContent.replaceChildren(node("p", errorMessage(error), "error-title"));
-    } finally {
-      assessmentResult.removeAttribute("aria-busy");
-    }
   }
 
   addButton.addEventListener("click", () => openSiteEditor(null));
@@ -289,7 +271,7 @@ export function createCaptureTargetRenderer(options: CaptureTargetRendererOption
     const tableView = node("div", undefined, "capture-target-table-view");
     tableView.id = "capture-target-table-view";
     tableView.hidden = activeView !== "list";
-    const openEditor = (target: any, decision: any, runAssessment = false) => openSiteEditor(target, decision, runAssessment);
+    const openEditor = (target: any, decision: any) => openSiteEditor(target, decision);
     const desktopTable = createSiteTable(orderedTargets, decisionByTarget, options, openEditor);
     tableView.append(desktopTable);
     const mobileCards = node("div", undefined, "mobile-card-list capture-target-list__mobile");
@@ -340,6 +322,8 @@ function renderCaptureTargetCard(
   content.append(node("p", `${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`, "muted"));
   if (target.last_error) content.append(node("p", `Screenshot error: ${target.last_error}`, "capture-target__error error-title"));
   content.append(createSiteActions(target, decision, options, openEditor));
+  const workbench = createCaptureWorkbenchDisclosure(target, decision, options);
+  if (workbench) content.append(workbench);
   card.append(preview, content);
   return card;
 }
@@ -357,6 +341,8 @@ function renderMobileSiteRow(target: any, decision: any, options: CaptureTargetR
   row.append(heading, data);
   if (target.last_error) row.append(node("p", `Screenshot error: ${target.last_error}`, "capture-target__error error-title"));
   row.append(createSiteActions(target, decision, options, openEditor));
+  const workbench = createCaptureWorkbenchDisclosure(target, decision, options);
+  if (workbench) row.append(workbench);
   return row;
 }
 
@@ -391,6 +377,8 @@ function createSiteTable(targets: any[], decisions: Map<string, any>, options: C
     const interval = node("td", `${formatCaptureInterval(target.capture_interval_seconds)} · ${target.viewport.width} × ${target.viewport.height} px`);
     const actions = node("td");
     actions.append(createSiteActions(target, decisions.get(target.capture_id), options, openEditor));
+    const workbench = createCaptureWorkbenchDisclosure(target, decisions.get(target.capture_id), options);
+    if (workbench) actions.append(workbench);
     row.append(name, statusCell, lastCapture, interval, actions);
     body.append(row);
   });
@@ -429,12 +417,6 @@ function createSiteActions(target: any, decision: any, options: CaptureTargetRen
   summary.title = `More actions for ${siteName}`;
   overflow.append(summary);
   const menu = node("div", undefined, "action-disclosure__content capture-site-overflow__actions");
-  const assess = button("Run advisory assessment", "secondary");
-  assess.dataset.captureAction = "assess";
-  assess.addEventListener("click", () => {
-    overflow.open = false;
-    openEditor(target, decision, true);
-  });
   const remove = button("Remove capture site", "danger");
   remove.dataset.captureAction = "remove";
   remove.addEventListener("click", async () => {
@@ -446,10 +428,84 @@ function createSiteActions(target: any, decision: any, options: CaptureTargetRen
       await options.refresh();
     } catch (error) { options.showMessage(errorMessage(error), true, "sites"); }
   });
-  menu.append(assess, remove);
+  menu.append(remove);
   overflow.append(menu);
   actions.append(capture, edit, overflow);
   return actions;
+}
+
+function createCaptureWorkbenchDisclosure(target: any, decision: any, options: CaptureTargetRendererOptions) {
+  if (target.capture_type === "api-dashboard" ||
+    typeof target.capture_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(target.capture_id)) return null;
+  const site = target as CaptureWorkbenchSite;
+  let currentDecision = decision as CaptureWorkbenchDecision | undefined;
+  let busy = false;
+  const host = node("div", undefined, "capture-workbench-host");
+
+  async function handleAction(action: Parameters<typeof parseCaptureWorkbenchAction>[0]) {
+    const parsed = parseCaptureWorkbenchAction(action, site, currentDecision);
+    if (!parsed) {
+      options.showMessage("This capture action is no longer eligible. Review the latest screenshot schedule.", true, "sites");
+      return;
+    }
+    if (busy) return;
+    busy = true;
+    host.setAttribute("aria-busy", "true");
+    try {
+      if (parsed.kind === "assess") {
+        const result = await api("/admin/api/jev/capture-assessment", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ capture_id: site.capture_id }),
+        });
+        const suggestion = result.suggestion === "skip_once" || result.suggestion === "capture_now" ? result.suggestion : null;
+        const eligibility = result.skip_eligibility && typeof result.skip_eligibility === "object"
+          ? result.skip_eligibility : undefined;
+        const risk = result.risk && typeof result.risk === "object" && typeof result.risk.label === "string"
+          ? result.risk : null;
+        const reason = suggestion === "skip_once"
+          ? eligibility?.eligible === true
+            ? "JEV suggests considering one skip. Confirm the current due time to apply it once."
+            : `JEV suggests considering one skip, but it is not eligible: ${eligibility?.reason || "the schedule changed or safeguards apply"}.`
+          : "JEV suggests keeping the scheduled screenshot.";
+        currentDecision = {
+          ...currentDecision,
+          action: "manual_assessment",
+          reason,
+          suggestion,
+          duration_review: result.duration_review,
+          risk,
+          skip_eligibility: eligibility,
+        };
+        options.showMessage("JEV assessment complete. The screenshot schedule is unchanged.", false, "sites");
+      } else {
+        const confirmed = await options.showConfirmDialog({
+          title: "Skip one scheduled screenshot?",
+          description: `This skips the screenshot due ${formatTimestamp(parsed.due_at)} once. The current image stays in use, and the next scheduled screenshot remains due as normal.`,
+          confirmLabel: "Skip once",
+        });
+        if (!confirmed) return;
+        await api(`/admin/api/captures/${encodeURIComponent(site.capture_id)}/skip-once`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ due_at: parsed.due_at }),
+        });
+        options.showMessage("One scheduled screenshot skip is confirmed.", false, "sites");
+        await options.refresh();
+        return;
+      }
+    } catch (error) {
+      options.showMessage(errorMessage(error), true, "sites");
+    } finally {
+      busy = false;
+      host.removeAttribute("aria-busy");
+      renderCaptureWorkbenchA2ui(host, site, currentDecision, handleAction);
+    }
+  }
+
+  renderCaptureWorkbenchA2ui(host, site, currentDecision, handleAction);
+  return createDisclosure("Capture intelligence workbench", [host], {
+    className: "capture-workbench-disclosure",
+    contentClassName: "capture-workbench-disclosure__content",
+  });
 }
 
 function formatBackgroundAssessment(decision: any) {

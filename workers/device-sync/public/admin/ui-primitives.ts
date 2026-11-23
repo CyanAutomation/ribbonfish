@@ -269,6 +269,23 @@ export function metricCard(label: string, value: string, detail?: string, ownerD
   return card;
 }
 
+export interface MetricGridItem {
+  label: string;
+  value: string | number;
+  detail?: string;
+}
+
+/** Compose a responsive set of reusable metric cards for readiness and dashboard summaries. */
+export function createMetricGrid(
+  items: MetricGridItem[],
+  options: { className?: string; ownerDocument?: Document } = {},
+): HTMLElement {
+  const ownerDocument = options.ownerDocument ?? document;
+  const grid = node("div", undefined, ["metric-grid", options.className].filter(Boolean).join(" "), ownerDocument);
+  items.forEach(({ label, value, detail }) => grid.append(metricCard(label, String(value), detail, ownerDocument)));
+  return grid;
+}
+
 export type ScaleMeterMarkerTone = "ribbonfish" | "cloudflare" | "worker-budget" | "free-plan";
 
 export interface ScaleMeterMarker {

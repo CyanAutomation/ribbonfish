@@ -5,6 +5,7 @@ import {
   buildCaptureAssessmentState,
   captureAssessmentQuestions,
   durationReviewRecommendation,
+  playlistReadinessQuestions,
 } from "./jev-use-cases.ts";
 
 const sampleAnswers = {
@@ -143,6 +144,8 @@ test("capture assessment state includes only allowlisted metadata and no private
       measured_p50_ms: 10_000,
       measured_p90_ms: 18_000,
       measured_average_ms: 11_000,
+      reserve_estimated_p50_ms: 60_000,
+      reserve_estimated_p90_ms: 60_000,
       reserve_estimated_total_ms: 180_000,
       configured_reserve_ms: 60_000,
       reserve_review: "possible_overestimate" as const,
@@ -172,6 +175,8 @@ test("capture assessment state includes only allowlisted metadata and no private
       measured_p50_ms: 10_000,
       measured_p90_ms: 18_000,
       measured_average_ms: 11_000,
+      reserve_estimated_p50_ms: 60_000,
+      reserve_estimated_p90_ms: 60_000,
       reserve_estimated_total_ms: 180_000,
       configured_reserve_ms: 60_000,
       reserve_review: "possible_overestimate",
@@ -227,4 +232,25 @@ test("JEV state must be a bounded JSON object and the requested model cannot be 
 
 test("fixed JEV schemas declare expected answer keys", () => {
   assert.deepEqual(Object.keys(captureAssessmentQuestions), ["duration_review", "recommendation", "risk"]);
+});
+
+test("playlist readiness JEV question schema is narrow and validates only its typed choices", () => {
+  const answers = {
+    assessment: {
+      type: "choice",
+      choice: "review",
+      probabilities: { ready: 0.1, review: 0.8, blocked: 0.1 },
+      confidence: 0.9,
+    },
+    risk: {
+      type: "score",
+      score: 1,
+      legend: { "0": "Low", "1": "Moderate", "2": "High" },
+      probabilities: { "0": 0.1, "1": 0.8, "2": 0.1 },
+      confidence: 0.85,
+    },
+  };
+  assert.equal(validateAnswers(answers, playlistReadinessQuestions), true);
+  assert.equal(validateAnswers({ ...answers, assessment: { ...answers.assessment, choice: "activate" } }, playlistReadinessQuestions), false);
+  assert.equal(Object.keys(playlistReadinessQuestions).includes("recommendation"), false);
 });

@@ -21,7 +21,7 @@ The initial use case is a fleet of Raspberry Pis showing company websites and Up
 3. The Go agent verifies image hashes, caches a local copy, and rotates that shared playlist on each output through the simulator or DRM/KMS.
 4. It keeps the active snapshot and continues displaying it when sync is disabled or the network is unavailable.
 
-**Implementation status:** The agent ships Pi 3 A+, Pi 3B, Pi 4, and simulator profiles with sample images. The Worker under [`workers/device-sync`](workers/device-sync/README.md) serves one global active playlist and private R2 assets. New devices automatically submit a key-based enrollment request, display a fingerprint, and wait for explicit approval in the production management UI. The console can stage and activate revisions containing uploaded PNGs and scheduled webpage captures, approve or reject devices, list and disable devices, rotate legacy tokens, show asset health and management events, and render a read-only A2UI fleet overview. Captures run through a Cloudflare Browser Run Quick Action and serial Queue consumer; uploads and screenshots share the same content-addressed PNG store. Cloudflare Access protects the production management Worker, while the default device-sync Worker keeps management routes disabled. Candidate snapshots are validated and applied atomically; failed sync leaves the previous snapshot active.
+**Implementation status:** The agent ships Pi 3 A+, Pi 3B, Pi 4, and simulator profiles with sample images. The Worker under [`workers/device-sync`](workers/device-sync/README.md) serves one global active playlist and private R2 assets. New devices automatically submit a key-based enrollment request, display a fingerprint, and wait for explicit approval in the production management UI. The console can stage and activate revisions containing uploaded PNGs and scheduled webpage captures, review playlist readiness, approve or reject devices, list and disable devices, rotate legacy tokens, show asset health and management events, render a read-only A2UI fleet overview, and provide per-site capture intelligence workbenches with allowlisted advisory actions. Captures run through a Cloudflare Browser Run Quick Action and serial Queue consumer; uploads and screenshots share the same content-addressed PNG store. Cloudflare Access protects the production management Worker, while the default device-sync Worker keeps management routes disabled. Candidate snapshots are validated and applied atomically; failed sync leaves the previous snapshot active.
 
 The DRM backend configures named connectors, selects advertised modes, and uses XRGB8888 dumb buffers with page flips. It is experimental: one single-display Pi 3 A+ has passed physical KMS and visible-frame acceptance, while Pi 3B and Pi 4 dual-output behavior remain open.
 
@@ -500,7 +500,7 @@ Implemented in the management Worker:
 - Daily browser-time budget, request spacing, bounded retry, and per-target coalescing
 - Last-known-good screenshot fallback and retention of up to 10 screenshots or 30 days per target
 
-Optional JEV-based optimization, adaptive freshness, queue prioritization, and richer queue/usage dashboards remain future work.
+Automated JEV-based schedule optimization, adaptive freshness, queue prioritization, and queue-level dashboards remain future work. Current capture and playlist assessments stay advisory and require deterministic server checks for any operator-confirmed action.
 
 ### Phase 3 — Fleet Management
 
