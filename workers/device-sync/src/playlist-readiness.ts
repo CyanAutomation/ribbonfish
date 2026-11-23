@@ -47,11 +47,12 @@ export function assessPlaylistReadiness(input: PlaylistReadinessInput): Playlist
   const staleCaptures = input.captures.filter((capture) => capture.enabled && !capture.fresh).length;
   const disabledCaptures = input.captures.filter((capture) => !capture.enabled).length;
   const unreviewedSchedules = input.captures.filter((capture) => !capture.schedule_reviewed && capture.enabled).length;
-  const devicesToUpdate = input.devices.filter((device) => device.enabled &&
-    getPlaylistSyncState(device, input.revision) !== "in_sync").map((device) => ({
-    device_id: device.device_id,
-    sync_status: getPlaylistSyncState(device, input.revision) === "unreported" ? "unreported" as const : "behind" as const,
-  }));
+  const devicesToUpdate = input.devices.flatMap((device) => {
+    if (!device.enabled) return [];
+    const syncState = getPlaylistSyncState(device, input.revision);
+    if (syncState === "in_sync" || syncState === "no_active_revision" || syncState === "disabled") return [];
+    return [{ device_id: device.device_id, sync_status: syncState }];
+  });
   const blockers = [
     ...(missingAssets ? ["missing_assets"] : []),
     ...(disabledCaptures ? ["disabled_captures"] : []),
