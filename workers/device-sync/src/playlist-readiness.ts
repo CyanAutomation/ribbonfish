@@ -42,7 +42,7 @@ export interface PlaylistReadinessResult {
 export function assessPlaylistReadiness(input: PlaylistReadinessInput): PlaylistReadinessResult {
   const missingAssets = input.assets.filter((asset) => !asset.present).length +
     input.captures.filter((capture) => !capture.asset_present).length;
-  const staleCaptures = input.captures.filter((capture) => !capture.fresh).length;
+  const staleCaptures = input.captures.filter((capture) => capture.enabled && !capture.fresh).length;
   const disabledCaptures = input.captures.filter((capture) => !capture.enabled).length;
   const unreviewedSchedules = input.captures.filter((capture) => !capture.schedule_reviewed && capture.enabled).length;
   const devicesToUpdate = input.devices.filter((device) => device.enabled && !(

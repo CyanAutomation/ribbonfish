@@ -208,8 +208,8 @@ async function handleAdminReadRoutes({ request, url, env, actorID }: AdminRouteC
           !isString(data.revision) || !ID_PATTERN.test(data.revision)) {
           throw new HTTPError(400, "playlist_id and revision are required");
         }
-        const readiness = await readPlaylistReadiness(data.playlist_id, data.revision, env);
         await enforceJevRateLimit(env, actorID);
+        const readiness = await readPlaylistReadiness(data.playlist_id, data.revision, env);
         const decision = await callJevDecision(env, {
           state: buildPlaylistReadinessState(readiness),
           questions: playlistReadinessQuestions,
@@ -223,7 +223,14 @@ async function handleAdminReadRoutes({ request, url, env, actorID }: AdminRouteC
           JSON.stringify(decision.answers), decision.model).run();
         await env.DB.prepare("DELETE FROM playlist_readiness_assessments WHERE assessed_at < ?")
           .bind(now - 30 * 24 * 60 * 60 * 1000).run();
-        return jsonResponse(await readPlaylistReadiness(data.playlist_id, data.revision, env));
+        const answers = projectPlaylistJevAnswers(decision.answers);
+        readiness.latest_assessment = answers ? {
+          assessed_at: now,
+          deterministic_status: readiness.status,
+          answers,
+          observed_outcome: null,
+        } : null;
+        return jsonResponse(readiness);
       });
     default:
       return null;

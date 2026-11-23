@@ -31,6 +31,7 @@ class FakeDatabase {
     this.playlistReadinessCaptures = [];
     this.readinessDevices = [];
     this.playlistReadinessAssessments = [];
+    this.playlistReadinessPlaylistReads = 0;
     this.mutationCalls = 0;
   }
 
@@ -47,6 +48,9 @@ class FakeDatabase {
         if (sql.includes("FROM capture_targets")) return database.captureTarget ?? null;
         if (sql.includes("FROM active_playlist")) return database.activePlaylist;
         if (sql.includes("FROM playlists WHERE playlist_id")) {
+          if (sql.startsWith("SELECT playlist_id, revision FROM playlists WHERE playlist_id = ? AND revision = ?")) {
+            database.playlistReadinessPlaylistReads++;
+          }
           const row = database.playlists.get(values[0] + ":" + values[1]);
           return row ? {
             playlist_id: row.playlist_id,
@@ -303,6 +307,20 @@ test("JEV screenshot assessments stop before provider calls when the per-admin l
       method: "POST", body: { capture_id: captureID },
     }), env);
     assert.equal(response.status, 429);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("playlist readiness assessments stop before readiness reads when the per-admin limit is reached", async () => {
+  const env = testEnvironment();
+  env.ENROLLMENT_RATE_LIMITER.limit = async () => ({ success: false });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => assert.fail("rate-limited requests must not call JEV");
+  try {
+    const response = await handleAdminRequest(request("/admin/api/jev/playlist-readiness-assessment", {
+      method: "POST", body: { playlist_id: "missing", revision: "revision-1" },
+    }), env);
+    assert.equal(response.status, 429);
+    assert.equal(env.DB.playlistReadinessPlaylistReads, 0);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -1002,11 +1020,17 @@ test("playlist readiness assessment stores typed JEV output without sending iden
     const body = await response.json();
     assert.equal(response.status, 200);
     assert.equal(body.latest_assessment.answers.assessment.choice, "ready");
-    assert.equal(body.latest_assessment.observed_outcome, "not_activated");
+    assert.equal(body.latest_assessment.observed_outcome, null);
     assert.deepEqual(env.DB.activePlaylist, { playlist_id: "welcome", revision: "revision-1" });
     assert.equal(env.DB.playlistReadinessAssessments.length, 1);
+    assert.equal(env.DB.playlistReadinessPlaylistReads, 1);
     assert.doesNotMatch(JSON.stringify(sentState), /pi-sensitive|operations|rev-2/);
     assert.doesNotMatch(JSON.stringify(body.latest_assessment), /private_context|provider_debug/);
+
+    const refreshedResponse = await handleAdminRequest(request("/admin/api/playlists/operations/rev-2/readiness"), env);
+    const refreshed = await refreshedResponse.json();
+    assert.equal(refreshed.latest_assessment.observed_outcome, "not_activated");
+    assert.equal(env.DB.playlistReadinessPlaylistReads, 2);
   } finally { globalThis.fetch = originalFetch; }
 });
 

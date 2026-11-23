@@ -56,9 +56,10 @@ test("playlist readiness warns about unreviewed schedules and blocks disabled ca
 
   assert.equal(result.status, "blocked");
   assert.equal(result.summary.disabled_captures, 1);
+  assert.equal(result.summary.stale_captures, 0);
   assert.equal(result.summary.unreviewed_schedules, 1);
   assert.deepEqual(result.blockers, ["disabled_captures"]);
-  assert.deepEqual(result.warnings, ["stale_captures", "unreviewed_schedules"]);
+  assert.deepEqual(result.warnings, ["unreviewed_schedules"]);
 });
 
 test("JEV playlist readiness state contains only sanitized aggregate signals", () => {
