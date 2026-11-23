@@ -47,3 +47,20 @@ test("a failed action reports its error and does not refresh", async () => {
   assert.deepEqual(messages, [["request failed", true, "playlist"]]);
   assert.equal(refreshed, false);
 });
+
+test("a failed refresh reports the completed action and refresh error together", async () => {
+  const messages: Array<[string, boolean?, string?]> = [];
+  await runConfirmedAction({
+    confirmAndPerform: async () => true,
+    successMessage: "Playlist activated",
+    context: "playlist",
+    showMessage: (...message) => messages.push(message),
+    refresh: async () => { throw new Error("refresh failed"); },
+  });
+
+  assert.deepEqual(messages, [[
+    "Playlist activated, but the dashboard could not refresh: refresh failed",
+    true,
+    "playlist",
+  ]]);
+});

@@ -15,9 +15,18 @@ export async function runConfirmedAction({
 }: ConfirmedActionOptions): Promise<void> {
   try {
     if (!await confirmAndPerform()) return;
-    showMessage(successMessage, false, context);
-    await refresh();
   } catch (error) {
     showMessage(error instanceof Error ? error.message : String(error), true, context);
+    return;
   }
+
+  try {
+    await refresh();
+  } catch (error) {
+    const refreshError = error instanceof Error ? error.message : String(error);
+    showMessage(`${successMessage}, but the dashboard could not refresh: ${refreshError}`, true, context);
+    return;
+  }
+
+  showMessage(successMessage, false, context);
 }
