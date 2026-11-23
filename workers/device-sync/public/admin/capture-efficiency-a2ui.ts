@@ -57,8 +57,9 @@ function buildMetrics(targets: readonly CaptureEfficiencyA2uiTarget[], summary: 
   const browserRun = recent.browser_run_ms ?? {};
   const candidateReviews = recent.jev_candidate_quality_reviews ?? {};
   const screenshotReviews = recent.screenshot_quality_reviews ?? {};
-  const reviewedTotal = count(candidateReviews.total) ||
-    count(candidateReviews.complete) + count(candidateReviews.incomplete) + count(candidateReviews.uncertain);
+  const reviewedTotal = candidateReviews.total == null
+    ? count(candidateReviews.complete) + count(candidateReviews.incomplete) + count(candidateReviews.uncertain)
+    : count(candidateReviews.total);
   const reserveReviewCounts = targets.reduce((counts, target) => {
     if (target.capture_type === "api-dashboard") return counts;
     const state = target.duration_summary?.reserve_review;

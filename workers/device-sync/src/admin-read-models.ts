@@ -197,12 +197,12 @@ export async function readOverview(env: WorkerEnvironment) {
       "SUM(CASE WHEN r.quality = 'incomplete' THEN 1 ELSE 0 END) AS incomplete, " +
       "SUM(CASE WHEN r.quality = 'uncertain' THEN 1 ELSE 0 END) AS uncertain " +
       "FROM capture_quality_reviews r INDEXED BY capture_quality_reviews_reviewed_idx " +
-      "CROSS JOIN capture_history h CROSS JOIN capture_jobs j CROSS JOIN capture_decisions d " +
+      "JOIN capture_history h ON h.capture_id = r.capture_id AND h.job_id = r.job_id " +
+      "JOIN capture_jobs j ON j.job_id = h.job_id AND j.capture_id = h.capture_id " +
+      "JOIN capture_decisions d ON d.capture_id = j.capture_id AND d.due_at = j.scheduled_due_at " +
       "WHERE r.reviewed_at >= ? AND d.assessed_at >= ? " +
-      "AND h.capture_id = r.capture_id AND h.job_id = r.job_id " +
-      "AND j.job_id = h.job_id AND j.capture_id = h.capture_id " +
       "AND j.status = 'succeeded' AND j.result_kind = 'screenshot' " +
-      "AND d.capture_id = j.capture_id AND d.due_at = j.scheduled_due_at AND d.action = 'defer_once'",
+      "AND d.action = 'defer_once'",
     ).bind(windowStart, windowStart).first(),
   ]);
 

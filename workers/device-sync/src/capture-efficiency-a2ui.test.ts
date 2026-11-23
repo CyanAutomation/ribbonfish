@@ -74,6 +74,18 @@ test("Capture Efficiency summarizes usage, JEV outcomes, reviewed candidate qual
   assert.equal(message.createSurface.components.filter((component) => component.component === "Card").length, 5);
 });
 
+test("Capture Efficiency honors an explicit zero reviewed total and falls back only when total is absent", () => {
+  const explicitZero = createCaptureEfficiencyA2uiMessage([], {
+    last_30_days: { jev_candidate_quality_reviews: { total: 0, complete: 1 } },
+  }).createSurface.dataModel.metrics[2];
+  const missingTotal = createCaptureEfficiencyA2uiMessage([], {
+    last_30_days: { jev_candidate_quality_reviews: { complete: 1 } },
+  }).createSurface.dataModel.metrics[2];
+
+  assert.equal(explicitZero.value, "No reviewed screenshots from JEV skip suggestions yet");
+  assert.equal(missingTotal.value, "1 reviewed screenshot");
+});
+
 test("Capture Efficiency A2UI renders as safe, read-only text and keeps an empty evidence state clear", () => {
   const dom = new JSDOM("<div id='summary'><p>previous</p></div>");
   const container = dom.window.document.querySelector<HTMLElement>("#summary");
