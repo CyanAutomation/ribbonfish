@@ -7,7 +7,7 @@ import {
 import { formatRunTime } from "./capture-presentation.ts";
 import { renderCaptureUsageForecast } from "./capture-forecast-view.ts";
 import { node } from "./ui-primitives.ts";
-import { formatCaptureInterval } from "./ui-utils.ts";
+import { formatCaptureInterval } from "./ui-formatters.ts";
 import type { CaptureDurationSummary } from "../../src/capture-duration.ts";
 
 interface CaptureTargetSummary {

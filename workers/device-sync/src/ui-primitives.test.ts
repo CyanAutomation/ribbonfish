@@ -25,7 +25,7 @@ import {
   createPlaylistSyncStatus,
   setPageHeaderMetadata,
 } from "../public/admin/ui-components.ts";
-import { createSingleFlight } from "../public/admin/ui-utils.ts";
+import { createSingleFlight } from "../public/admin/single-flight.ts";
 import { requiredElement, requiredElements, requiredFormControl } from "../public/admin/dom.ts";
 
 function requiredMatch<T extends Element>(root: ParentNode, selector: string): T {

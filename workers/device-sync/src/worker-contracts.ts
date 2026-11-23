@@ -56,13 +56,6 @@ export interface ActivePlaylistRow {
   has_captures: number;
 }
 
-export interface PlaylistAssetRow {
-  position: number;
-  sha256: string;
-  size: number;
-  captured_at?: number | null;
-}
-
 export interface AssignedAssetRow {
   size: number;
 }

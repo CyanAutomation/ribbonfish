@@ -91,72 +91,97 @@ export async function reconcileAssets(env: AssetEnv, now = Date.now()) {
   if (lease.meta?.changes !== 1) {
     const state = await env.DB.prepare("SELECT singleton FROM asset_reconciliation_state WHERE singleton = 1").first();
     if (!state) throw new Error("Asset reconciliation migration has not been applied.");
-    return { skipped: true, deleted: 0, repaired: 0, issues: 0 };
+    return { skipped: true, deleted: 0, repaired: 0, issues: 0, cycle_completed: false };
   }
 
   try {
-    const state = await env.DB.prepare(
-      "SELECT r2_cursor, reference_cursor, last_completed_at FROM asset_reconciliation_state WHERE singleton = 1",
-    ).first<{ r2_cursor: string | null; reference_cursor: string | null; last_completed_at: number | null }>();
-    if (!state) throw new Error("Asset reconciliation state is missing.");
-    const configuredSeconds = Number(env.ASSET_RECONCILIATION_INTERVAL_SECONDS);
-    const intervalMs = Number.isSafeInteger(configuredSeconds) && configuredSeconds >= 0
-      ? configuredSeconds * 1000
-      : DEFAULT_RECONCILIATION_INTERVAL_MS;
-    const scanInProgress = state.r2_cursor !== null || state.reference_cursor !== null;
-    if (!scanInProgress && state.last_completed_at !== null && intervalMs > 0 && now - state.last_completed_at < intervalMs) {
-      return { skipped: true, deleted: 0, repaired: 0, issues: 0, cycle_completed: false };
-    }
-    const pageSize = boundedPageSize(env.ASSET_RECONCILIATION_PAGE_SIZE);
-    const orphanRecordsClaimed = await claimOrphanedAssetRecords(env.DB, pageSize, now);
-    let deleted = await retryClaimedDeletions(env, pageSize, now);
-    const listed = await env.ASSETS.list({
-      prefix: "assets/",
-      limit: pageSize,
-      ...(state.r2_cursor ? { cursor: state.r2_cursor } : {}),
-    });
-    if (listed.truncated && typeof listed.cursor !== "string") {
-      throw new Error("R2 returned a truncated asset page without a continuation cursor.");
-    }
-    const page = listed.objects ?? [];
-    const inventory = await inspectObjectPage(env, page, now);
-    deleted += inventory.deleted;
-
-    const references = await env.DB.prepare(
-      `WITH refs AS (${REFERENCE_CTE})
-       SELECT sha256, MAX(size) AS size FROM refs
-       WHERE sha256 > ? GROUP BY sha256 ORDER BY sha256 LIMIT ?`,
-    ).bind(state.reference_cursor ?? "", pageSize).all<AssetReference>();
-    const referenceRows = references.results ?? [];
-    const referenceResult = await inspectReferencePage(env, referenceRows, now);
-    const nextR2Cursor = listed.truncated ? listed.cursor : null;
-    const referencesTruncated = referenceResult.hasMore || referenceRows.length === pageSize;
-    const nextReferenceCursor = referenceResult.hasMore
-      ? referenceResult.lastProcessedSha
-      : referencesTruncated ? referenceRows[referenceRows.length - 1].sha256 : null;
-    const complete = nextR2Cursor === null && nextReferenceCursor === null;
-    await env.DB.prepare(
-      "UPDATE asset_reconciliation_state SET r2_cursor = ?, reference_cursor = ?, " +
-      "last_completed_at = CASE WHEN ? = 1 THEN ? ELSE last_completed_at END " +
-      "WHERE singleton = 1 AND lease_token = ?",
-    ).bind(nextR2Cursor, nextReferenceCursor, complete ? 1 : 0, now, leaseToken).run();
-
-    return {
-      skipped: false,
-      deleted,
-      orphan_records_claimed: orphanRecordsClaimed,
-      repaired: referenceResult.repaired,
-      issues: referenceResult.issues,
-      cycle_completed: complete,
-      r2_truncated: listed.truncated,
-      references_truncated: referencesTruncated,
-    };
+    return await runReconciliationPage(env, leaseToken, now);
   } finally {
     await env.DB.prepare(
       "UPDATE asset_reconciliation_state SET lease_token = NULL, lease_until = NULL " +
       "WHERE singleton = 1 AND lease_token = ?",
     ).bind(leaseToken).run();
   }
+}
+
+type ReconciliationState = {
+  r2_cursor: string | null;
+  reference_cursor: string | null;
+  last_completed_at: number | null;
+};
+
+async function runReconciliationPage(env: AssetEnv, leaseToken: string, now: number) {
+  const state = await env.DB.prepare(
+    "SELECT r2_cursor, reference_cursor, last_completed_at FROM asset_reconciliation_state WHERE singleton = 1",
+  ).first<ReconciliationState>();
+  if (!state) throw new Error("Asset reconciliation state is missing.");
+  if (shouldSkipReconciliation(state, env, now)) {
+    return { skipped: true, deleted: 0, repaired: 0, issues: 0, cycle_completed: false };
+  }
+
+  const pageSize = boundedPageSize(env.ASSET_RECONCILIATION_PAGE_SIZE);
+  const orphanRecordsClaimed = await claimOrphanedAssetRecords(env.DB, pageSize, now);
+  let deleted = await retryClaimedDeletions(env, pageSize, now);
+  const listed = await env.ASSETS.list({
+    prefix: "assets/",
+    limit: pageSize,
+    ...(state.r2_cursor ? { cursor: state.r2_cursor } : {}),
+  });
+  if (listed.truncated && typeof listed.cursor !== "string") {
+    throw new Error("R2 returned a truncated asset page without a continuation cursor.");
+  }
+  const inventory = await inspectObjectPage(env, listed.objects ?? [], now);
+  deleted += inventory.deleted;
+
+  const references = await env.DB.prepare(
+    `WITH refs AS (${REFERENCE_CTE})
+     SELECT sha256, MAX(size) AS size FROM refs
+     WHERE sha256 > ? GROUP BY sha256 ORDER BY sha256 LIMIT ?`,
+  ).bind(state.reference_cursor ?? "", pageSize).all<AssetReference>();
+  const referenceRows = references.results ?? [];
+  const referenceResult = await inspectReferencePage(env, referenceRows, now);
+  const nextR2Cursor = listed.truncated ? listed.cursor : null;
+  const referencesTruncated = referenceResult.hasMore || referenceRows.length === pageSize;
+  const nextReferenceCursor = referenceResult.hasMore
+    ? referenceResult.lastProcessedSha
+    : referencesTruncated ? referenceRows[referenceRows.length - 1].sha256 : null;
+  const complete = nextR2Cursor === null && nextReferenceCursor === null;
+  await updateReconciliationCursor(env.DB, leaseToken, nextR2Cursor, nextReferenceCursor, complete, now);
+
+  return {
+    skipped: false,
+    deleted,
+    orphan_records_claimed: orphanRecordsClaimed,
+    repaired: referenceResult.repaired,
+    issues: referenceResult.issues,
+    cycle_completed: complete,
+    r2_truncated: listed.truncated,
+    references_truncated: referencesTruncated,
+  };
+}
+
+function shouldSkipReconciliation(state: ReconciliationState, env: AssetEnv, now: number) {
+  const configuredSeconds = Number(env.ASSET_RECONCILIATION_INTERVAL_SECONDS);
+  const intervalMs = Number.isSafeInteger(configuredSeconds) && configuredSeconds >= 0
+    ? configuredSeconds * 1000
+    : DEFAULT_RECONCILIATION_INTERVAL_MS;
+  const scanInProgress = state.r2_cursor !== null || state.reference_cursor !== null;
+  return !scanInProgress && state.last_completed_at !== null && intervalMs > 0 && now - state.last_completed_at < intervalMs;
+}
+
+async function updateReconciliationCursor(
+  db: D1Database,
+  leaseToken: string,
+  r2Cursor: string | null,
+  referenceCursor: string | null,
+  complete: boolean,
+  now: number,
+) {
+  await db.prepare(
+    "UPDATE asset_reconciliation_state SET r2_cursor = ?, reference_cursor = ?, " +
+    "last_completed_at = CASE WHEN ? = 1 THEN ? ELSE last_completed_at END " +
+    "WHERE singleton = 1 AND lease_token = ?",
+  ).bind(r2Cursor, referenceCursor, complete ? 1 : 0, now, leaseToken).run();
 }
 
 async function claimOrphanedAssetRecords(db: D1Database, limit: number, now: number) {
@@ -358,57 +383,16 @@ async function reconcileMissingReference(env: AssetEnv, sha256: string, size: nu
     "SELECT write_lease_until FROM managed_assets WHERE sha256 = ?",
   ).bind(sha256).first<{ write_lease_until: number | null }>();
   if (Number(assetState?.write_lease_until) > now) return { repaired: 0, issues: 0 };
-  const refs = await env.DB.prepare(
-    `SELECT
-       EXISTS (SELECT 1 FROM playlist_assets WHERE sha256 = ?) AS has_playlist,
-       EXISTS (SELECT 1 FROM capture_targets WHERE placeholder_sha256 = ?) AS has_placeholder,
-       EXISTS (SELECT 1 FROM capture_targets WHERE current_sha256 = ?) AS has_current,
-       EXISTS (SELECT 1 FROM capture_history WHERE sha256 = ?) AS has_history`,
-  ).bind(sha256, sha256, sha256, sha256).first();
-  if (!refs || !(refs.has_playlist || refs.has_placeholder || refs.has_current || refs.has_history)) {
-    await env.DB.prepare(
-      "DELETE FROM managed_assets WHERE sha256 = ? AND state IN ('live', 'staged') " +
-      "AND (write_lease_until IS NULL OR write_lease_until <= ?) " +
-      `AND ${NOT_REFERENCED_SQL}`,
-    ).bind(sha256, now, sha256, sha256, sha256, sha256).run();
+
+  const refs = await readMissingAssetReferences(env.DB, sha256);
+  if (!hasMissingAssetReferences(refs)) {
+    await deleteUnreferencedAssetRecord(env.DB, sha256, now);
     return { repaired: 0, issues: 0 };
   }
 
-  let repaired = 0;
-  const captureCleanup = [];
-  if (refs.has_current) {
-    captureCleanup.push(env.DB.prepare(
-      "UPDATE capture_targets SET current_sha256 = NULL, current_size = NULL WHERE current_sha256 = ? " +
-      "AND NOT EXISTS (SELECT 1 FROM managed_assets WHERE sha256 = ? AND write_lease_until > ?)",
-    ).bind(sha256, sha256, now));
-  }
-  if (refs.has_history) {
-    captureCleanup.push(env.DB.prepare(
-      "DELETE FROM capture_history WHERE sha256 = ? " +
-      "AND NOT EXISTS (SELECT 1 FROM managed_assets WHERE sha256 = ? AND write_lease_until > ?)",
-    ).bind(sha256, sha256, now));
-  }
-  const captureChanges = captureCleanup.length ? await env.DB.batch(captureCleanup) : [];
-  const currentCleared = refs.has_current && captureChanges[0]?.meta?.changes > 0;
-  const historyRemoved = refs.has_history && captureChanges[refs.has_current ? 1 : 0]?.meta?.changes > 0;
-  if (refs.has_placeholder) {
-    const restored = await restorePlaceholder(env, sha256, size, now);
-    if (restored) {
-      repaired += 1;
-      await resolveIssue(env.DB, sha256, "missing_placeholder_asset", now);
-    } else {
-      await recordIssue(env.DB, sha256, "missing_placeholder_asset", now);
-      console.warn("asset_integrity_issue", { issue_type: "missing_placeholder_asset", sha256 });
-    }
-  } else {
-    await resolveIssue(env.DB, sha256, "missing_placeholder_asset", now);
-  }
-  if (refs.has_playlist) {
-    await recordIssue(env.DB, sha256, "missing_playlist_asset", now);
-    console.warn("asset_integrity_issue", { issue_type: "missing_playlist_asset", sha256 });
-  } else {
-    await resolveIssue(env.DB, sha256, "missing_playlist_asset", now);
-  }
+  const { currentCleared, historyRemoved } = await clearMissingCaptureReferences(env.DB, sha256, now, refs);
+  const repaired = await reconcileMissingPlaceholder(env, sha256, size, now, refs.has_placeholder);
+  await reconcileMissingPlaylist(env.DB, sha256, now, refs.has_playlist);
   if (currentCleared || historyRemoved) {
     console.warn("asset_reconciliation_removed_missing_capture_references", {
       sha256,
@@ -417,13 +401,92 @@ async function reconcileMissingReference(env: AssetEnv, sha256: string, size: nu
     });
   }
   if (!refs.has_playlist && !(refs.has_placeholder && !repaired)) {
-    await env.DB.prepare(
-      "DELETE FROM managed_assets WHERE sha256 = ? AND state IN ('live', 'staged') " +
-      "AND (write_lease_until IS NULL OR write_lease_until <= ?) " +
-      `AND ${NOT_REFERENCED_SQL}`,
-    ).bind(sha256, now, sha256, sha256, sha256, sha256).run();
+    await deleteUnreferencedAssetRecord(env.DB, sha256, now);
   }
   return { repaired, issues: Number(Boolean(refs.has_playlist)) + Number(Boolean(refs.has_placeholder && !repaired)) };
+}
+
+type MissingAssetReferences = {
+  has_playlist: boolean;
+  has_placeholder: boolean;
+  has_current: boolean;
+  has_history: boolean;
+};
+
+async function readMissingAssetReferences(db: D1Database, sha256: string) {
+  return db.prepare(
+    `SELECT
+       EXISTS (SELECT 1 FROM playlist_assets WHERE sha256 = ?) AS has_playlist,
+       EXISTS (SELECT 1 FROM capture_targets WHERE placeholder_sha256 = ?) AS has_placeholder,
+       EXISTS (SELECT 1 FROM capture_targets WHERE current_sha256 = ?) AS has_current,
+       EXISTS (SELECT 1 FROM capture_history WHERE sha256 = ?) AS has_history`,
+  ).bind(sha256, sha256, sha256, sha256).first<MissingAssetReferences>();
+}
+
+function hasMissingAssetReferences(refs: MissingAssetReferences | null): refs is MissingAssetReferences {
+  return Boolean(refs && (refs.has_playlist || refs.has_placeholder || refs.has_current || refs.has_history));
+}
+
+async function clearMissingCaptureReferences(
+  db: D1Database,
+  sha256: string,
+  now: number,
+  refs: MissingAssetReferences,
+) {
+  const captureCleanup = [];
+  if (refs.has_current) {
+    captureCleanup.push(db.prepare(
+      "UPDATE capture_targets SET current_sha256 = NULL, current_size = NULL WHERE current_sha256 = ? " +
+      "AND NOT EXISTS (SELECT 1 FROM managed_assets WHERE sha256 = ? AND write_lease_until > ?)",
+    ).bind(sha256, sha256, now));
+  }
+  if (refs.has_history) {
+    captureCleanup.push(db.prepare(
+      "DELETE FROM capture_history WHERE sha256 = ? " +
+      "AND NOT EXISTS (SELECT 1 FROM managed_assets WHERE sha256 = ? AND write_lease_until > ?)",
+    ).bind(sha256, sha256, now));
+  }
+  const captureChanges = captureCleanup.length ? await db.batch(captureCleanup) : [];
+  const currentCleared = refs.has_current && captureChanges[0]?.meta?.changes > 0;
+  const historyRemoved = refs.has_history && captureChanges[refs.has_current ? 1 : 0]?.meta?.changes > 0;
+  return { currentCleared, historyRemoved };
+}
+
+async function reconcileMissingPlaceholder(
+  env: AssetEnv,
+  sha256: string,
+  size: number,
+  now: number,
+  hasPlaceholder: boolean,
+) {
+  if (!hasPlaceholder) {
+    await resolveIssue(env.DB, sha256, "missing_placeholder_asset", now);
+    return 0;
+  }
+  if (await restorePlaceholder(env, sha256, size, now)) {
+    await resolveIssue(env.DB, sha256, "missing_placeholder_asset", now);
+    return 1;
+  }
+  await recordIssue(env.DB, sha256, "missing_placeholder_asset", now);
+  console.warn("asset_integrity_issue", { issue_type: "missing_placeholder_asset", sha256 });
+  return 0;
+}
+
+async function reconcileMissingPlaylist(db: D1Database, sha256: string, now: number, hasPlaylist: boolean) {
+  if (hasPlaylist) {
+    await recordIssue(db, sha256, "missing_playlist_asset", now);
+    console.warn("asset_integrity_issue", { issue_type: "missing_playlist_asset", sha256 });
+    return;
+  }
+  await resolveIssue(db, sha256, "missing_playlist_asset", now);
+}
+
+async function deleteUnreferencedAssetRecord(db: D1Database, sha256: string, now: number) {
+  await db.prepare(
+    "DELETE FROM managed_assets WHERE sha256 = ? AND state IN ('live', 'staged') " +
+    "AND (write_lease_until IS NULL OR write_lease_until <= ?) " +
+    `AND ${NOT_REFERENCED_SQL}`,
+  ).bind(sha256, now, sha256, sha256, sha256, sha256).run();
 }
 
 async function restorePlaceholder(env: AssetEnv, expectedSha256: string, expectedSize: number, now: number) {

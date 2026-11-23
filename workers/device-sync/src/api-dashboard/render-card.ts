@@ -270,38 +270,137 @@ function renderCardHeader(layout: CardLayout): string {
 }
 
 function renderServiceDisplayRow(row: ServiceDisplayRow, layout: CardLayout, rowY: number): string {
-  const { source, x, width, scale, pad, left, compact } = layout;
-  const s = (n: number) => n * scale;
   if (row.kind === "group") {
+    const { left, width, scale, compact } = layout;
+    const s = (n: number) => n * scale;
     return `<text x="${left}" y="${rowY}" fill="#c1d1e2" font-size="${s(compact ? 12 : 15)}" font-weight="700">${svgText(truncateText(row.name, Math.floor(width / s(10))))}</text>`;
   }
   if (row.kind === "empty") {
+    const { left, scale, compact } = layout;
+    const s = (n: number) => n * scale;
     return `<text x="${left + s(16)}" y="${rowY}" fill="#aab8ca" font-size="${s(compact ? 11 : 14)}">No services reported</text>`;
   }
   if (row.kind === "summary") {
+    const { x, width, scale, pad, left } = layout;
+    const s = (n: number) => n * scale;
     return svgGroupSummary({ x: left + s(16), y: rowY, right: x + width - pad, scale, label: "operational", count: row.count, history: row.history });
   }
-  const { name, status } = row.component;
-  const unconfirmed = source.freshness !== "fresh" && status !== "stale";
-  const color = unconfirmed ? colors.unknown : colors[status as Health] ?? colors.unknown;
-  const statusText = healthLabel[status as Health] ?? healthLabel.unknown;
-  const changedTime = formatClock(row.component.statusChangedAt);
-  const sampledTime = formatClock(row.component.sampledAt);
-  const stateChangeTime = changedTime && ["down", "degraded", "maintenance"].includes(status) ? changedTime : undefined;
-  const staleReading = status === "stale";
-  const lastKnown = staleReading || unconfirmed ? (row.component.history ?? []).toSorted((a, b) => Date.parse(b.at) - Date.parse(a.at)).find((beat) => beat.status !== "stale")?.status ?? (unconfirmed ? status : undefined) : undefined;
-  const lastKnownLabel = lastKnown ? healthLabel[lastKnown] ?? healthLabel.unknown : undefined;
-  const sampledAge = staleReading || unconfirmed ? formatAge(row.component.sampledAt, source.fetchedAt) : undefined;
-  const conciseUnconfirmed = (staleReading || unconfirmed) && width < s(520);
-  const statusMeta = conciseUnconfirmed ? undefined : [
-    (staleReading || unconfirmed) && sampledTime ? (lastKnown ? sampledTime : `Last check ${sampledTime}`) : stateChangeTime ? `Since ${stateChangeTime}` : status !== "operational" && sampledTime ? `Checked ${sampledTime}` : undefined,
-    sampledAge,
-  ].filter(Boolean).join(" · ") || undefined;
-  const conciseAge = sampledAge?.replace(/(\d+)h (\d+)m old/, "$1h$2m").replace(/(\d+)m old/, "$1m");
-  const displayStatus = conciseUnconfirmed
-    ? lastKnownLabel ? `Last: ${lastKnownLabel} · ${conciseAge ?? "stale"}` : `${staleReading ? "Stale" : "Unconfirmed"} · ${conciseAge ?? ""}`.trim()
-    : lastKnownLabel ? `Last known: ${lastKnownLabel}` : staleReading ? "Stale" : unconfirmed ? "Unconfirmed" : statusText;
+
+  return renderServiceComponentRow(row.component, layout, rowY);
+}
+
+function renderServiceComponentRow(component: DashboardSource["components"][number], layout: CardLayout, rowY: number): string {
+  const { source, x, width, scale, pad, left, compact } = layout;
+  const { name } = component;
+  const { displayStatus, color, statusMeta } = serviceStatusPresentation(component, source, layout);
   return svgServiceRow({ x: left, y: rowY, right: x + width - pad, scale, name, status: displayStatus, color, statusMeta, compact, showStatus: true });
+}
+
+function serviceStatusPresentation(
+  component: DashboardSource["components"][number],
+  source: DashboardSource,
+  layout: CardLayout,
+) {
+  const context = serviceStatusContext(component, source);
+  const conciseUnconfirmed = (context.staleReading || context.unconfirmed) && layout.width < layout.scale * 520;
+  const statusText = healthLabel[component.status as Health] ?? healthLabel.unknown;
+  const conciseAge = compactServiceAge(context.sampledAge);
+  const color = context.unconfirmed ? colors.unknown : colors[component.status as Health] ?? colors.unknown;
+  return {
+    displayStatus: serviceDisplayStatus({
+      conciseUnconfirmed,
+      lastKnownLabel: context.lastKnownLabel,
+      conciseAge,
+      staleReading: context.staleReading,
+      unconfirmed: context.unconfirmed,
+      statusText,
+    }),
+    color,
+    statusMeta: serviceStatusMeta(component, context, conciseUnconfirmed),
+  };
+}
+
+type ServiceStatusContext = {
+  staleReading: boolean;
+  unconfirmed: boolean;
+  lastKnownLabel: string | undefined;
+  sampledAge: string | undefined;
+};
+
+function serviceStatusContext(
+  component: DashboardSource["components"][number],
+  source: DashboardSource,
+): ServiceStatusContext {
+  const { status } = component;
+  const unconfirmed = source.freshness !== "fresh" && status !== "stale";
+  const staleReading = status === "stale";
+  const lastKnown = lastKnownServiceStatus(component, staleReading || unconfirmed, unconfirmed);
+  const lastKnownLabel = lastKnown ? healthLabel[lastKnown] ?? healthLabel.unknown : undefined;
+  const sampledAge = staleReading || unconfirmed ? formatAge(component.sampledAt, source.fetchedAt) : undefined;
+  return { staleReading, unconfirmed, lastKnownLabel, sampledAge };
+}
+
+function serviceStatusMeta(
+  component: DashboardSource["components"][number],
+  context: ServiceStatusContext,
+  conciseUnconfirmed: boolean,
+): string | undefined {
+  if (conciseUnconfirmed) return undefined;
+  const changedTime = formatClock(component.statusChangedAt);
+  const sampledTime = formatClock(component.sampledAt);
+  const stateChangeTime = changedTime && ["down", "degraded", "maintenance"].includes(component.status)
+    ? changedTime
+    : undefined;
+  const label = serviceTimelineLabel(component.status, context, sampledTime, stateChangeTime);
+  return [label, context.sampledAge].filter(Boolean).join(" · ") || undefined;
+}
+
+function serviceTimelineLabel(
+  status: string,
+  context: ServiceStatusContext,
+  sampledTime: string | undefined,
+  stateChangeTime: string | undefined,
+): string | undefined {
+  if ((context.staleReading || context.unconfirmed) && sampledTime) {
+    return context.lastKnownLabel ? sampledTime : `Last check ${sampledTime}`;
+  }
+  if (stateChangeTime) return `Since ${stateChangeTime}`;
+  if (status !== "operational" && sampledTime) return `Checked ${sampledTime}`;
+  return undefined;
+}
+
+function compactServiceAge(sampledAge: string | undefined): string | undefined {
+  return sampledAge?.replace(/(\d+)h (\d+)m old/, "$1h$2m").replace(/(\d+)m old/, "$1m");
+}
+
+function lastKnownServiceStatus(
+  component: DashboardSource["components"][number],
+  shouldFindStatus: boolean,
+  unconfirmed: boolean,
+): Health | undefined {
+  if (!shouldFindStatus) return undefined;
+  const fromHistory = (component.history ?? []).toSorted((a, b) => Date.parse(b.at) - Date.parse(a.at))
+    .find((beat) => beat.status !== "stale")?.status;
+  return fromHistory ?? (unconfirmed ? component.status as Health : undefined);
+}
+
+function serviceDisplayStatus({ conciseUnconfirmed, lastKnownLabel, conciseAge, staleReading, unconfirmed, statusText }: {
+  conciseUnconfirmed: boolean;
+  lastKnownLabel: string | undefined;
+  conciseAge: string | undefined;
+  staleReading: boolean;
+  unconfirmed: boolean;
+  statusText: string;
+}) {
+  if (conciseUnconfirmed) {
+    if (lastKnownLabel) return `Last: ${lastKnownLabel} · ${conciseAge ?? "stale"}`;
+    const label = staleReading ? "Stale" : "Unconfirmed";
+    return `${label} · ${conciseAge ?? ""}`.trim();
+  }
+  if (lastKnownLabel) return `Last known: ${lastKnownLabel}`;
+  if (staleReading) return "Stale";
+  if (unconfirmed) return "Unconfirmed";
+  return statusText;
 }
 
 function renderCardRows(layout: CardLayout): string {

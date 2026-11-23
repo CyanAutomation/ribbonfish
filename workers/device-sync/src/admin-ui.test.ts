@@ -8,27 +8,31 @@ import { renderCaptureUsageForecast } from "../public/admin/capture-forecast-vie
 import {
   confirmAction,
   confirmBeforeAction,
+} from "../public/admin/ui-confirmation.ts";
+import {
   createTransientNotice,
+  createRetryableLoadOnce,
+} from "../public/admin/ui-notices.ts";
+import {
   formatAuditDetails,
   formatAuditEventType,
   formatActorLabel,
   compactIdentifier,
-  createRetryableLoadOnce,
   formatCaptureInterval,
   formatDeviceEnabledMessage,
-  formatDeviceHealthDetails,
   formatEnrollmentApprovalPrompt,
   formatEnvironmentNotice,
   formatPlaylistState,
   playlistDeleteActionStates,
   formatScreenshotStatus,
-  formatTimestamp,
   describeJevAnswer,
   formatJevAnswerLabel,
-  buildFleetInsights,
   prioritizeCaptureTargets,
   summarizeCaptureErrors,
-} from "../public/admin/ui-utils.ts";
+} from "../public/admin/ui-formatters.ts";
+import { formatDeviceHealthDetails } from "../public/admin/health-details.ts";
+import { buildFleetInsights } from "../public/admin/fleet-insights.ts";
+import { formatTimestamp } from "../public/admin/admin-formatters.ts";
 import { renderFindingCard, renderFindingList } from "../public/admin/ui-components.ts";
 import { deviceNeedsReview } from "../public/admin/device-needs-review.ts";
 

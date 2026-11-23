@@ -15,7 +15,7 @@ export interface PlaylistContent {
 }
 
 /** Resolve the canonical agent revision; capture timestamps are part of its identity for all API versions. */
-export async function resolvePlaylistRevision(
+async function resolvePlaylistRevision(
   storedRevision: string,
   assets: PlaylistRevisionAsset[],
   hasCaptures: boolean,

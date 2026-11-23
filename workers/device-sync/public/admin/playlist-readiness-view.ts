@@ -1,23 +1,10 @@
 import { createMetricGrid, inlineCode, node, statusBadge } from "./ui-primitives.ts";
 import { createPlaylistSyncStatus } from "./ui-components.ts";
+import type { PlaylistReadinessResult } from "../../src/playlist-readiness.ts";
 
-export type PlaylistReadinessViewData = {
-  revision?: { playlist_id?: string; revision?: string; effective_revision?: string };
-  status: "ready" | "review" | "blocked" | string;
-  summary: {
-    total_items: number;
-    total_captures: number;
-    fresh_captures: number;
-    missing_assets: number;
-    stale_captures: number;
-    disabled_captures: number;
-    unreviewed_schedules: number;
-    devices_to_update: number;
-  };
-  blockers: string[];
-  warnings: string[];
-  items: Array<{ label: string; status: string }>;
-  devices_to_update: Array<{ device_id: string; sync_status: string }>;
+export type PlaylistReadinessViewData = Omit<PlaylistReadinessResult, "revision" | "status"> & {
+  revision?: Partial<PlaylistReadinessResult["revision"]>;
+  status: string;
   latest_assessment: null | {
     assessed_at?: number;
     deterministic_status?: string;

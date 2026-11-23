@@ -14,15 +14,28 @@ export function formatTimestamp(value: string | number | null | undefined, local
   return `${formatted} UTC`;
 }
 
-export function formatAge(seconds: number) {
-  if (!Number.isFinite(seconds) || seconds < 0) return "unknown";
-  if (seconds < 60) return `${Math.floor(seconds)}s`;
+type AgeUnits = { unknown: string; second: string; minute: string; hour: string; day: string };
+
+const compactAgeUnits: AgeUnits = { unknown: "unknown", second: "s", minute: "m", hour: "h", day: "d" };
+const detailedAgeUnits: AgeUnits = { unknown: "unknown age", second: " sec", minute: " min", hour: " hr", day: " days" };
+
+function formatAgeWithUnits(seconds: number, units: AgeUnits) {
+  if (!Number.isFinite(seconds) || seconds < 0) return units.unknown;
+  if (seconds < 60) return `${Math.floor(seconds)}${units.second}`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 60) return `${minutes}${units.minute}`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  if (hours < 24) return `${hours}${units.hour} ${minutes % 60}${units.minute}`;
   const days = Math.floor(hours / 24);
-  return `${days}d ${hours % 24}h`;
+  return `${days}${units.day} ${hours % 24}${units.hour}`;
+}
+
+export function formatAge(seconds: number) {
+  return formatAgeWithUnits(seconds, compactAgeUnits);
+}
+
+export function formatDetailedAge(seconds: number) {
+  return formatAgeWithUnits(seconds, detailedAgeUnits);
 }
 
 export function formatBytes(bytes: number) {

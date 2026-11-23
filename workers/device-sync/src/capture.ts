@@ -1,6 +1,7 @@
 import { MAX_ASSET_BYTES, isPNG, storePngAsset } from "./asset-store.ts";
 import { ASSET_WRITE_LEASE_MS } from "./asset-registry.ts";
 import { isSupportedCaptureInterval } from "./intervals.ts";
+import { readBoundedStream } from "./read-bounded-stream.ts";
 
 const MAX_CAPTURE_TIMEOUT_MS = 45_000;
 const MAX_CAPTURE_PIXELS = 3840 * 2160;
@@ -183,28 +184,6 @@ async function readBoundedBody(response: Response, maxBytes: number, captureInfo
     throw new CaptureError("Screenshot exceeds the configured image size limit.", captureInfo);
   }
   if (!response.body) throw new CaptureError("Browser Run returned an empty screenshot.", captureInfo);
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel();
-        throw new CaptureError("Screenshot exceeds the configured image size limit.", captureInfo);
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  return readBoundedStream(response.body, maxBytes, () =>
+    new CaptureError("Screenshot exceeds the configured image size limit.", captureInfo));
 }

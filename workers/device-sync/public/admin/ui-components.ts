@@ -1,4 +1,4 @@
-import { createSingleFlight } from "./ui-utils.ts";
+import { createSingleFlight } from "./single-flight.ts";
 import { formatTimestamp } from "./admin-formatters.ts";
 import {
   createDefinitionList,

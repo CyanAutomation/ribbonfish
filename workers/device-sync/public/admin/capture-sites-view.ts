@@ -4,13 +4,13 @@ import { formatCaptureObservation } from "./capture-presentation.ts";
 import { beginButtonBusy, button, createDisclosure, node, statusBadge } from "./ui-primitives.ts";
 import { formatTimestamp } from "./admin-formatters.ts";
 import { renderCaptureWorkbenchA2ui, parseCaptureWorkbenchAction, type CaptureWorkbenchDecision, type CaptureWorkbenchSite } from "./capture-workbench-a2ui.ts";
+import { confirmBeforeAction } from "./ui-confirmation.ts";
 import {
   compactIdentifier,
-  confirmBeforeAction,
   formatCaptureInterval,
   formatScreenshotStatus,
   prioritizeCaptureTargets,
-} from "./ui-utils.ts";
+} from "./ui-formatters.ts";
 
 const CAPTURE_SITE_VIEW_STORAGE_KEY = "ribbonfish.capture-sites.view";
 
