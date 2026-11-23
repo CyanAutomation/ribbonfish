@@ -30,6 +30,7 @@ import {
   summarizeCaptureErrors,
 } from "../public/admin/ui-utils.ts";
 import { renderFindingCard, renderFindingList } from "../public/admin/ui-components.ts";
+import { deviceNeedsReview } from "../public/admin/device-needs-review.ts";
 
 // Contract source: ../README.md#local-development and ../README.md#management-api.
 // Device health presentation contract: ../README.md#management-api.
@@ -301,6 +302,22 @@ test("fleet insights do not flag devices behind when the active revision is miss
   });
 
   assert.deepEqual(insights, []);
+});
+
+test("fleet findings and device review use the active effective playlist revision", () => {
+  const device = {
+    enabled: 1,
+    health: {
+      status: "healthy",
+      sync_status: "ok",
+      applied_playlist_id: "ops",
+      applied_revision: "content-hash",
+    },
+  };
+  const activePlaylist = { playlist_id: "ops", revision: "r-stored", effective_revision: "content-hash" };
+
+  assert.equal(deviceNeedsReview(device, activePlaylist), false);
+  assert.deepEqual(buildFleetInsights({ devices: [device], active_playlist: activePlaylist }), []);
 });
 
 test("reusable finding components render accessible evidence, actions and responsive card styles", async () => {

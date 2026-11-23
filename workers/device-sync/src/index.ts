@@ -7,6 +7,7 @@ import { sha256Hex } from "./crypto-primitives.ts";
 export { sha256Hex } from "./crypto-primitives.ts";
 import { HTTPError } from "./http-error.ts";
 import { DEVICE_ID_PATTERN } from "./device-id.ts";
+import { readPlaylistContent } from "./playlist-revision.ts";
 import { enroll, requestDeviceEnrollment } from "./enrollment.ts";
 import { isString } from "./validation.ts";
 import { assessUpcomingCaptures } from "./capture-intelligence.ts";
@@ -20,7 +21,6 @@ import type {
   AssignedAssetRow,
   CaptureQueueBatch,
   DeviceCredentialRow,
-  PlaylistAssetRow,
   WorkerEnvironment,
   WorkerExecutionContext,
   WorkerScheduledController,
@@ -271,39 +271,16 @@ async function readActivePlaylist(env: WorkerEnvironment, ifNoneMatch: string | 
   if (!Number(active.has_captures) && matchesETag(ifNoneMatch, staticETag)) {
     return { etag: staticETag, notModified: true };
   }
-  const captureCutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-  const [assetResult, captureResult] = await Promise.all([
-    env.DB.prepare(
-      "SELECT position, sha256, size FROM playlist_assets WHERE playlist_id = ? AND revision = ? ORDER BY position",
-    ).bind(active.playlist_id, active.revision).all<PlaylistAssetRow>(),
-    env.DB.prepare(
-      "SELECT p.position, " +
-      "CASE WHEN t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.current_sha256 ELSE t.placeholder_sha256 END AS sha256, " +
-      "CASE WHEN t.current_size IS NOT NULL AND t.last_success_at >= ? THEN t.current_size ELSE t.placeholder_size END AS size, " +
-      "CASE WHEN t.capture_type = 'browser-screenshot' AND t.current_sha256 IS NOT NULL AND t.last_success_at >= ? THEN t.last_success_at ELSE NULL END AS captured_at " +
-      "FROM playlist_capture_items p JOIN capture_targets t ON t.capture_id = p.capture_id " +
-      "WHERE p.playlist_id = ? AND p.revision = ? ORDER BY p.position",
-    ).bind(captureCutoff, captureCutoff, captureCutoff,
-      active.playlist_id, active.revision).all<PlaylistAssetRow>(),
-  ]);
+  const content = await readPlaylistContent(env, active.playlist_id, active.revision);
   const includeCaptureTimes = version === 3;
-  const orderedAssets: Array<{ position: number; sha256: string; size: number; captured_at?: number }> = [
-    ...(assetResult.results ?? []).map((asset, index) => ({ position: Number.isSafeInteger(asset.position) ? asset.position : index, sha256: asset.sha256, size: asset.size })),
-    ...(captureResult.results ?? []).map((asset) => ({ position: asset.position, sha256: asset.sha256, size: asset.size,
-      ...(includeCaptureTimes && Number.isSafeInteger(asset.captured_at) && Number(asset.captured_at) > 0 ? { captured_at: Number(asset.captured_at) } : {}) })),
-  ].sort((left, right) => left.position - right.position);
-  const hasCaptures = (captureResult.results ?? []).length > 0;
-  const resolvedRevision = hasCaptures
-    ? (await sha256Hex(`${playlistRow.revision}\n${orderedAssets.map(({ sha256, size, captured_at }) =>
-      `${sha256}:${size}${includeCaptureTimes ? `:${captured_at ?? ""}` : ""}`).join("\n")}`)).slice(0, 64)
-    : playlistRow.revision;
   const playlist = {
     version,
-    revision: resolvedRevision,
+    revision: content.effective_revision,
     id: playlistRow.playlist_id,
     rotation_interval: playlistRow.rotation_interval,
-    assets: orderedAssets.map(({ sha256, size, captured_at }) => ({ sha256, size,
-      ...(includeCaptureTimes && captured_at !== undefined ? { captured_at } : {}) })),
+    assets: content.assets.map(({ sha256, size, captured_at }) => ({ sha256, size,
+      ...(includeCaptureTimes && Number.isSafeInteger(captured_at) && Number(captured_at) > 0
+        ? { captured_at: Number(captured_at) } : {}) })),
   };
   try {
     validatePlaylist(playlist);

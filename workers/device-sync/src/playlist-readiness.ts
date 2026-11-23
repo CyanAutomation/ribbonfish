@@ -1,8 +1,10 @@
 export type PlaylistReadinessStatus = "ready" | "review" | "blocked";
-export type PlaylistSyncState = "in_sync" | "behind" | "unreported";
+import { getPlaylistSyncState, type PlaylistSyncState as SharedPlaylistSyncState } from "./playlist-sync-state.ts";
+
+export type PlaylistSyncState = Extract<SharedPlaylistSyncState, "in_sync" | "behind" | "unreported">;
 
 export interface PlaylistReadinessInput {
-  revision: { playlist_id: string; revision: string };
+  revision: { playlist_id: string; revision: string; effective_revision?: string };
   assets: Array<{ position: number; present: boolean }>;
   captures: Array<{
     capture_id: string;
@@ -20,7 +22,7 @@ export interface PlaylistReadinessInput {
 }
 
 export interface PlaylistReadinessResult {
-  revision: { playlist_id: string; revision: string };
+  revision: { playlist_id: string; revision: string; effective_revision?: string };
   status: PlaylistReadinessStatus;
   summary: {
     total_items: number;
@@ -45,13 +47,12 @@ export function assessPlaylistReadiness(input: PlaylistReadinessInput): Playlist
   const staleCaptures = input.captures.filter((capture) => capture.enabled && !capture.fresh).length;
   const disabledCaptures = input.captures.filter((capture) => !capture.enabled).length;
   const unreviewedSchedules = input.captures.filter((capture) => !capture.schedule_reviewed && capture.enabled).length;
-  const devicesToUpdate = input.devices.filter((device) => device.enabled && !(
-    device.applied_playlist_id === input.revision.playlist_id &&
-    device.applied_revision !== null && String(device.applied_revision) === input.revision.revision
-  )).map((device) => ({
-    device_id: device.device_id,
-    sync_status: !device.applied_playlist_id || device.applied_revision === null ? "unreported" as const : "behind" as const,
-  }));
+  const devicesToUpdate = input.devices.flatMap((device) => {
+    if (!device.enabled) return [];
+    const syncState = getPlaylistSyncState(device, input.revision);
+    if (syncState === "in_sync" || syncState === "no_active_revision" || syncState === "disabled") return [];
+    return [{ device_id: device.device_id, sync_status: syncState }];
+  });
   const blockers = [
     ...(missingAssets ? ["missing_assets"] : []),
     ...(disabledCaptures ? ["disabled_captures"] : []),

@@ -32,6 +32,9 @@ test("playlist readiness view presents deterministic blockers, freshness, recipi
   assert.match(panel.textContent ?? "", /Needs review/);
   assert.match(panel.textContent ?? "", /Fresh captures\s*0 \/ 1/);
   assert.match(panel.textContent ?? "", /pi-office/);
+  assert.match(panel.textContent ?? "", /Behind active playlist/);
+  assert.equal(panel.querySelector(".playlist-sync-status--behind")?.getAttribute("aria-label"), "Playlist sync status");
+  assert.equal(panel.querySelector("code")?.textContent, "pi-office");
   assert.match(panel.textContent ?? "", /JEV shadow assessment/);
   assert.match(panel.textContent ?? "", /awaiting device sync/);
   assert.equal(panel.querySelectorAll(".metric-card").length, 4);

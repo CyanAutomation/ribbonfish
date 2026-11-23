@@ -229,6 +229,45 @@ test("v2 playlist responses remain unchanged for strict legacy agents", async ()
   assert.deepEqual(body.assets[0], { sha256: digest, size: 4 });
 });
 
+test("v2 and v3 report the same canonical revision for captured playlists", async () => {
+  const { env, db } = testEnvironment();
+  await authorize(db);
+  db.playlists.set("welcome:revision-1", { ...playlist, assets: [] });
+  db.captureItems = [{ position: 0, sha256: digest, size: 4, captured_at: 1_798_000_000_000 }];
+
+  const readRevision = async (version) => {
+    const response = await fetchHandler(new Request(`https://worker.test/v${version}/playlist`, {
+      headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office" },
+    }), env);
+    assert.equal(response.status, 200);
+    return (await response.json()).revision;
+  };
+
+  assert.equal(await readRevision(2), await readRevision(3));
+});
+
+test("v2 canonical revision changes when an unchanged capture is recaptured", async () => {
+  const { env, db } = testEnvironment();
+  await authorize(db);
+  db.playlists.set("welcome:revision-1", { ...playlist, assets: [] });
+  db.captureItems = [{ position: 0, sha256: digest, size: 4, captured_at: 1_798_000_000_000 }];
+  const read = (etag) => fetchHandler(new Request("https://worker.test/v2/playlist", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "X-Ribbonfish-Device-ID": "pi-office",
+      ...(etag ? { "If-None-Match": etag } : {}),
+    },
+  }), env);
+
+  const first = await read();
+  db.captureItems = [{ ...db.captureItems[0], captured_at: 1_798_000_060_000 }];
+  const second = await read(first.headers.get("etag"));
+
+  assert.equal(second.status, 200);
+  assert.notEqual(second.headers.get("etag"), first.headers.get("etag"));
+  assert.deepEqual((await second.json()).assets[0], { sha256: digest, size: 4 });
+});
+
 test("conditional playlist reads throttle last-seen writes in D1", async () => {
   const { env, db } = testEnvironment();
   await authorize(db);

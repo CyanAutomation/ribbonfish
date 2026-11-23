@@ -4,6 +4,7 @@ import { parseMetadata } from "./admin-metadata.ts";
 import { deriveDeviceHealth, type DeviceHealthReport } from "./device-health.ts";
 import { classifyReserveReview } from "./capture-duration.ts";
 import { summarizeCaptureHistory } from "./capture-workbench.ts";
+import { readPlaylistContent } from "./playlist-revision.ts";
 import {
   calculateDailyCaptureForecast,
   CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS,
@@ -182,13 +183,16 @@ export async function readOverview(env: WorkerEnvironment) {
     captureChangeHistory.results ?? [], reserveMs, now,
   );
   const captureUsageSummary = buildCaptureUsageSummary(captureTargetSummaries.filter((target) => target.capture_type !== "api-dashboard"), captureUsage, budgetMs, now);
+  const activePlaylist = active && typeof active.playlist_id === "string" && typeof active.revision === "string"
+    ? { ...active, effective_revision: (await readPlaylistContent(env, active.playlist_id, active.revision, now)).effective_revision }
+    : active;
 
   return {
     generated_at: now,
     environment: env.ADMIN_ACCESS_REQUIRED === "true" ? "production" : "development",
     devices: (devices.results ?? []).map((device) => summarizeDeviceHealth(device, now)),
     playlists: playlists.results ?? [],
-    active_playlist: active,
+    active_playlist: activePlaylist,
     capture_targets: captureTargetSummaries,
     capture_efficiency: summarizeOverviewCaptureEfficiency(
       captureTargetSummaries, captureUsage, budgetMs, now, captureJobs, captureHistory, captureDecisions,

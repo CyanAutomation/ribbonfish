@@ -58,6 +58,22 @@ test("fleet overview is represented as a single A2UI v1.0 surface with bound dat
   assert.equal(message.createSurface.components.filter((component) => component.component === "Button").length, 0);
 });
 
+test("fleet sync compares a device's applied digest with the active effective revision", () => {
+  const message = createFleetOverviewA2uiMessage({
+    devices: [{
+      enabled: 1,
+      health: { status: "healthy", sync_status: "ok", applied_playlist_id: "office", applied_revision: "content-hash" },
+    }],
+    active_playlist: { playlist_id: "office", revision: "r-stored", effective_revision: "content-hash" },
+  }, []);
+
+  assert.deepEqual(message.createSurface.dataModel.metrics[5].rows, [
+    { text: "In sync 1" }, { text: "Behind 0" }, { text: "Not reported 0" },
+    { text: "No active revision 0" }, { text: "Disabled 0" },
+  ]);
+  assert.equal(message.createSurface.dataModel.metrics[1].value, "0");
+});
+
 test("A2UI fleet surface renders the existing live metrics and fixed internal links", () => {
   const dom = new JSDOM("<div id='metrics'></div>");
   const container = dom.window.document.querySelector<HTMLElement>("#metrics");

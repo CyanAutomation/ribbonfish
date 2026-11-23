@@ -2,11 +2,13 @@ import { createSingleFlight } from "./ui-utils.ts";
 import { formatTimestamp } from "./admin-formatters.ts";
 import {
   createDefinitionList,
+  inlineCode,
   linkButton,
   node,
   statusBadge,
   type DefinitionListItem,
 } from "./ui-primitives.ts";
+import type { PlaylistSyncState } from "../../src/playlist-sync-state.ts";
 
 export interface BrandLockupOptions {
   brandName?: string;
@@ -274,6 +276,47 @@ export function createRecordCard(options: RecordCardOptions): HTMLElement {
   }
   if (options.actions) card.append(options.actions);
   return card;
+}
+
+export interface PlaylistSyncStatusOptions {
+  state: PlaylistSyncState;
+  appliedRevision?: string | number | null;
+  activeRevision?: string | number | null;
+  ownerDocument?: Document;
+}
+
+const PLAYLIST_SYNC_PRESENTATION: Record<PlaylistSyncState, { label: string; tone: string }> = {
+  in_sync: { label: "In sync", tone: "success" },
+  behind: { label: "Behind active playlist", tone: "warning" },
+  unreported: { label: "Not reported", tone: "neutral" },
+  no_active_revision: { label: "No active revision", tone: "neutral" },
+  disabled: { label: "Disabled", tone: "neutral" },
+};
+
+/** Present playlist delivery state consistently in device details and readiness recipients. */
+export function createPlaylistSyncStatus(options: PlaylistSyncStatusOptions): HTMLElement {
+  const ownerDocument = options.ownerDocument ?? document;
+  const presentation = PLAYLIST_SYNC_PRESENTATION[options.state];
+  const component = node("div", undefined, `playlist-sync-status playlist-sync-status--${options.state}`, ownerDocument);
+  component.setAttribute("role", "group");
+  component.setAttribute("aria-label", "Playlist sync status");
+  component.append(statusBadge(presentation.label, presentation.tone, ownerDocument));
+
+  const hasRevisions = options.appliedRevision !== null && options.appliedRevision !== undefined &&
+    options.activeRevision !== null && options.activeRevision !== undefined;
+  if (hasRevisions && (options.state === "in_sync" || options.state === "behind")) {
+    const applied = String(options.appliedRevision);
+    const active = String(options.activeRevision);
+    const revisions = createDefinitionList([
+      { label: "Applied", value: inlineCode(applied.length > 18 ? `${applied.slice(0, 10)}…${applied.slice(-6)}` : applied, { ownerDocument }) },
+      { label: "Active", value: inlineCode(active.length > 18 ? `${active.slice(0, 10)}…${active.slice(-6)}` : active, { ownerDocument }) },
+    ], { className: "playlist-sync-status__revisions", ownerDocument });
+    revisions.querySelectorAll("code").forEach((code, index) => {
+      code.title = index === 0 ? applied : active;
+    });
+    component.append(revisions);
+  }
+  return component;
 }
 
 /** Add optional collapse/reveal behavior while leaving native navigation links intact. */

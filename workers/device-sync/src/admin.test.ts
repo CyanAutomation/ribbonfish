@@ -78,8 +78,11 @@ class FakeDatabase {
           const target = database.playlistCaptureTarget;
           if (!target) return { results: [] };
           return { results: [{
+            position: target.position ?? 1,
             sha256: target.last_success_at >= values[0] ? target.current_sha256 : target.placeholder_sha256,
             size: target.last_success_at >= values[1] ? target.current_size : target.placeholder_size,
+            captured_at: target.capture_type === "browser-screenshot" && target.last_success_at >= values[2]
+              ? target.last_success_at : null,
           }] };
         }
         if (sql.includes("FROM capture_history")) return { results: database.captureHistory ?? [] };
@@ -534,10 +537,34 @@ test("overview omits device token hashes and reports missing active assets", asy
   assert.equal(body.devices[0].device_id, "pi-office");
   assert.equal(body.devices[0].auth_type, "token");
   assert.equal(body.environment, "development");
+  assert.equal(body.active_playlist.effective_revision, body.active_playlist.revision);
   assert.ok(Number.isSafeInteger(body.generated_at));
   assert.equal(body.capture_targets[0].last_attempt_at, 123);
   assert.deepEqual(body.asset_health.missing, [{ sha256: digest, expected_size: 4, actual_size: null }]);
   assert.deepEqual(body.asset_health.integrity_issues, env.DB.assetIntegrityIssues);
+});
+
+test("overview exposes the effective active revision separately from the stored revision", async () => {
+  const env = testEnvironment();
+  const captureDigest = "b".repeat(64);
+  const capturedAt = Date.now();
+  env.DB.playlistCaptureTarget = {
+    capture_type: "browser-screenshot",
+    position: 1,
+    last_success_at: capturedAt,
+    current_sha256: captureDigest,
+    current_size: 8,
+    placeholder_sha256: "c".repeat(64),
+    placeholder_size: 3,
+  };
+
+  const response = await handleAdminRequest(request("/admin/api/overview"), env);
+  const overview = await response.json();
+  const expected = await sha256Hex(`revision-1\n${digest}:4:\n${captureDigest}:8:${capturedAt}`);
+
+  assert.equal(response.status, 200);
+  assert.equal(overview.active_playlist.revision, "revision-1");
+  assert.equal(overview.active_playlist.effective_revision, expected);
 });
 
 test("overview uses one freshness window for capture summaries and active playlist assets", async () => {

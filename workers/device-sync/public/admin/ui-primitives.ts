@@ -32,6 +32,17 @@ export function statusBadge(text: string, tone = "success", ownerDocument: Docum
   return node("span", text, tone === "success" ? "badge" : "badge badge--" + tone, ownerDocument);
 }
 
+export interface InlineCodeOptions {
+  className?: string;
+  ownerDocument?: Document;
+}
+
+/** Render an opaque identifier as text inside a reusable code element. */
+export function inlineCode(value: string | number, options: InlineCodeOptions = {}): HTMLElement {
+  const ownerDocument = options.ownerDocument ?? document;
+  return node("code", value, ["inline-code", options.className].filter(Boolean).join(" "), ownerDocument);
+}
+
 export type DefinitionListValue = string | number | Node | null | undefined;
 
 export interface DefinitionListItem {
