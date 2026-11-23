@@ -46,9 +46,9 @@ The existing daily forecast still uses its successful-history average, which can
 
 ### Implemented 23 November 2026
 
-- Added a reusable A2UI component builder set and a shared bounded catalog for the fleet summary, capture workbench, and playlist-readiness surface. The readiness assessment action is bound to the current playlist revision.
-- Added an accessible screenshot completeness review control to recent browser screenshots. Labels are stored against the retained capture and job, with reviewer, time, and audit history; the Capture Efficiency view reports the last-30-day label counts separately from JEV observation outcomes.
-- The review controls begin collecting evidence. They do not yet establish a reviewed set for any candidate readiness policy or enable JEV page-readiness recommendations.
+- Added a reusable A2UI component builder set and a shared bounded catalog for the fleet summary, capture workbench, playlist-readiness, and Capture Efficiency evidence summary surfaces. The fleet and Capture Efficiency views share the metric-card builder; the playlist-readiness assessment action is bound to the current playlist revision.
+- Added an accessible screenshot completeness review control to recent browser screenshots. Labels are stored against the retained capture and job, with reviewer, time, and audit history. Capture Efficiency reports label counts and correlates reviewed screenshots to a JEV skip suggestion only when the completed screenshot job matches that suggestion's scheduled due time. Validator-only results, failures, budget deferrals, and unmatched screenshots are excluded.
+- The review controls and correlation summary collect evidence only. Labels are not yet sent to JEV, and they do not establish a reviewed set for any candidate readiness policy or enable JEV page-readiness recommendations.
 
 ### 1. Add queryable duration evidence
 

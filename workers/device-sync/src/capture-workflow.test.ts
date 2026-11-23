@@ -1793,6 +1793,56 @@ test('shadow deferral suggestions are evaluated against the scheduled screenshot
   } finally { sqlite.close(); }
 });
 
+test('overview matches JEV skip suggestions only with a human review of their scheduled screenshot', async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env, messages } = environment(sqlite);
+    const created = await createCapturePlaylist(env);
+    const captureID = created.body.captures[0].capture_id;
+    sqlite.prepare("UPDATE capture_jobs SET status = 'succeeded' WHERE job_id = ?").run(messages.shift().job_id);
+    sqlite.prepare("INSERT INTO active_playlist (singleton, playlist_id, revision) VALUES (1, 'operations', ?)")
+      .run(created.body.revision);
+
+    const now = Date.now();
+    const addReviewedCandidate = (offset, quality, action = 'defer_once', resultKind = 'screenshot', status = 'succeeded', suggestionDueDelta = 0) => {
+      const dueAt = now - offset * 10_000;
+      const jobID = crypto.randomUUID();
+      sqlite.prepare(
+        "INSERT INTO capture_jobs (job_id, capture_id, status, attempts, created_at, finished_at, result_kind, scheduled_due_at) " +
+        "VALUES (?, ?, ?, 1, ?, ?, ?, ?)",
+      ).run(jobID, captureID, status, dueAt, dueAt + 1_000, resultKind, dueAt);
+      if (status === 'succeeded' && resultKind === 'screenshot') {
+        sqlite.prepare("INSERT INTO capture_history (capture_id, job_id, sha256, size, captured_at) VALUES (?, ?, ?, 1, ?)")
+          .run(captureID, jobID, 'a'.repeat(64), dueAt + 1_000);
+        sqlite.prepare(
+          "INSERT INTO capture_quality_reviews (capture_id, job_id, quality, reviewer, reviewed_at) VALUES (?, ?, ?, 'operator@example.com', ?)",
+        ).run(captureID, jobID, quality, dueAt + 2_000);
+      }
+      sqlite.prepare(
+        "INSERT INTO capture_decisions (capture_id, due_at, assessed_at, action, reason, observed_result) VALUES (?, ?, ?, ?, 'test evidence', 'changed')",
+      ).run(captureID, dueAt + suggestionDueDelta, dueAt - 60_000, action);
+    };
+
+    addReviewedCandidate(1, 'complete');
+    addReviewedCandidate(2, 'incomplete');
+    addReviewedCandidate(3, 'uncertain');
+    addReviewedCandidate(4, 'complete', 'capture');
+    addReviewedCandidate(5, 'complete', 'defer_once', 'validator_unchanged');
+    addReviewedCandidate(6, 'incomplete', 'defer_once', 'screenshot', 'failed');
+    addReviewedCandidate(7, 'complete', 'defer_once', 'screenshot', 'succeeded', 1_000);
+
+    const response = await handleAdminRequest(await request('/admin/api/overview'), env);
+    assert.equal(response.status, 200);
+    const metrics = (await response.json()).capture_efficiency.last_30_days;
+    assert.deepEqual(metrics.jev_candidate_quality_reviews, {
+      complete: 1,
+      incomplete: 1,
+      uncertain: 1,
+      total: 3,
+    });
+  } finally { sqlite.close(); }
+});
+
 test('background assessment failures record a fallback and preserve the scheduled capture', async () => {
   const { assessUpcomingCaptures } = await import('./capture-intelligence.ts');
   const sqlite = await freshDatabase();
