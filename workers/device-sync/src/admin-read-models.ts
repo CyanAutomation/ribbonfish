@@ -3,6 +3,7 @@ import { isRecord, isString } from "./validation.ts";
 import { parseMetadata } from "./admin-metadata.ts";
 import { deriveDeviceHealth, type DeviceHealthReport } from "./device-health.ts";
 import { classifyReserveReview } from "./capture-duration.ts";
+import { summarizeCaptureHistory } from "./capture-workbench.ts";
 import {
   calculateDailyCaptureForecast,
   CLOUDFLARE_FREE_BROWSER_DAILY_LIMIT_MS,
@@ -39,6 +40,8 @@ export function summarizeDurationAggregate(row: SqlRow | null | undefined, reser
     measured_p50_ms: measuredP50,
     measured_p90_ms: measuredP90,
     measured_average_ms: finiteNonNegativeOrNull(row?.measured_average_ms),
+    reserve_estimated_p50_ms: finiteNonNegativeOrNull(row?.reserve_estimated_p50_ms),
+    reserve_estimated_p90_ms: finiteNonNegativeOrNull(row?.reserve_estimated_p90_ms),
     reserve_estimated_total_ms: Number(row?.reserve_estimated_total_ms ?? 0),
     configured_reserve_ms: reserveMs,
     reserve_review: classifyReserveReview(measuredCount, measuredCoverage, measuredP90, reserveMs),
@@ -52,7 +55,7 @@ function finiteNonNegativeOrNull(value: unknown): number | null {
 export async function readOverview(env: WorkerEnvironment) {
   const now = Date.now();
   const windowStart = now - 30 * 24 * 60 * 60 * 1000;
-  const [devices, playlists, active, audit, captureTargets, captureRuntimeAverages, integrityIssues, captureJobs, captureHistory, captureDurationSummaries, captureUsage, captureDecisions] = await Promise.all([
+  const [devices, playlists, active, audit, captureTargets, captureRuntimeAverages, integrityIssues, captureJobs, captureChangeHistory, captureHistory, captureDurationSummaries, captureUsage, captureDecisions] = await Promise.all([
     env.DB.prepare(
       "SELECT d.device_id, d.enabled, d.created_at, d.last_seen_at, " +
       "CASE WHEN d.public_key IS NULL THEN 'token' ELSE 'key' END AS auth_type, " +
@@ -114,6 +117,11 @@ export async function readOverview(env: WorkerEnvironment) {
       "FROM capture_jobs WHERE created_at >= ? AND capture_id IN (SELECT capture_id FROM capture_targets WHERE capture_type = 'browser-screenshot')",
     ).bind(windowStart).first(),
     env.DB.prepare(
+      "SELECT capture_id, captured_at, sha256 FROM (" +
+      "SELECT capture_id, captured_at, sha256, ROW_NUMBER() OVER (PARTITION BY capture_id ORDER BY captured_at DESC) AS recent_rank " +
+      "FROM capture_history) WHERE recent_rank <= 10 ORDER BY capture_id, captured_at DESC",
+    ).all(),
+    env.DB.prepare(
       "SELECT " +
       "SUM(CASE WHEN browser_ms_source = 'response_header' THEN 1 ELSE 0 END) AS response_header, " +
       "SUM(CASE WHEN browser_ms_source = 'reserve' THEN 1 ELSE 0 END) AS reserve, " +
@@ -129,6 +137,14 @@ export async function readOverview(env: WorkerEnvironment) {
       "AVG(CASE WHEN sample_rank IN (CAST((measured_count + 1) / 2 AS INTEGER), CAST((measured_count + 2) / 2 AS INTEGER)) THEN browser_ms END) AS measured_p50_ms, " +
       "MAX(CASE WHEN sample_rank = CAST(measured_count * 0.9 + 0.999999 AS INTEGER) THEN browser_ms END) AS measured_p90_ms " +
       "FROM measured_ranked GROUP BY capture_id), " +
+      "reserve_ranked AS (" +
+      "SELECT capture_id, browser_ms, ROW_NUMBER() OVER (PARTITION BY capture_id ORDER BY browser_ms) AS sample_rank, " +
+      "COUNT(*) OVER (PARTITION BY capture_id) AS reserve_count FROM capture_duration_samples " +
+      "WHERE sampled_at >= ? AND browser_ms_source = 'reserve'), " +
+      "reserve_stats AS (SELECT capture_id, " +
+      "AVG(CASE WHEN sample_rank IN (CAST((reserve_count + 1) / 2 AS INTEGER), CAST((reserve_count + 2) / 2 AS INTEGER)) THEN browser_ms END) AS reserve_estimated_p50_ms, " +
+      "MAX(CASE WHEN sample_rank = CAST(reserve_count * 0.9 + 0.999999 AS INTEGER) THEN browser_ms END) AS reserve_estimated_p90_ms " +
+      "FROM reserve_ranked GROUP BY capture_id), " +
       "source_stats AS (SELECT capture_id, COUNT(*) AS total_samples, " +
       "SUM(CASE WHEN browser_ms_source = 'response_header' THEN 1 ELSE 0 END) AS measured_sample_count, " +
       "SUM(CASE WHEN browser_ms_source = 'reserve' THEN 1 ELSE 0 END) AS reserve_estimated_sample_count, " +
@@ -137,9 +153,10 @@ export async function readOverview(env: WorkerEnvironment) {
       "SUM(CASE WHEN attempt > 1 THEN 1 ELSE 0 END) AS retry_attempt_count, " +
       "SUM(CASE WHEN browser_ms_source = 'reserve' THEN browser_ms ELSE 0 END) AS reserve_estimated_total_ms " +
       "FROM capture_duration_samples WHERE sampled_at >= ? GROUP BY capture_id) " +
-      "SELECT source_stats.*, measured_stats.measured_average_ms, measured_stats.measured_p50_ms, measured_stats.measured_p90_ms " +
-      "FROM source_stats LEFT JOIN measured_stats USING (capture_id)",
-    ).bind(windowStart, windowStart).all(),
+      "SELECT source_stats.*, measured_stats.measured_average_ms, measured_stats.measured_p50_ms, measured_stats.measured_p90_ms, " +
+      "reserve_stats.reserve_estimated_p50_ms, reserve_stats.reserve_estimated_p90_ms " +
+      "FROM source_stats LEFT JOIN measured_stats USING (capture_id) LEFT JOIN reserve_stats USING (capture_id)",
+    ).bind(windowStart, windowStart, windowStart).all(),
     env.DB.prepare("SELECT usage_day, browser_ms FROM capture_usage WHERE singleton = 1").first(),
     env.DB.prepare(
       "SELECT COUNT(*) AS assessments, " +
@@ -161,7 +178,8 @@ export async function readOverview(env: WorkerEnvironment) {
   const budgetMs = Number.isSafeInteger(budgetValue) && budgetValue >= 0 ? budgetValue : 600_000;
   const reserveMs = configuredCaptureReserveMs(env);
   const captureTargetSummaries = summarizeOverviewCaptureTargets(
-    captureTargets.results ?? [], captureRuntimeAverages.results ?? [], captureDurationSummaries.results ?? [], reserveMs,
+    captureTargets.results ?? [], captureRuntimeAverages.results ?? [], captureDurationSummaries.results ?? [],
+    captureChangeHistory.results ?? [], reserveMs, now,
   );
   const captureUsageSummary = buildCaptureUsageSummary(captureTargetSummaries.filter((target) => target.capture_type !== "api-dashboard"), captureUsage, budgetMs, now);
 
@@ -206,13 +224,32 @@ async function readMissingActiveAssets(env: WorkerEnvironment, active: SqlRow | 
   return missing.filter((item): item is MissingAsset => item !== null);
 }
 
-function summarizeOverviewCaptureTargets(targets: SqlRow[], runtimes: SqlRow[], durations: SqlRow[], reserveMs: number) {
+function summarizeOverviewCaptureTargets(
+  targets: SqlRow[],
+  runtimes: SqlRow[],
+  durations: SqlRow[],
+  histories: SqlRow[],
+  reserveMs: number,
+  now: number,
+) {
   const runtimeAverageByCapture = new Map(runtimes.map((row) => [row.capture_id, row]));
   const durationSummaryByCapture = new Map(durations.map((row) => [row.capture_id, row]));
+  const historyByCapture = new Map<string, SqlRow[]>();
+  for (const row of histories) {
+    if (typeof row.capture_id !== "string") continue;
+    const history = historyByCapture.get(row.capture_id) ?? [];
+    history.push(row);
+    historyByCapture.set(row.capture_id, history);
+  }
   return targets.map((target) => {
     const source = target.capture_type === "api-dashboard" ? null : new URL(target.url);
     const runtime = runtimeAverageByCapture.get(target.capture_id);
     const duration = durationSummaryByCapture.get(target.capture_id);
+    const history = summarizeCaptureHistory((historyByCapture.get(target.capture_id) ?? []).map((row) => ({
+      captured_at: Number(row.captured_at),
+      sha256: typeof row.sha256 === "string" ? row.sha256 : null,
+    })));
+    const lastSuccessAt = finiteNonNegativeOrNull(target.last_success_at);
     return {
       capture_id: target.capture_id,
       display_url: source ? source.origin + source.pathname : "API dashboard",
@@ -228,6 +265,8 @@ function summarizeOverviewCaptureTargets(targets: SqlRow[], runtimes: SqlRow[], 
       size: target.size,
       last_attempt_at: target.last_attempt_at,
       last_success_at: target.last_success_at,
+      screenshot_age_seconds: lastSuccessAt === null ? null : Math.max(0, Math.floor((now - lastSuccessAt) / 1000)),
+      ...history,
       last_error: target.last_error,
       job_status: target.job_status,
       next_due_at: target.next_due_at,

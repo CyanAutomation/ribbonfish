@@ -100,6 +100,13 @@ function openConsole(initialDashboards = [], {
     const body = fail ? { error: "Refresh failed" } :
       path === "/admin/api/capture-sites" ? { schedule_reviewed: false } :
       path === "/admin/api/playlists" ? { revision: "revision-1", capture_count: 2 } :
+      path === "/admin/api/jev/capture-assessment" ? {
+        suggestion: "skip_once", risk: { score: 0, label: "Low", confidence: 0.9 },
+        skip_eligibility: { eligible: true, due_at: 1_800_000_000_000 },
+      } :
+      path === "/admin/api/playlists/operations/rev-two/readiness" ? playlistReadinessResult() :
+      path === "/admin/api/jev/playlist-readiness-assessment" ? playlistReadinessResult(true) :
+      path === "/admin/api/active-playlist" ? { active_playlist: { playlist_id: "operations", revision: "rev-two" } } :
       path === "/admin/api/overview" ? overview : path === "/admin/api/api-dashboards" ? apiDashboards :
       path === "/admin/api/capture-decisions" ? captureDecisions : path === "/admin/api/intervals" ? {
         capture: { default: 86400, options: [
@@ -129,6 +136,25 @@ function openConsole(initialDashboards = [], {
     },
     setFailure(value) { fail = value; },
     setDashboards(value) { apiDashboards = value; },
+  };
+}
+
+function playlistReadinessResult(withAssessment = false) {
+  return {
+    revision: { playlist_id: "operations", revision: "rev-two" },
+    status: "review",
+    summary: {
+      total_items: 1, total_captures: 1, fresh_captures: 0, missing_assets: 0,
+      stale_captures: 1, disabled_captures: 0, unreviewed_schedules: 0, devices_to_update: 1,
+    },
+    blockers: [], warnings: ["stale_captures"],
+    items: [{ label: "Capture 1", status: "stale" }],
+    devices_to_update: [{ device_id: "pi-office", sync_status: "behind" }],
+    latest_assessment: withAssessment ? {
+      assessed_at: Date.now(), deterministic_status: "review",
+      answers: { assessment: { choice: "review" }, risk: { label: "Moderate" } },
+      observed_outcome: "not_activated",
+    } : null,
   };
 }
 
@@ -462,7 +488,7 @@ test("capture site summaries show each fact once and labelled filters match the 
     assert.match(first.textContent, /Screenshot ready/);
     assert.match(first.textContent, /Last successful capture/);
     assert.match(first.textContent, /1920 × 1080 px/);
-    assert.equal(first.querySelectorAll("details").length, 1, "only the overflow action menu is disclosed in a card");
+    assert.equal(first.querySelectorAll("details").length, 2, "the capture workbench and overflow menu use native disclosures");
     assert.equal(first.querySelectorAll(".capture-target__error").length, 0);
     assert.equal(first.querySelectorAll(".capture-target__url").length, 0);
     assert.equal((first.textContent.match(/1 day/g) ?? []).length, 1);
@@ -560,7 +586,7 @@ test("Confirm schedule reviews an unchanged interval and screenshot actions rema
   }
 });
 
-test("advisory assessment opens in the site dialog and the overflow menu keeps removal behind confirmation", async () => {
+test("A2UI capture workbench assesses and confirms an eligible skip while removal stays in the overflow menu", async () => {
   const { dom, window, requests } = openConsole();
   try {
     await settle();
@@ -569,16 +595,14 @@ test("advisory assessment opens in the site dialog and the overflow menu keeps r
     const overflow = first.querySelector("details.action-disclosure");
     assert.ok(overflow);
     assert.equal(overflow.open, false);
-    overflow.querySelector("summary").click();
-    overflow.querySelector('[data-capture-action="assess"]').click();
+    first.querySelector("[data-a2ui-event='assess_capture']").click();
     await settle();
-    const dialog = window.document.querySelector("#capture-site-dialog");
-    assert.equal(dialog.open, true);
-    assert.ok(dialog.querySelector("#capture-site-assessment-result .jev-result"));
-    assert.equal(first.querySelector(".capture-target__assessment"), null);
+    assert.ok(first.querySelector("[data-a2ui-event='confirm_skip_once']"));
     assert.ok(requests.some(({ path, options }) => path === "/admin/api/jev/capture-assessment" && options.method === "POST"));
+    first.querySelector("[data-a2ui-event='confirm_skip_once']").click();
+    await settle();
+    assert.ok(requests.some(({ path, options }) => path === "/admin/api/captures/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/skip-once" && options.method === "POST"));
 
-    dialog.querySelector("[data-close-capture-site-dialog]").click();
     overflow.querySelector("summary").click();
     const remove = overflow.querySelector("[data-capture-action=remove]");
     assert.equal(remove.textContent, "Remove capture site");
@@ -757,6 +781,45 @@ test("playlist revisions stay grouped and refresh errors can be dismissed", asyn
     assert.match(notice.textContent, /Refresh failed/);
     notice.querySelector("[data-dismiss-feedback]").click();
     assert.equal(notice.hidden, true);
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("playlist readiness renders affected devices, stores a shadow result, and preflights activation", async () => {
+  const { dom, window, overview, requests } = openConsole();
+  try {
+    await settle();
+    overview.playlists = [
+      { playlist_id: "operations", revision: "rev-two", active: false, rotation_interval: "90s", asset_count: 1, created_at: 2 },
+    ];
+    window.document.querySelector("#reload").click();
+    await settle();
+
+    const row = [...window.document.querySelectorAll("#playlists tbody tr")]
+      .find((item) => item.textContent.includes("rev-two"));
+    assert.ok(row);
+    const readiness = row.querySelector(".playlist-readiness-disclosure");
+    readiness.querySelector("summary").click();
+    await settle();
+    assert.match(readiness.textContent, /Fresh captures\s*0 \/ 1/);
+    assert.match(readiness.textContent, /pi-office/);
+    assert.match(readiness.textContent, /stale captures/);
+
+    readiness.querySelector("button").click();
+    await settle();
+    assert.match(readiness.textContent, /JEV shadow assessment/);
+    assert.match(readiness.textContent, /Moderate risk/);
+    assert.ok(requests.some(({ path, options }) => path === "/admin/api/jev/playlist-readiness-assessment" && options.method === "POST"));
+
+    const activate = [...row.querySelectorAll("button")].find((item) => item.textContent === "Activate version");
+    assert.ok(activate);
+    activate.click();
+    await settle();
+    const readinessGets = requests.filter(({ path, options }) => path.endsWith("/readiness") && options.method === undefined);
+    const activation = requests.find(({ path, options }) => path === "/admin/api/active-playlist" && options.method === "PUT");
+    assert.ok(readinessGets.length >= 2, "activation loads a fresh deterministic readiness result");
+    assert.ok(activation, "eligible revisions can still be activated after confirmation");
   } finally {
     dom.window.close();
   }

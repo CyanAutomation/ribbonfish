@@ -29,14 +29,17 @@ import { isPNG, MAX_ASSET_BYTES, storePngAsset } from "./asset-store.ts";
 import { normalizeCaptureSelector, validateCaptureSettings, validateCaptureTargetURL } from "./capture.ts";
 import { CaptureTargetNotAllowedError, dispatchDueCaptures, enqueueCapture } from "./capture-workflow.ts";
 import { AssetDeletionInProgressError, markAssetLiveStatement } from "./asset-registry.ts";
-import { callJevDecision, JEVRequestError } from "./jev.ts";
+import { callJevDecision, JEVRequestError, validateAnswers } from "./jev.ts";
 import { summarizeCaptureDurations } from "./capture-duration.ts";
 import type { CaptureDurationSampleSummaryInput } from "./capture-duration.ts";
 import {
   buildCaptureAssessmentState,
   captureAssessmentQuestions,
+  buildPlaylistReadinessState,
   durationReviewRecommendation,
+  playlistReadinessQuestions,
 } from "./jev-use-cases.ts";
+import { assessPlaylistReadiness } from "./playlist-readiness.ts";
 import type { SqlRow, WorkerEnvironment, WorkerExecutionContext } from "./worker-contracts.ts";
 
 type AdminRequestContext = Partial<Pick<WorkerExecutionContext, "access" | "waitUntil">>;
@@ -172,7 +175,11 @@ async function handleAdminReadRoutes({ request, url, env, actorID }: AdminRouteC
           const { state_json: stateJSON, decision_json: decisionJSON, ...summary } = row;
           const state = parseMetadata(stateJSON);
           const decision = parseMetadata(decisionJSON);
-          return { ...summary, duration_review: durationReviewRecommendation(decision?.answers, state?.capture_duration) };
+          return {
+            ...summary,
+            ...projectCaptureJevAnswers(decision?.answers),
+            duration_review: durationReviewRecommendation(decision?.answers, state?.capture_duration),
+          };
         }));
       });
     case "/admin/api/jev/capture-assessment":
@@ -189,10 +196,41 @@ async function handleAdminReadRoutes({ request, url, env, actorID }: AdminRouteC
           questions: captureAssessmentQuestions,
         });
         return jsonResponse({
-          ...decision,
+          ...projectCaptureJevAnswers(decision.answers),
           duration_review: durationReviewRecommendation(decision.answers, target.duration_summary),
           skip_eligibility: captureSkipEligibility(target, Date.now()),
         });
+      });
+    case "/admin/api/jev/playlist-readiness-assessment":
+      return await withAdminMethod(request, "POST", async () => {
+        const data = await readJSON(request);
+        if (!hasExactKeys(data, ["playlist_id", "revision"]) || !isString(data.playlist_id) || !ID_PATTERN.test(data.playlist_id) ||
+          !isString(data.revision) || !ID_PATTERN.test(data.revision)) {
+          throw new HTTPError(400, "playlist_id and revision are required");
+        }
+        await enforceJevRateLimit(env, actorID);
+        const readiness = await readPlaylistReadiness(data.playlist_id, data.revision, env);
+        const decision = await callJevDecision(env, {
+          state: buildPlaylistReadinessState(readiness),
+          questions: playlistReadinessQuestions,
+        });
+        const now = Date.now();
+        await env.DB.prepare(
+          "INSERT INTO playlist_readiness_assessments " +
+          "(assessment_id, playlist_id, revision, assessed_at, deterministic_status, decision_json, model) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ).bind(randomToken(), data.playlist_id, data.revision, now, readiness.status,
+          JSON.stringify(decision.answers), decision.model).run();
+        await env.DB.prepare("DELETE FROM playlist_readiness_assessments WHERE assessed_at < ?")
+          .bind(now - 30 * 24 * 60 * 60 * 1000).run();
+        const answers = projectPlaylistJevAnswers(decision.answers);
+        readiness.latest_assessment = answers ? {
+          assessed_at: now,
+          deterministic_status: readiness.status,
+          answers,
+          observed_outcome: null,
+        } : null;
+        return jsonResponse(readiness);
       });
     default:
       return null;
@@ -308,6 +346,12 @@ async function handleAdminPlaylistRoutes({ request, url, env, actorID, ctx }: Ad
   if (url.pathname === "/admin/api/playlists") {
     return await withAdminMethod(request, "POST", () => createPlaylist(request, env, actorID, ctx));
   }
+  const readinessMatch = url.pathname.match(/^\/admin\/api\/playlists\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/readiness$/);
+  if (readinessMatch) {
+    return await withAdminMethod(request, "GET", async () => jsonResponse(
+      await readPlaylistReadiness(decodeURIComponent(readinessMatch[1]), decodeURIComponent(readinessMatch[2]), env),
+    ));
+  }
   const revisionMatch = url.pathname.match(/^\/admin\/api\/playlists\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/);
   if (revisionMatch) {
     return await withAdminMethod(request, "GET", () =>
@@ -378,6 +422,20 @@ async function readCaptureAssessmentTarget(captureID: string, env: WorkerEnviron
     current_asset_present: Boolean(image && image.size === target.current_size),
     history: history.results ?? [],
     duration_summary: summarizeCaptureDurations(durationSamples.results ?? [], configuredCaptureReserveMs(env)),
+  };
+}
+
+function projectCaptureJevAnswers(answers: unknown) {
+  if (!validateAnswers(answers, captureAssessmentQuestions)) return { suggestion: null, suggestion_confidence: null, risk: null };
+  const recommendation = answers.recommendation;
+  const risk = answers.risk;
+  const riskLabels = ["Low", "Moderate", "High"];
+  const riskScore = risk.type === "score" && typeof risk.score === "number" ? risk.score : null;
+  const riskLabel = riskScore === null ? "Unknown" : riskLabels[Math.round(riskScore)] ?? "Unknown";
+  return {
+    suggestion: recommendation.type === "choice" ? recommendation.choice : null,
+    suggestion_confidence: recommendation.confidence ?? null,
+    risk: riskScore === null ? null : { score: riskScore, label: riskLabel, confidence: risk.confidence ?? null },
   };
 }
 
@@ -892,6 +950,109 @@ async function removeCaptureSite(captureID: string, env: WorkerEnvironment, acto
   return jsonResponse({ capture_id: captureID, removed: results?.[0]?.meta?.changes === 1 });
 }
 
+const PLAYLIST_CAPTURE_FRESHNESS_MS = 30 * 24 * 60 * 60 * 1000;
+
+async function readPlaylistReadiness(playlistID: string, revision: string, env: WorkerEnvironment, now = Date.now()) {
+  const playlist = await env.DB.prepare(
+    "SELECT playlist_id, revision FROM playlists WHERE playlist_id = ? AND revision = ?",
+  ).bind(playlistID, revision).first();
+  if (!playlist) throw new HTTPError(404, "That playlist revision could not be found.");
+
+  const [assetRows, captureRows, deviceRows, active, latestAssessment] = await Promise.all([
+    env.DB.prepare(
+      "SELECT position, sha256, size FROM playlist_assets WHERE playlist_id = ? AND revision = ? ORDER BY position",
+    ).bind(playlistID, revision).all<SqlRow>(),
+    env.DB.prepare(
+      "SELECT p.position, p.capture_id, t.enabled, t.schedule_reviewed_at, t.last_success_at, " +
+      "t.current_sha256, t.current_size, t.placeholder_sha256, t.placeholder_size " +
+      "FROM playlist_capture_items p LEFT JOIN capture_targets t ON t.capture_id = p.capture_id " +
+      "WHERE p.playlist_id = ? AND p.revision = ? ORDER BY p.position",
+    ).bind(playlistID, revision).all<SqlRow>(),
+    env.DB.prepare(
+      "SELECT d.device_id, d.enabled, h.applied_playlist_id, h.applied_revision, h.health_status " +
+      "FROM devices d LEFT JOIN device_health_latest h ON h.device_id = d.device_id WHERE d.enabled = 1 ORDER BY d.device_id",
+    ).all<SqlRow>(),
+    env.DB.prepare("SELECT playlist_id, revision FROM active_playlist WHERE singleton = 1").first<SqlRow>(),
+    env.DB.prepare(
+      "SELECT assessed_at, deterministic_status, decision_json, model FROM playlist_readiness_assessments " +
+      "WHERE playlist_id = ? AND revision = ? ORDER BY assessed_at DESC LIMIT 1",
+    ).bind(playlistID, revision).first<SqlRow>(),
+  ]);
+
+  const assets = await Promise.all((assetRows.results ?? []).map(async (asset) => ({
+    position: Number(asset.position),
+    present: await assetMatches(env, asset.sha256, asset.size),
+  })));
+  const captures = await Promise.all((captureRows.results ?? []).map(async (capture, index) => {
+    const lastSuccessAt = Number.isSafeInteger(capture.last_success_at) ? capture.last_success_at : null;
+    const fresh = lastSuccessAt !== null && lastSuccessAt >= now - PLAYLIST_CAPTURE_FRESHNESS_MS;
+    const currentSelected = fresh && typeof capture.current_sha256 === "string";
+    const imageHash = currentSelected ? capture.current_sha256 : capture.placeholder_sha256;
+    const imageSize = currentSelected ? capture.current_size : capture.placeholder_size;
+    return {
+      capture_id: typeof capture.capture_id === "string" ? capture.capture_id : `missing-${index}`,
+      fresh,
+      enabled: capture.enabled === 1,
+      schedule_reviewed: capture.schedule_reviewed_at !== null && capture.schedule_reviewed_at !== undefined,
+      asset_present: await assetMatches(env, imageHash, imageSize),
+    };
+  }));
+  const readiness = assessPlaylistReadiness({
+    revision: { playlist_id: playlistID, revision },
+    assets,
+    captures,
+    devices: (deviceRows.results ?? []).map((device) => ({
+      device_id: String(device.device_id ?? ""),
+      enabled: device.enabled === 1,
+      applied_playlist_id: typeof device.applied_playlist_id === "string" ? device.applied_playlist_id : null,
+      applied_revision: typeof device.applied_revision === "string" || typeof device.applied_revision === "number"
+        ? device.applied_revision : null,
+    })),
+  });
+  const latestAnswers = parseMetadata(latestAssessment?.decision_json);
+  const projectedAssessment = projectPlaylistJevAnswers(latestAnswers);
+  let observedOutcome: string | null = null;
+  if (latestAssessment) {
+    const activeRevision = active?.playlist_id === playlistID && String(active.revision) === revision;
+    observedOutcome = !activeRevision ? "not_activated"
+      : readiness.devices_to_update.length === 0 ? (deviceRows.results?.length ? "all_devices_applied" : "no_enabled_devices")
+        : "awaiting_device_sync";
+  }
+
+  return {
+    ...readiness,
+    latest_assessment: latestAssessment && projectedAssessment ? {
+      assessed_at: latestAssessment.assessed_at,
+      deterministic_status: latestAssessment.deterministic_status,
+      answers: projectedAssessment,
+      observed_outcome: observedOutcome,
+    } : null,
+  };
+}
+
+async function assetMatches(env: WorkerEnvironment, sha256: unknown, expectedSize: unknown) {
+  if (typeof sha256 !== "string" || !/^[a-f0-9]{64}$/.test(sha256) ||
+    typeof expectedSize !== "number" || !Number.isSafeInteger(expectedSize) || expectedSize <= 0) return false;
+  const object = await env.ASSETS.head(`assets/${sha256}`);
+  return Boolean(object && object.size === expectedSize);
+}
+
+function projectPlaylistJevAnswers(answers: unknown) {
+  if (!validateAnswers(answers, playlistReadinessQuestions)) return null;
+  const assessment = answers.assessment;
+  const risk = answers.risk;
+  const labels = ["Low", "Moderate", "High"];
+  const riskScore = risk.type === "score" && typeof risk.score === "number" ? risk.score : null;
+  return {
+    assessment: assessment.type === "choice" ? { choice: assessment.choice, confidence: assessment.confidence ?? null } : null,
+    risk: riskScore === null ? null : {
+      score: riskScore,
+      label: labels[Math.round(riskScore)] ?? "Unknown",
+      confidence: risk.confidence ?? null,
+    },
+  };
+}
+
 async function readPlaylistRevision(playlistID: string, revision: string, env: WorkerEnvironment) {
   const playlist = await env.DB.prepare(
     "SELECT playlist_id, revision, rotation_interval FROM playlists WHERE playlist_id = ? AND revision = ?",
@@ -1097,6 +1258,10 @@ async function activatePlaylist(request: Request, env: WorkerEnvironment, actorI
     "SELECT playlist_id, revision FROM playlists WHERE playlist_id = ? AND revision = ?",
   ).bind(data.playlist_id, data.revision).first();
   if (!playlist) throw new HTTPError(404, "playlist revision not found");
+  const readiness = await readPlaylistReadiness(data.playlist_id, data.revision, env);
+  if (readiness.blockers.length) {
+    throw new HTTPError(409, "This revision has missing assets or disabled capture items. Review readiness before activation.");
+  }
 
   const previous = await env.DB.prepare(
     "SELECT playlist_id, revision FROM active_playlist WHERE singleton = 1",

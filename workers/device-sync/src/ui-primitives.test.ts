@@ -6,6 +6,7 @@ import {
   createDefinitionList,
   createDisclosure,
   createFormField,
+  createMetricGrid,
   createSettingsGroup,
   metricCard,
   scaleMeter,
@@ -131,6 +132,22 @@ test("metric cards render labels and values as text in a reusable semantic compo
   assert.equal(requiredMatch<HTMLElement>(card, ".metric-card__label").textContent, "<img src=x onerror=alert(1)>");
   assert.equal(requiredMatch<HTMLElement>(card, ".metric-card__value").textContent, "10m 0s");
   assert.equal(card.querySelector("img"), null, "label text is not parsed as markup");
+  dom.window.close();
+});
+
+test("metric grids compose accessible reusable metric cards with safe text", () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  const grid = createMetricGrid([
+    { label: "Missing assets", value: 2, detail: "Fix before activation" },
+    { label: "Fresh captures", value: "4 / 5" },
+  ], { className: "playlist-readiness__metrics", ownerDocument: dom.window.document });
+  dom.window.document.body.append(grid);
+
+  assert.equal(grid.classList.contains("metric-grid"), true);
+  assert.equal(grid.classList.contains("playlist-readiness__metrics"), true);
+  assert.deepEqual([...grid.querySelectorAll(".metric-card__label")].map((item) => item.textContent), ["Missing assets", "Fresh captures"]);
+  assert.deepEqual([...grid.querySelectorAll(".metric-card__value")].map((item) => item.textContent), ["2", "4 / 5"]);
+  assert.equal(grid.querySelectorAll(".metric-card").length, 2);
   dom.window.close();
 });
 

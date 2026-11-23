@@ -38,6 +38,51 @@ export const captureAssessmentQuestions = Object.freeze({
   },
 });
 
+export const playlistReadinessQuestions = Object.freeze({
+  assessment: {
+    type: "choice",
+    instructions: "Assess whether the supplied deterministic playlist readiness summary needs operator review. Never recommend activation or override a deterministic blocker. Use only the supplied item, missing asset, stale capture, disabled capture, unreviewed schedule, and affected device counts.",
+    criteria: {
+      ready: "No deterministic blocker or warning is present",
+      review: "Deterministic checks have warnings that an operator should review",
+      blocked: "Deterministic checks report a blocker; do not recommend activation",
+    },
+  },
+  risk: {
+    type: "score",
+    instructions: "Rate the operational risk indicated by the deterministic readiness counts. Missing assets and disabled capture items are high risk; stale captures or unreviewed schedules require review; complete verified revisions with no warnings are low risk.",
+    criteria: ["Low", "Moderate", "High"],
+  },
+});
+
+export function buildPlaylistReadinessState(readiness: {
+  status: string;
+  summary: {
+    total_items: number;
+    total_captures: number;
+    fresh_captures: number;
+    missing_assets: number;
+    stale_captures: number;
+    disabled_captures: number;
+    unreviewed_schedules: number;
+    devices_to_update: number;
+  };
+}) {
+  const { summary } = readiness;
+  return JSON.stringify({
+    deterministic_status: readiness.status === "ready" || readiness.status === "review" || readiness.status === "blocked"
+      ? readiness.status : "review",
+    total_items: summary.total_items,
+    total_captures: summary.total_captures,
+    fresh_captures: summary.fresh_captures,
+    missing_assets: summary.missing_assets,
+    stale_captures: summary.stale_captures,
+    disabled_captures: summary.disabled_captures,
+    unreviewed_schedules: summary.unreviewed_schedules,
+    devices_to_update: summary.devices_to_update,
+  });
+}
+
 export function buildCaptureAssessmentState(target: CaptureAssessmentTarget, now = Date.now()) {
   const history = target.history ?? [];
   const lastSuccess = finiteTimestamp(target.last_success_at);
@@ -124,6 +169,8 @@ function normalizeDurationTimings(summary: CaptureDurationSummary | undefined) {
     measured_p50_ms: safeDuration(summary?.measured_p50_ms),
     measured_p90_ms: safeDuration(summary?.measured_p90_ms),
     measured_average_ms: safeDuration(summary?.measured_average_ms),
+    reserve_estimated_p50_ms: safeDuration(summary?.reserve_estimated_p50_ms),
+    reserve_estimated_p90_ms: safeDuration(summary?.reserve_estimated_p90_ms),
   };
 }
 

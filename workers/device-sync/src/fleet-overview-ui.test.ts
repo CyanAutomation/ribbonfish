@@ -28,15 +28,33 @@ test("fleet overview is represented as a single A2UI v1.0 surface with bound dat
   assert.deepEqual(Object.keys(message).sort(), ["createSurface", "version"]);
   assert.equal(message.version, "1.0");
   assert.equal(message.createSurface.surfaceId, "fleetOverview");
-  assert.equal(message.createSurface.catalogId, "https://ribbonfish.dev/a2ui/catalogs/fleet-overview-v1.json");
+  assert.equal(message.createSurface.catalogId, "https://ribbonfish.dev/a2ui/catalogs/management-v2.json");
   assert.equal(message.createSurface.sendDataModel, false);
   assert.deepEqual(message.createSurface.dataModel.metrics, [
     { label: "Sites needing attention", value: "2", detail: "Review screenshot sites" },
     { label: "Devices offline or behind", value: "2", detail: "Check device health and playlist sync" },
     { label: "Pending approvals", value: "2", detail: "Verify device fingerprints" },
     { label: "Browser Run used today", value: "1m 30s / 9m 0s", detail: "Used / configured daily budget" },
+    {
+      label: "Device health",
+      value: "3 enabled devices",
+      detail: "Health by reported state",
+      rows: [
+        { text: "Healthy 2" }, { text: "Degraded 0" }, { text: "Stale 0" }, { text: "Offline 1" },
+        { text: "Starting 0" }, { text: "Stopping 0" }, { text: "Unknown 0" }, { text: "Disabled 1" },
+      ],
+    },
+    {
+      label: "Playlist sync",
+      value: "Revision delivery status",
+      detail: "Devices receive active revision on next sync",
+      rows: [
+        { text: "In sync 1" }, { text: "Behind 1" }, { text: "Not reported 1" },
+        { text: "No active revision 0" }, { text: "Disabled 1" },
+      ],
+    },
   ]);
-  assert.equal(message.createSurface.components.filter((component) => component.component === "Card").length, 4);
+  assert.equal(message.createSurface.components.filter((component) => component.component === "Card").length, 6);
   assert.equal(message.createSurface.components.filter((component) => component.component === "Button").length, 0);
 });
 
@@ -54,6 +72,7 @@ test("A2UI fleet surface renders the existing live metrics and fixed internal li
   const metrics = [...container.querySelectorAll<HTMLAnchorElement>("a.overview-metric")];
   assert.deepEqual(metrics.map((metric) => metric.getAttribute("href")), [
     "#sites-section", "#device-section", "#pending-enrollments-title", "#capture-efficiency-section",
+    "#device-section", "#device-section",
   ]);
   assert.match(metrics[0].textContent ?? "", /Sites needing attention\s*1/);
   assert.match(metrics[1].textContent ?? "", /Devices offline or behind\s*1/);
@@ -188,5 +207,32 @@ test("fleet overview does not count devices as behind without an active revision
   });
 
   assert.match(container.textContent ?? "", /Devices offline or behind\s*0/);
+  dom.window.close();
+});
+
+test("fleet overview adds deterministic health and playlist-sync groups", () => {
+  const dom = new JSDOM("<div id='metrics'></div>");
+  const container = dom.window.document.querySelector<HTMLElement>("#metrics");
+  assert.ok(container);
+
+  renderFleetOverviewA2ui(container, {
+    active_playlist: { playlist_id: "office", revision: "rev-2" },
+    devices: [
+      { enabled: 1, health: { status: "healthy", applied_playlist_id: "office", applied_revision: "rev-2" } },
+      { enabled: 1, health: { status: "offline", applied_playlist_id: "office", applied_revision: "rev-1" } },
+      { enabled: 1, health: { status: "unknown", applied_playlist_id: null, applied_revision: null } },
+      { enabled: 0, health: { status: "offline" } },
+    ],
+  });
+
+  assert.match(container.textContent ?? "", /Device health/);
+  assert.match(container.textContent ?? "", /Healthy\s*1/);
+  assert.match(container.textContent ?? "", /Offline\s*1/);
+  assert.match(container.textContent ?? "", /Unknown\s*1/);
+  assert.match(container.textContent ?? "", /Playlist sync/);
+  assert.match(container.textContent ?? "", /In sync\s*1/);
+  assert.match(container.textContent ?? "", /Behind\s*1/);
+  assert.match(container.textContent ?? "", /Not reported\s*1/);
+  assert.equal(container.querySelectorAll("a[href^='#']").length >= 2, true);
   dom.window.close();
 });

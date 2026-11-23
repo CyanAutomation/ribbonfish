@@ -28,6 +28,10 @@ class FakeDatabase {
     this.activePlaylist = { playlist_id: "welcome", revision: "revision-1" };
     this.auditEvents = [];
     this.assetIntegrityIssues = [];
+    this.playlistReadinessCaptures = [];
+    this.readinessDevices = [];
+    this.playlistReadinessAssessments = [];
+    this.playlistReadinessPlaylistReads = 0;
     this.mutationCalls = 0;
   }
 
@@ -39,10 +43,14 @@ class FakeDatabase {
       bind(...boundValues) { values = boundValues; return this; },
       get values() { return values; },
       async first() {
+        if (sql.includes("FROM playlist_readiness_assessments")) return database.playlistReadinessAssessments.at(-1) ?? null;
         if (sql.includes("FROM capture_usage")) return database.captureUsage ?? null;
         if (sql.includes("FROM capture_targets")) return database.captureTarget ?? null;
         if (sql.includes("FROM active_playlist")) return database.activePlaylist;
         if (sql.includes("FROM playlists WHERE playlist_id")) {
+          if (sql.startsWith("SELECT playlist_id, revision FROM playlists WHERE playlist_id = ? AND revision = ?")) {
+            database.playlistReadinessPlaylistReads++;
+          }
           const row = database.playlists.get(values[0] + ":" + values[1]);
           return row ? {
             playlist_id: row.playlist_id,
@@ -59,6 +67,9 @@ class FakeDatabase {
         return null;
       },
       async all() {
+        if (sql.includes("FROM capture_decisions d")) return { results: database.captureDecisions ?? [] };
+        if (sql.includes("FROM playlist_capture_items p LEFT JOIN capture_targets")) return { results: database.playlistReadinessCaptures };
+        if (sql.includes("SELECT d.device_id, d.enabled, h.applied_playlist_id")) return { results: database.readinessDevices };
         if (sql.includes("WITH measured_ranked AS")) return { results: database.captureDurationAggregates ?? [] };
         if (sql.includes("FROM capture_duration_samples")) return { results: database.captureDurationSamples ?? [] };
         if (sql.includes("AVG(browser_ms)")) return { results: database.captureRuntimeAverages ?? [] };
@@ -126,7 +137,10 @@ class FakeDatabase {
   }
 
   async apply(sql, values, previousChanges = 1) {
-    if (sql.startsWith("INSERT INTO playlists")) {
+    if (sql.startsWith("INSERT INTO playlist_readiness_assessments")) {
+      const [assessment_id, playlist_id, revision, assessed_at, deterministic_status, decision_json, model] = values;
+      this.playlistReadinessAssessments.push({ assessment_id, playlist_id, revision, assessed_at, deterministic_status, decision_json, model });
+    } else if (sql.startsWith("INSERT INTO playlists")) {
       const [playlist_id, revision, rotation_interval, created_at] = values;
       this.playlists.set(playlist_id + ":" + revision, {
         playlist_id, revision, rotation_interval, created_at, assets: [],
@@ -296,6 +310,20 @@ test("JEV screenshot assessments stop before provider calls when the per-admin l
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("playlist readiness assessments stop before readiness reads when the per-admin limit is reached", async () => {
+  const env = testEnvironment();
+  env.ENROLLMENT_RATE_LIMITER.limit = async () => ({ success: false });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => assert.fail("rate-limited requests must not call JEV");
+  try {
+    const response = await handleAdminRequest(request("/admin/api/jev/playlist-readiness-assessment", {
+      method: "POST", body: { playlist_id: "missing", revision: "revision-1" },
+    }), env);
+    assert.equal(response.status, 429);
+    assert.equal(env.DB.playlistReadinessPlaylistReads, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("JEV screenshot skip recommendations are advisory and cause no capture writes or queue sends", async () => {
   const env = testEnvironment();
   env.OPENROUTER_API_KEY = "test-secret";
@@ -332,7 +360,10 @@ test("JEV screenshot skip recommendations are advisory and cause no capture writ
     }), env);
     assert.equal(response.status, 200);
     const result = await response.json();
-    assert.equal(result.answers.recommendation.choice, "skip_once");
+    assert.equal(result.suggestion, "skip_once");
+    assert.equal(result.risk.label, "Low");
+    assert.equal(result.answers, undefined);
+    assert.equal(result.model, undefined);
     assert.equal(result.duration_review, "insufficient_data");
     assert.equal(result.skip_eligibility.eligible, false);
     assert.match(result.skip_eligibility.reason, /successful screenshot/i);
@@ -596,6 +627,8 @@ test("overview returns active site runtime samples and both daily usage limits",
     measured_average_ms: 10_500,
     measured_p50_ms: 10_500,
     measured_p90_ms: 18_000,
+    reserve_estimated_p50_ms: 60_000,
+    reserve_estimated_p90_ms: 60_000,
     reserve_estimated_total_ms: 180_000,
   }];
 
@@ -615,10 +648,77 @@ test("overview returns active site runtime samples and both daily usage limits",
   assert.equal(body.capture_targets[0].average_browser_ms, 2100);
   assert.equal(body.capture_targets[0].browser_ms_samples, 4);
   assert.equal(body.capture_targets[0].duration_summary.measured_p90_ms, 18_000);
+  assert.equal(body.capture_targets[0].duration_summary.reserve_estimated_p90_ms, 60_000);
   assert.equal(body.capture_targets[0].duration_summary.failed_attempt_count, 2);
   assert.equal(body.capture_targets[0].duration_summary.retry_attempt_count, 1);
   assert.equal(body.capture_targets[0].duration_summary.capture_attempt_failure_rate, 2 / 25);
   assert.equal(body.capture_targets[0].duration_summary.reserve_review, "possible_overestimate");
+});
+
+test("overview exposes bounded screenshot change history and a deterministic screenshot age", async () => {
+  const env = testEnvironment();
+  const now = 20_000;
+  env.DB.captureTargets = [{
+    capture_id: captureID,
+    url: "https://status.example/",
+    name: "Status",
+    capture_interval_seconds: 3_600,
+    viewport_width: 1920,
+    viewport_height: 1080,
+    last_success_at: 10_000,
+    next_due_at: 30_000,
+    schedule_reviewed_at: 10_000,
+    active_in_playlist: 1,
+  }];
+  env.DB.captureHistory = [
+    { capture_id: captureID, captured_at: 10_000, sha256: "c".repeat(64) },
+    { capture_id: captureID, captured_at: 9_000, sha256: "b".repeat(64) },
+    { capture_id: captureID, captured_at: 8_000, sha256: "b".repeat(64) },
+  ];
+  const originalNow = Date.now;
+  Date.now = () => now;
+  try {
+    const response = await handleAdminRequest(request("/admin/api/overview"), env);
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.capture_targets[0].screenshot_age_seconds, 10);
+    assert.deepEqual(body.capture_targets[0].recent_history, [
+      { captured_at: 10_000, changed: true },
+      { captured_at: 9_000, changed: false },
+      { captured_at: 8_000, changed: null },
+    ]);
+    assert.equal(body.capture_targets[0].recent_change_count, 1);
+    assert.doesNotMatch(JSON.stringify(body.capture_targets[0]), /sha256/);
+  } finally { Date.now = originalNow; }
+});
+
+test("latest capture decisions expose only validated JEV suggestion and risk fields", async () => {
+  const env = testEnvironment();
+  env.DB.captureDecisions = [{
+    capture_id: captureID,
+    due_at: 2_000,
+    assessed_at: 1_900,
+    action: "capture",
+    reason: "Keep the schedule when evidence is insufficient.",
+    observed_at: 2_200,
+    observed_result: "changed",
+    observed_delay_ms: 200,
+    state_json: JSON.stringify({ capture_duration: { reserve_review: "possible_overestimate" } }),
+    decision_json: JSON.stringify({ answers: {
+      duration_review: { type: "choice", choice: "review_overestimate", probabilities: { keep_current: 0.05, review_overestimate: 0.9, review_underestimate: 0.05 }, confidence: 0.9 },
+      recommendation: { type: "choice", choice: "skip_once", probabilities: { capture_now: 0.09, skip_once: 0.91 }, confidence: 0.91 },
+      risk: { type: "score", score: 0, legend: { 0: "Low", 1: "Moderate", 2: "High" }, probabilities: { 0: 0.89, 1: 0.1, 2: 0.01 }, confidence: 0.89 },
+    }, provider_debug: "must not be returned" }),
+  }];
+
+  const response = await handleAdminRequest(request("/admin/api/capture-decisions"), env);
+  const [decision] = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(decision.suggestion, "skip_once");
+  assert.deepEqual(decision.risk, { score: 0, label: "Low", confidence: 0.89 });
+  assert.equal(decision.observed_result, "changed");
+  assert.equal(decision.duration_review, "review_overestimate");
+  assert.doesNotMatch(JSON.stringify(decision), /provider_debug|state_json|decision_json/);
 });
 
 test("capture forecast API returns a queryable daily projection and account-wide quota metadata", async () => {
@@ -851,6 +951,102 @@ test("playlist revisions are staged, then explicitly activated", async () => {
   assert.equal(activated.status, 200);
   assert.deepEqual(env.DB.activePlaylist, { playlist_id: "operations", revision });
   assert.equal(env.DB.auditEvents.some((event) => event.event_type === "playlist.activated"), true);
+});
+
+test("playlist readiness reports stale capture items, missing assets, and device recipients", async () => {
+  const env = testEnvironment();
+  const now = 40 * 24 * 60 * 60 * 1000;
+  const stored = "b".repeat(64);
+  const placeholder = "c".repeat(64);
+  env.DB.playlists.set("operations:rev-2", {
+    playlist_id: "operations", revision: "rev-2", rotation_interval: rotation, created_at: now,
+    assets: [{ sha256: digest, size: 4 }, { sha256: stored, size: 5 }],
+  });
+  env.objects.set(`assets/${digest}`, new Uint8Array([1, 2, 3, 4]));
+  env.objects.set(`assets/${placeholder}`, new Uint8Array([5, 6, 7]));
+  env.DB.playlistReadinessCaptures = [{
+    position: 2,
+    capture_id: captureID,
+    enabled: 1,
+    schedule_reviewed_at: now - 31 * 24 * 60 * 60 * 1000,
+    last_success_at: now - 31 * 24 * 60 * 60 * 1000,
+    current_sha256: "d".repeat(64),
+    current_size: 4,
+    placeholder_sha256: placeholder,
+    placeholder_size: 3,
+  }];
+  env.DB.readinessDevices = [
+    { device_id: "pi-current", enabled: 1, applied_playlist_id: "operations", applied_revision: "rev-2", health_status: "healthy" },
+    { device_id: "pi-old", enabled: 1, applied_playlist_id: "operations", applied_revision: "rev-1", health_status: "offline" },
+  ];
+  const originalNow = Date.now;
+  Date.now = () => now;
+  try {
+    const response = await handleAdminRequest(request("/admin/api/playlists/operations/rev-2/readiness"), env);
+    const readiness = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(readiness.status, "blocked");
+    assert.equal(readiness.summary.missing_assets, 1);
+    assert.equal(readiness.summary.stale_captures, 1);
+    assert.equal(readiness.summary.devices_to_update, 1);
+    assert.deepEqual(readiness.devices_to_update.map(({ device_id }) => device_id), ["pi-old"]);
+    assert.deepEqual(readiness.items.map(({ label, status }) => [label, status]), [
+      ["Image 1", "ready"], ["Image 2", "missing"], ["Capture 1", "stale"],
+    ]);
+  } finally { Date.now = originalNow; }
+});
+
+test("playlist readiness assessment stores typed JEV output without sending identifiers", async () => {
+  const env = testEnvironment();
+  env.OPENROUTER_API_KEY = "test-secret";
+  env.DB.playlists.set("operations:rev-2", {
+    playlist_id: "operations", revision: "rev-2", rotation_interval: rotation, created_at: 1, assets: [],
+  });
+  env.DB.readinessDevices = [{ device_id: "pi-sensitive", enabled: 1, applied_playlist_id: null, applied_revision: null }];
+  let sentState: unknown;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(String(options?.body));
+    sentState = body.state;
+    return Response.json({ model: "typesafe/jev-test", answers: {
+      assessment: { type: "choice", choice: "ready", probabilities: { ready: 0.9, review: 0.05, blocked: 0.05 }, confidence: 0.9 },
+      risk: { type: "score", score: 0, legend: { 0: "Low", 1: "Moderate", 2: "High" }, probabilities: { 0: 0.9, 1: 0.05, 2: 0.05 }, confidence: 0.9 },
+    } });
+  };
+  try {
+    const response = await handleAdminRequest(request("/admin/api/jev/playlist-readiness-assessment", {
+      method: "POST", body: { playlist_id: "operations", revision: "rev-2" },
+    }), env);
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.latest_assessment.answers.assessment.choice, "ready");
+    assert.equal(body.latest_assessment.observed_outcome, null);
+    assert.deepEqual(env.DB.activePlaylist, { playlist_id: "welcome", revision: "revision-1" });
+    assert.equal(env.DB.playlistReadinessAssessments.length, 1);
+    assert.equal(env.DB.playlistReadinessPlaylistReads, 1);
+    assert.doesNotMatch(JSON.stringify(sentState), /pi-sensitive|operations|rev-2/);
+    assert.doesNotMatch(JSON.stringify(body.latest_assessment), /private_context|provider_debug/);
+
+    const refreshedResponse = await handleAdminRequest(request("/admin/api/playlists/operations/rev-2/readiness"), env);
+    const refreshed = await refreshedResponse.json();
+    assert.equal(refreshed.latest_assessment.observed_outcome, "not_activated");
+    assert.equal(env.DB.playlistReadinessPlaylistReads, 2);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("playlist activation rechecks deterministic missing asset blockers", async () => {
+  const env = testEnvironment();
+  env.DB.playlists.set("operations:rev-2", {
+    playlist_id: "operations", revision: "rev-2", rotation_interval: rotation, created_at: 1,
+    assets: [{ sha256: "e".repeat(64), size: 10 }],
+  });
+  const response = await handleAdminRequest(request("/admin/api/active-playlist", {
+    method: "PUT", body: { playlist_id: "operations", revision: "rev-2" },
+  }), env);
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { error: "This revision has missing assets or disabled capture items. Review readiness before activation." });
+  assert.deepEqual(env.DB.activePlaylist, { playlist_id: "welcome", revision: "revision-1" });
+  assert.equal(env.DB.auditEvents.some((event) => event.event_type === "playlist.activated"), false);
 });
 
 test("playlist API rejects rotation intervals outside the published set", async () => {

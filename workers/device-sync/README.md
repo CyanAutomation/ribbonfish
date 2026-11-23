@@ -85,26 +85,39 @@ or provide a useful next step.
 
 The fleet summary renders a deterministic, read-only A2UI v1.0 surface using
 `@a2ui/web_core` and a small native DOM adapter. It is built from the existing
-overview response; its catalog allows only `Card`, `Column`, and `Text`, with no
-actions or functions. No model provider is configured for the fleet UI. JEV
-decisions use a separate server-side adapter. The optional per-target screenshot
-assessment uses bounded operational metadata and recent
-screenshot hash-change counts. A pre-due shadow assessment also receives
-measured Browser Run duration summaries, reserve coverage, attempt failures, and
-retry counts. It validates JEV's answer types, choices, probabilities,
-confidence, and score ranges, then renders the skip recommendation, a
-plain-language risk level, and the server-gated reserve-review cue. JEV cannot change capture settings or
-scheduling. It can suggest an operator review of the accounting reserve only
-when at least 20 measured samples, 80% measured-header coverage, measured p90
-at most half the reserve, and JEV confidence of at least 0.8 support the cue.
-An admin may confirm a single skip for an exact upcoming due time; that confirmation
-expires five minutes after the due time, is audited, and the following capture
-remains scheduled. The skip is rejected for missing or stale screenshots,
-recent failures, or active jobs. Screenshot pixels, raw error details, device
-identifiers, playlist identifiers, and URL query or fragment values are not
-sent to JEV.
-Duration metrics are usage evidence, not proof that visible page content was
-complete. The JEV reserve suggestion never applies a new value.
+overview response; its surface allows only `Card`, `Column`, and `Text`, with no
+actions or functions. Counts for device health and playlist sync are
+deterministic and link to the device management section.
+
+Each screenshot site also has a capture intelligence workbench. It presents
+next due time, screenshot age, up to ten recent change markers, measured and
+reserve-estimated Browser Run p50/p90, failures, retries, the latest scheduled
+JEV suggestion, risk, reason, and observed result. The workbench uses a separate
+fixed A2UI template and allowlisted `Button` actions: assess current signals or
+confirm an eligible one-time skip. A manual assessment is advisory and does
+not alter the schedule. Skip confirmation uses the server's current eligibility
+and due-time checks, requires operator confirmation, is audited, and leaves the
+following capture scheduled. JEV cannot change capture settings or scheduling.
+
+JEV receives bounded, sanitized operational summaries through a separate
+server-side adapter. It does not receive screenshot pixels, device identifiers,
+playlist identifiers, raw error details, or URL query or fragment values. The
+capture assessment validates answer types, choices, probabilities, confidence,
+and score ranges. JEV can suggest an operator review of the accounting reserve
+only when at least 20 measured samples, 80% measured-header coverage, measured
+p90 at most half the reserve, and JEV confidence of at least 0.8 support the
+cue. Duration metrics are usage evidence, not proof that visible page content
+was complete. The JEV reserve suggestion never applies a new value.
+
+Playlist versions include a deterministic readiness panel before activation.
+It reports missing assets, capture freshness, disabled capture items,
+unreviewed schedules, and enabled devices that would receive the revision. An
+on-demand typed JEV readiness assessment is recorded as shadow evidence and
+compared with later activation and device-sync outcomes; it cannot approve or
+block activation. The Worker checks readiness again during activation and
+rejects deterministic blockers. Apply migration
+`0021_playlist_readiness_assessments.sql` along with the capture migrations
+below before deploying the management Worker and admin assets.
 
 Configure `OPENROUTER_API_KEY` as a secret on the management Worker before using
 JEV. The key is read only by the Worker. Requests use the pinned

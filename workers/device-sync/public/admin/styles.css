@@ -260,6 +260,7 @@ main > section[id], main > details[id], main > section[id] > section[id] { scrol
 .badge { display: inline-flex; align-items: center; padding: .2rem .5rem; border-radius: var(--radius-pill); background: var(--color-success-bg); color: var(--color-success); font-size: var(--font-size-caption); font-weight: 700; white-space: nowrap; }
 .badge--neutral { background: var(--color-neutral-bg); color: var(--color-muted); }
 .badge--warning { background: var(--color-warning-bg); color: var(--color-warning); }
+.badge--error { background: var(--color-danger-bg); color: var(--color-danger); }
 .device-health-details { min-width: 12rem; }
 .device-health-details summary { cursor: pointer; color: var(--color-brand); font-weight: 600; }
 .device-health-details__content { max-width: 34rem; padding: 0.5rem 0; color: var(--color-ink); white-space: normal; }
@@ -470,8 +471,30 @@ label { display: grid; gap: var(--space-1); color: var(--color-text-label); font
 .capture-issues h3 { margin-bottom: var(--space-2); }
 .capture-issues ul { margin: 0; padding-left: 1.25rem; }
 .metric-card { display: grid; gap: var(--space-1); padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface); }
+.metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: var(--space-3); }
 .metric-card__label, .metric-card__detail { color: var(--color-muted); font-size: var(--font-size-small); }
 .metric-card__value { color: var(--color-heading); font-size: var(--font-size-emphasis); }
+.playlist-readiness { display: grid; gap: var(--space-3); min-width: 0; }
+.playlist-readiness__heading { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.playlist-readiness__heading h3, .playlist-readiness__heading p { margin: 0; }
+.playlist-readiness__heading p { color: var(--color-muted); font-size: var(--font-size-small); }
+.playlist-readiness__section, .playlist-readiness__assessment { display: grid; gap: var(--space-2); }
+.playlist-readiness__section h4, .playlist-readiness__assessment h4 { margin: 0; color: var(--color-heading); }
+.playlist-readiness__items, .playlist-readiness__devices { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.playlist-readiness__items li, .playlist-readiness__devices li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border-subtle); border-radius: var(--radius-control); }
+.playlist-readiness__devices code { overflow-wrap: anywhere; }
+.playlist-readiness__assessment { padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface-soft); }
+.playlist-readiness__assessment > p { margin: 0; }
+.playlist-readiness-disclosure { margin-block: var(--space-2); }
+.playlist-readiness-disclosure > summary, .capture-workbench-disclosure > summary { color: var(--color-brand); font-size: var(--font-size-small); font-weight: 650; cursor: pointer; }
+.playlist-readiness-disclosure[open] > summary, .capture-workbench-disclosure[open] > summary { margin-bottom: var(--space-3); }
+.playlist-readiness-disclosure__content, .capture-workbench-disclosure__content { max-width: 72rem; }
+.capture-workbench-disclosure { margin-top: var(--space-3); }
+.capture-workbench-host[aria-busy="true"] { opacity: .7; }
+.capture-workbench-a2ui { display: grid; gap: var(--space-3); }
+.capture-workbench-a2ui__content { display: grid; gap: var(--space-3); }
+.capture-workbench-a2ui__card { min-width: 0; padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface); }
+.capture-workbench-a2ui__card p { margin: var(--space-2) 0 0; overflow-wrap: anywhere; }
 .scale-meter { display: grid; gap: var(--space-2); }
 .scale-meter__caption { display: flex; justify-content: space-between; gap: var(--space-3); }
 .scale-meter__track { position: relative; min-width: 0; }

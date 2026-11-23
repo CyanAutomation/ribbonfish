@@ -133,3 +133,37 @@ test("capture interval migration preserves D1 relationships and accepts the new 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, /Resource location: local/);
 });
+
+test("playlist readiness migration stores bounded shadow decisions by playlist revision", async (t) => {
+  const persistTo = await mkdtemp(join(tmpdir(), "ribbonfish-local-d1-"));
+  t.after(() => rm(persistTo, { recursive: true, force: true }));
+  const migration = await readFile(join(packageRoot, "migrations/0021_playlist_readiness_assessments.sql"), "utf8");
+  const fixture = join(persistTo, "playlist-readiness.sql");
+  await writeFile(fixture, `
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE playlists (playlist_id TEXT NOT NULL, revision TEXT NOT NULL, PRIMARY KEY (playlist_id, revision));
+    INSERT INTO playlists VALUES ('office', 'rev-1');
+    ${migration}
+    INSERT INTO playlist_readiness_assessments VALUES ('assessment-1', 'office', 'rev-1', 100, 'review', '{"assessment":"review"}', 'jev-test');
+    CREATE TABLE readiness_migration_assertions (passed INTEGER NOT NULL CHECK (passed = 1));
+    INSERT INTO readiness_migration_assertions
+    SELECT CASE WHEN
+      (SELECT COUNT(*) FROM playlist_readiness_assessments WHERE playlist_id = 'office' AND revision = 'rev-1') = 1 AND
+      (SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'playlist_readiness_assessments_latest_idx') = 1
+    THEN 1 ELSE 0 END;
+  `);
+
+  const result = spawnSync(process.execPath, [
+    wrangler, "d1", "execute", "ribbonfish-devices", "--local", "--persist-to", persistTo,
+    "--config", "wrangler.management.toml", "--file", fixture,
+  ], {
+    cwd: packageRoot,
+    env: { ...process.env, CI: "1" },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /Resource location: local/);
+});

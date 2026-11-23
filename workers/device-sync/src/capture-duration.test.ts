@@ -29,6 +29,8 @@ test("capture duration summary separates measured samples from reserve estimates
     measured_p50_ms: 10_500,
     measured_p90_ms: 18_000,
     measured_average_ms: 10_500,
+    reserve_estimated_p50_ms: 60_000,
+    reserve_estimated_p90_ms: 60_000,
     reserve_estimated_total_ms: 180_000,
     configured_reserve_ms: 60_000,
     reserve_review: "possible_overestimate",
