@@ -117,6 +117,16 @@ test("answer validation enforces choices, types, probabilities, confidence, and 
   assert.equal(validateAnswers({ ...sampleAnswers, risk: { ...sampleAnswers.risk, legend: { 0: "Wrong", 1: "Moderate", 2: "High" } } }, captureAssessmentQuestions), false);
 });
 
+test("Noul answers accept only bounded numeric values and optional probability confidence", () => {
+  const questions = { quality: { type: "noul", instructions: "Rate the quality." } };
+  assert.equal(validateAnswers({ quality: { type: "noul", noul: 0 } }, questions), true);
+  assert.equal(validateAnswers({ quality: { type: "noul", noul: 1, confidence: 1 } }, questions), true);
+  assert.equal(validateAnswers({ quality: { type: "noul", noul: -0.01 } }, questions), false);
+  assert.equal(validateAnswers({ quality: { type: "noul", noul: 1.01 } }, questions), false);
+  assert.equal(validateAnswers({ quality: { type: "noul", noul: Number.NaN } }, questions), false);
+  assert.equal(validateAnswers({ quality: { type: "noul", noul: 0.5, confidence: 1.01 } }, questions), false);
+});
+
 test("capture assessment state includes only allowlisted metadata and no private URL parts", () => {
   const input = {
     url: "https://user:pass@example.com/private?token=secret#fragment",

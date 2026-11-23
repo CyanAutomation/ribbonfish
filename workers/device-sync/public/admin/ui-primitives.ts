@@ -308,7 +308,7 @@ export interface ScaleMeterMarker {
   quotaMarker?: string;
 }
 
-export interface ScaleMeterSegment {
+interface ScaleMeterSegment {
   value: number;
   className?: string;
   captureId?: string;

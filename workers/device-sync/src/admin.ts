@@ -654,8 +654,7 @@ async function approveEnrollmentRequest(requestID: string, env: WorkerEnvironmen
     auditStatement(env, actorID, "device.enrollment_approved", "device", enrollment.device_id,
       { fingerprint: enrollment.fingerprint ?? undefined }, { onlyWhenPreviousChanged: true }),
   ]);
-  if (result[0]?.meta?.changes !== 1) throw new HTTPError(409, "enrollment request is no longer pending");
-  return jsonResponse({ device_id: enrollment.device_id, status: "approved" });
+  return enrollmentDecisionResponse(result[0]?.meta?.changes, enrollment.device_id, "approved");
 }
 
 async function rejectEnrollmentRequest(requestID: string, env: WorkerEnvironment, actorID: string) {
@@ -673,8 +672,12 @@ async function rejectEnrollmentRequest(requestID: string, env: WorkerEnvironment
     auditStatement(env, actorID, "device.enrollment_rejected", "device", enrollment.device_id,
       { fingerprint: enrollment.fingerprint ?? undefined }, { onlyWhenPreviousChanged: true }),
   ]);
-  if (result[0]?.meta?.changes !== 1) throw new HTTPError(409, "enrollment request is no longer pending");
-  return jsonResponse({ device_id: enrollment.device_id, status: "rejected" });
+  return enrollmentDecisionResponse(result[0]?.meta?.changes, enrollment.device_id, "rejected");
+}
+
+function enrollmentDecisionResponse(changes: number | undefined, deviceID: string, status: "approved" | "rejected") {
+  if (changes !== 1) throw new HTTPError(409, "enrollment request is no longer pending");
+  return jsonResponse({ device_id: deviceID, status });
 }
 
 async function createEnrollmentCode(request: Request, env: WorkerEnvironment, actorID: string) {

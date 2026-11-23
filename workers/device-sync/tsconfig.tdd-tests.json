@@ -8,6 +8,9 @@
   },
   "include": [
     "src/validation.test.ts",
-    "src/ui-primitives.test.ts"
+    "src/ui-primitives.test.ts",
+    "src/admin-formatters.test.ts",
+    "src/confirmed-action.test.ts",
+    "src/read-bounded-stream.test.ts"
   ]
 }

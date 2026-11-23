@@ -1,31 +1,10 @@
 import { HTTPError } from "./http-error.ts";
+import { readBoundedStream } from "./read-bounded-stream.ts";
 
 export async function readRequestBody(request: Request, maxBytes: number): Promise<Uint8Array> {
-  const reader = request.body?.getReader();
-  if (!reader) throw new HTTPError(400, "request body is required");
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel();
-        throw new HTTPError(413, "request body exceeds size limit");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  const body = request.body;
+  if (!body) throw new HTTPError(400, "request body is required");
+  return readBoundedStream(body, maxBytes, () => new HTTPError(413, "request body exceeds size limit"));
 }
 
 export function parseJSONBody(bodyBytes: Uint8Array): unknown {

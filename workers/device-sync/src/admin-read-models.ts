@@ -22,31 +22,41 @@ export function configuredCaptureReserveMs(env: WorkerEnvironment): number {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 60_000;
 }
 
-export function summarizeDurationAggregate(row: SqlRow | null | undefined, reserveMs: number) {
-  const totalSamples = Number(row?.total_samples ?? 0);
-  const measuredCount = Number(row?.measured_sample_count ?? 0);
-  const measuredCoverage = totalSamples ? measuredCount / totalSamples : 0;
+function summarizeDurationAggregate(row: SqlRow | null | undefined, reserveMs: number) {
+  const totalSamples = durationAggregateNumber(row, "total_samples");
+  const measuredCount = durationAggregateNumber(row, "measured_sample_count");
+  const failedAttemptCount = durationAggregateNumber(row, "failed_attempt_count");
+  const retryAttemptCount = durationAggregateNumber(row, "retry_attempt_count");
+  const measuredCoverage = aggregateRate(measuredCount, totalSamples);
   const measuredP50 = finiteNonNegativeOrNull(row?.measured_p50_ms);
   const measuredP90 = finiteNonNegativeOrNull(row?.measured_p90_ms);
   return {
     total_samples: totalSamples,
     measured_sample_count: measuredCount,
-    reserve_estimated_sample_count: Number(row?.reserve_estimated_sample_count ?? 0),
-    unknown_sample_count: Number(row?.unknown_sample_count ?? 0),
-    failed_attempt_count: Number(row?.failed_attempt_count ?? 0),
-    retry_attempt_count: Number(row?.retry_attempt_count ?? 0),
-    capture_attempt_failure_rate: totalSamples ? Number(row?.failed_attempt_count ?? 0) / totalSamples : 0,
-    retry_attempt_rate: totalSamples ? Number(row?.retry_attempt_count ?? 0) / totalSamples : 0,
+    reserve_estimated_sample_count: durationAggregateNumber(row, "reserve_estimated_sample_count"),
+    unknown_sample_count: durationAggregateNumber(row, "unknown_sample_count"),
+    failed_attempt_count: failedAttemptCount,
+    retry_attempt_count: retryAttemptCount,
+    capture_attempt_failure_rate: aggregateRate(failedAttemptCount, totalSamples),
+    retry_attempt_rate: aggregateRate(retryAttemptCount, totalSamples),
     measured_header_coverage: measuredCoverage,
     measured_p50_ms: measuredP50,
     measured_p90_ms: measuredP90,
     measured_average_ms: finiteNonNegativeOrNull(row?.measured_average_ms),
     reserve_estimated_p50_ms: finiteNonNegativeOrNull(row?.reserve_estimated_p50_ms),
     reserve_estimated_p90_ms: finiteNonNegativeOrNull(row?.reserve_estimated_p90_ms),
-    reserve_estimated_total_ms: Number(row?.reserve_estimated_total_ms ?? 0),
+    reserve_estimated_total_ms: durationAggregateNumber(row, "reserve_estimated_total_ms"),
     configured_reserve_ms: reserveMs,
     reserve_review: classifyReserveReview(measuredCount, measuredCoverage, measuredP90, reserveMs),
   };
+}
+
+function durationAggregateNumber(row: SqlRow | null | undefined, key: string): number {
+  return Number(row?.[key] ?? 0);
+}
+
+function aggregateRate(count: number, total: number): number {
+  return total ? count / total : 0;
 }
 
 function finiteNonNegativeOrNull(value: unknown): number | null {

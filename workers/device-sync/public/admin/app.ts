@@ -1,4 +1,5 @@
 import { api } from "./api.ts";
+import { runConfirmedAction } from "./confirmed-action.ts";
 import { formatTimestamp } from "./admin-formatters.ts";
 import { formatDeviceHealthDetails } from "./health-details.ts";
 import { deviceNeedsReview } from "./device-needs-review.ts";
@@ -38,11 +39,15 @@ import {
 } from "./ui-components.ts";
 import { initModuleNavigation } from "./module-navigation.ts";
 import {
-  compactIdentifier,
   confirmAction,
   confirmBeforeAction,
+} from "./ui-confirmation.ts";
+import {
   createTransientNotice,
   createRetryableLoadOnce,
+} from "./ui-notices.ts";
+import {
+  compactIdentifier,
   formatActorLabel,
   formatCaptureInterval,
   formatAuditDetails,
@@ -55,7 +60,7 @@ import {
   formatScreenshotStatus,
   prioritizeCaptureTargets,
   summarizeCaptureErrors,
-} from "./ui-utils.ts";
+} from "./ui-formatters.ts";
 
 requiredElement(document, "#brand-lockup").replaceWith(createBrandLockup({ ownerDocument: document }));
 const ribbonfishLoading = createLoadingIndicator({ ownerDocument: document });
@@ -416,19 +421,19 @@ function playlistActionButtons(playlist, deleteAction, layout) {
   if (!playlist.active) {
     const readinessDisclosure = createPlaylistReadinessDisclosure(playlist);
     const activate = button("Activate version", "primary");
-    activate.addEventListener("click", async () => {
-      try {
+    activate.addEventListener("click", () => runConfirmedAction({
+      confirmAndPerform: async () => {
         readinessDisclosure.element.open = true;
         const readiness = await readinessDisclosure.load(true);
         if (readiness.blockers.length) {
           showMessage(`This revision is blocked: ${readiness.blockers.join(", ")}. Review the readiness panel before activation.`, true, "playlist");
-          return;
+          return false;
         }
         const reviewNote = readiness.warnings.length
           ? ` Deterministic checks found items to review: ${readiness.warnings.join(", ")}.`
           : " Deterministic readiness checks found no blockers or warnings.";
         const description = `Make playlist ${playlist.playlist_id}, version ${compactIdentifier(playlist.revision)}, active. Enrolled devices will receive it the next time they sync.${reviewNote}`;
-        const confirmed = await confirmBeforeAction(
+        return confirmBeforeAction(
           (text) => showConfirmDialog({
             title: "Activate playlist version?",
             description: text,
@@ -441,11 +446,12 @@ function playlistActionButtons(playlist, deleteAction, layout) {
             body: JSON.stringify({ playlist_id: playlist.playlist_id, revision: playlist.revision }),
           }),
         );
-        if (!confirmed) return;
-        showMessage(`Playlist ${playlist.playlist_id} is active. Devices will receive it on their next sync.`, false, "playlist");
-        await refresh();
-      } catch (error) { showMessage(error.message, true, "playlist"); }
-    });
+      },
+      successMessage: `Playlist ${playlist.playlist_id} is active. Devices will receive it on their next sync.`,
+      context: "playlist",
+      showMessage,
+      refresh,
+    }));
     actions.push(readinessDisclosure.element, activate);
   }
 
@@ -456,10 +462,10 @@ function playlistActionButtons(playlist, deleteAction, layout) {
       remove.setAttribute("aria-label", `Delete playlist unavailable. ${deleteAction.hint}`);
       actions.push(remove, node("p", deleteAction.hint, "playlist-delete-hint"));
     } else {
-      remove.addEventListener("click", async () => {
+      remove.addEventListener("click", () => {
         const description = `Delete playlist ${playlist.playlist_id} and all ${deleteAction.versionCount} saved versions? Uploaded images stay available and can be reused by another playlist.`;
-        try {
-          const confirmed = await confirmBeforeAction(
+        return runConfirmedAction({
+          confirmAndPerform: () => confirmBeforeAction(
             (text) => showConfirmDialog({
               title: "Delete playlist?",
               description: text,
@@ -468,11 +474,12 @@ function playlistActionButtons(playlist, deleteAction, layout) {
             }),
             description,
             () => api(`/admin/api/playlists/${encodeURIComponent(playlist.playlist_id)}`, { method: "DELETE" }),
-          );
-          if (!confirmed) return;
-          showMessage(`Playlist ${playlist.playlist_id} was deleted. Uploaded images remain available for reuse.`, false, "playlist");
-          await refresh();
-        } catch (error) { showMessage(error.message, true, "playlist"); }
+          ),
+          successMessage: `Playlist ${playlist.playlist_id} was deleted. Uploaded images remain available for reuse.`,
+          context: "playlist",
+          showMessage,
+          refresh,
+        });
       });
       actions.push(actionDisclosure(`More actions for ${playlist.playlist_id}`, [remove]));
     }
@@ -873,9 +880,8 @@ function renderDevices(devices, activePlaylist) {
 
 function pendingRequestActions(request, layout) {
   const approve = button("Approve", "primary");
-  approve.addEventListener("click", async () => {
-    try {
-      const confirmed = await confirmBeforeAction(
+  approve.addEventListener("click", () => runConfirmedAction({
+    confirmAndPerform: () => confirmBeforeAction(
         (text) => showConfirmDialog({
           title: "Approve device?",
           description: text,
@@ -887,17 +893,16 @@ function pendingRequestActions(request, layout) {
           headers: { "Content-Type": "application/json" },
           body: "{}",
         }),
-      );
-      if (!confirmed) return;
-      showMessage(`Device ${request.device_id} was approved.`, false, "device");
-      await refresh();
-    } catch (error) { showMessage(error.message, true, "device"); }
-  });
+    ),
+    successMessage: `Device ${request.device_id} was approved.`,
+    context: "device",
+    showMessage,
+    refresh,
+  }));
 
   const reject = button("Reject", "danger");
-  reject.addEventListener("click", async () => {
-    try {
-      const confirmed = await confirmBeforeAction(
+  reject.addEventListener("click", () => runConfirmedAction({
+    confirmAndPerform: () => confirmBeforeAction(
         (text) => showConfirmDialog({
           title: "Reject device request?",
           description: text,
@@ -910,12 +915,12 @@ function pendingRequestActions(request, layout) {
           headers: { "Content-Type": "application/json" },
           body: "{}",
         }),
-      );
-      if (!confirmed) return;
-      showMessage(`Device request for ${request.device_id} was rejected.`, false, "device");
-      await refresh();
-    } catch (error) { showMessage(error.message, true, "device"); }
-  });
+    ),
+    successMessage: `Device request for ${request.device_id} was rejected.`,
+    context: "device",
+    showMessage,
+    refresh,
+  }));
   return createActionGroup([approve, reject], {
     label: `Actions for enrollment request from ${request.device_id}`,
     className: layout === "card" ? "card-actions" : "table-actions",

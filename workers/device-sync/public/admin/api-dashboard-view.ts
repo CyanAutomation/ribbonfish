@@ -15,8 +15,8 @@ import {
 import { createApiDashboardSourceEditor } from "./api-dashboard-editor.ts";
 import { parseApiDashboardConfig } from "../../src/api-dashboard/config.ts";
 import { createActionGroup, createToolbar } from "./ui-components.ts";
-import { confirmBeforeAction } from "./ui-utils.ts";
-import { formatTimestamp } from "./admin-formatters.ts";
+import { confirmBeforeAction } from "./ui-confirmation.ts";
+import { formatDetailedAge, formatTimestamp } from "./admin-formatters.ts";
 
 type Dashboard = Record<string, any>;
 type ConfirmOptions = { title: string; description: string; confirmLabel: string; destructive?: boolean };
@@ -73,17 +73,6 @@ function buildDashboardSourceEditor(container: HTMLElement, sources: any[]) {
   advanced.append(jsonField.element);
   container.append(advanced);
   return createApiDashboardSourceEditor(host, sources, textarea);
-}
-
-function formatAge(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return "unknown age";
-  if (seconds < 60) return `${Math.floor(seconds)} sec`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} hr ${minutes % 60} min`;
-  const days = Math.floor(hours / 24);
-  return `${days} days ${hours % 24} hr`;
 }
 
 function formatBytes(bytes: unknown): string {
@@ -208,7 +197,7 @@ function renderDashboardHeading(dashboard: Dashboard): HTMLElement {
 function appendLatestCaptureSummary(content: HTMLElement, dashboard: Dashboard): void {
   if (dashboard.last_success_at) {
     const ageSeconds = Math.max(0, (Date.now() - Number(dashboard.last_success_at)) / 1000);
-    content.append(node("p", `Last successful capture ${formatTimestamp(dashboard.last_success_at)} · ${formatAge(ageSeconds)} ago`, "muted"));
+    content.append(node("p", `Last successful capture ${formatTimestamp(dashboard.last_success_at)} · ${formatDetailedAge(ageSeconds)} ago`, "muted"));
   }
   if (Number(dashboard.recovery_attempts) > 0) {
     const retryScheduled = Number(dashboard.retry_after_at) > Date.now();

@@ -35,8 +35,7 @@
     "postcss": "^8.5.32",
     "typescript": "^7.0.2",
     "wrangler": "4.162.0",
-    "yaml": "^2.9.1",
-    "zod": "^4.6.7"
+    "yaml": "^2.9.1"
   },
   "dependencies": {
     "@resvg/resvg-wasm": "^2.6.2"

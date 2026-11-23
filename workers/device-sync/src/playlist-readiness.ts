@@ -1,7 +1,7 @@
 export type PlaylistReadinessStatus = "ready" | "review" | "blocked";
 import { getPlaylistSyncState, type PlaylistSyncState as SharedPlaylistSyncState } from "./playlist-sync-state.ts";
 
-export type PlaylistSyncState = Extract<SharedPlaylistSyncState, "in_sync" | "behind" | "unreported">;
+type ReadinessSyncState = Extract<SharedPlaylistSyncState, "in_sync" | "behind" | "unreported">;
 
 export interface PlaylistReadinessInput {
   revision: { playlist_id: string; revision: string; effective_revision?: string };
@@ -37,7 +37,7 @@ export interface PlaylistReadinessResult {
   blockers: string[];
   warnings: string[];
   items: Array<{ label: string; status: "ready" | "missing" | "stale" | "disabled" | "review" }>;
-  devices_to_update: Array<{ device_id: string; sync_status: PlaylistSyncState }>;
+  devices_to_update: Array<{ device_id: string; sync_status: ReadinessSyncState }>;
 }
 
 /** Deterministic readiness checks are authoritative; JEV can only annotate them. */

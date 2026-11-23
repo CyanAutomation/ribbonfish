@@ -113,6 +113,22 @@ function insertCapture(sqlite, { captureID = "capture-1", current = null, lastSu
   return captureID;
 }
 
+test("a held reconciliation lease returns an incomplete skipped result", async () => {
+  const sqlite = await freshDatabase();
+  try {
+    const { env } = environment(sqlite);
+    const now = Date.now();
+    sqlite.prepare("UPDATE asset_reconciliation_state SET lease_token = 'other', lease_until = ? WHERE singleton = 1")
+      .run(now + 10_000);
+
+    const result = await reconcileAssets(env, now);
+
+    assert.deepEqual(result, { skipped: true, deleted: 0, repaired: 0, issues: 0, cycle_completed: false });
+  } finally {
+    sqlite.close();
+  }
+});
+
 test("stored but unattached PNGs receive a staging lease and survive until it expires", async () => {
   const sqlite = await freshDatabase();
   try {

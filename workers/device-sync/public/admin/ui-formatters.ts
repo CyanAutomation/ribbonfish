@@ -1,21 +1,4 @@
-export { formatTimestamp } from "./admin-formatters.ts";
-export { buildFleetInsights } from "./fleet-insights.ts";
-export { formatDeviceHealthDetails } from "./health-details.ts";
 import { formatTimestamp } from "./admin-formatters.ts";
-/** Coalesce concurrent requests and release the shared promise after success or failure. */
-export function createSingleFlight<T>(operation: () => Promise<T>): () => Promise<T> {
-  let inFlight: Promise<T> | null = null;
-  return () => {
-    if (inFlight) return inFlight;
-    const current = Promise.resolve().then(operation);
-    inFlight = current;
-    void current.then(
-      () => { if (inFlight === current) inFlight = null; },
-      () => { if (inFlight === current) inFlight = null; },
-    );
-    return current;
-  };
-}
 
 type Playlist = { playlist_id?: string; revision_count?: number; active?: boolean | number; created_at?: number };
 type CaptureSummary = {
@@ -33,6 +16,8 @@ type CaptureSummary = {
   viewport?: { width: number; height: number };
   wait_for_selector?: string | null;
 };
+type JevAnswerDisplay = { type?: string; choice?: string; score?: number; legend?: Record<string, string> };
+
 const AUDIT_EVENT_LABELS: Record<string, string> = {
   "asset.uploaded": "Uploaded playlist image",
   "capture.skip_once_applied": "Skipped one scheduled screenshot",
@@ -53,58 +38,6 @@ const AUDIT_EVENT_LABELS: Record<string, string> = {
   "playlist.revision_created": "Created playlist version",
   "development.bootstrap": "Created initial playlist",
 };
-
-export function createTransientNotice({
-  duration = 5000,
-  setTimeoutFn = setTimeout,
-  clearTimeoutFn = clearTimeout,
-  onExpire = () => {},
-  nowFn = Date.now,
-} = {}) {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let remaining = duration;
-  let startedAt: number | null = null;
-  let active = false;
-  const schedule = () => {
-    startedAt = nowFn();
-    timer = setTimeoutFn(() => {
-      timer = null;
-      remaining = 0;
-      active = false;
-      onExpire();
-    }, remaining);
-  };
-  return {
-    start() {
-      if (timer !== null) clearTimeoutFn(timer);
-      remaining = duration;
-      active = true;
-      schedule();
-    },
-    pause() {
-      if (!active || timer === null) return;
-      clearTimeoutFn(timer);
-      timer = null;
-      remaining = Math.max(0, remaining - Math.max(0, nowFn() - (startedAt ?? nowFn())));
-    },
-    resume() {
-      if (!active || timer !== null) return;
-      if (remaining === 0) {
-        active = false;
-        onExpire();
-        return;
-      }
-      schedule();
-    },
-    clear() {
-      if (timer !== null) clearTimeoutFn(timer);
-      timer = null;
-      remaining = duration;
-      startedAt = null;
-      active = false;
-    },
-  };
-}
 
 export function formatPlaylistState(active: unknown) {
   return active ? "Active" : "Ready to activate";
@@ -158,8 +91,6 @@ export function formatScreenshotStatus(jobStatus: string | null, lastError: stri
   if (lastSuccessAt) return { label: "Screenshot ready", tone: "success" };
   return { label: "Waiting for first screenshot", tone: "neutral" };
 }
-
-type JevAnswerDisplay = { type?: string; choice?: string; score?: number; legend?: Record<string, string> };
 
 export function formatJevAnswerLabel(key: string) {
   return key.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -244,27 +175,6 @@ export function formatEnrollmentApprovalPrompt(request: { replaces_existing?: bo
   return `Only approve ${request.device_id} if its physical display shows the full fingerprint ${request.fingerprint}.${replacement}`;
 }
 
-export function createRetryableLoadOnce() {
-  let loaded = false;
-  let pending: Promise<unknown> | null = null;
-  return {
-    get loaded() { return loaded; },
-    load<T>(loader: () => T | Promise<T>): Promise<T | undefined> {
-      if (loaded) return Promise.resolve(undefined);
-      if (!pending) {
-        pending = Promise.resolve()
-          .then(loader)
-          .then((value) => {
-            loaded = true;
-            return value;
-          })
-          .finally(() => { pending = null; });
-      }
-      return pending as Promise<T>;
-    },
-  };
-}
-
 export function formatAuditDetails(metadata: unknown, locale?: string) {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return [];
   return Object.entries(metadata).map(([key, value]) => ({
@@ -273,22 +183,10 @@ export function formatAuditDetails(metadata: unknown, locale?: string) {
   }));
 }
 
-export async function confirmBeforeAction<T>(confirmFn: (message: string) => boolean | Promise<boolean>, message: string, action: () => T | Promise<T>) {
-  const { confirmed } = await confirmAction(confirmFn, message, action);
-  return confirmed;
-}
-
-export async function confirmAction<T>(confirmFn: (message: string) => boolean | Promise<boolean>, message: string, action: () => T | Promise<T>) {
-  if (typeof confirmFn !== "function") throw new TypeError("A confirmation function is required");
-  if (!(await confirmFn(message))) return { confirmed: false, result: undefined };
-  return { confirmed: true, result: await action() };
-}
-
 function formatMetadataValue(key: string, value: unknown, locale?: string): string {
   if (value === null || value === undefined || value === "") return "—";
   if ((typeof value === "number" || typeof value === "string") && /(?:_at|_until|_expires)$/i.test(key)) {
     return formatTimestamp(value, locale);
-
   }
   if (Array.isArray(value)) return value.map((item) => formatMetadataValue(key, item, locale)).join(", ");
   if (typeof value === "object") {
