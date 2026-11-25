@@ -325,7 +325,11 @@ test("fresh Kuma monitor rows render their own history without mixing sibling mo
   };
 
   const svg = dashboardSVG([source]);
-  const apiHistory = svg.slice(svg.indexOf("24-hour history for Public API"), svg.indexOf("24-hour history for Web"));
+  const apiHistoryStart = svg.indexOf("24-hour history for Public API");
+  const webHistoryStart = svg.indexOf("24-hour history for Web");
+  assert.ok(apiHistoryStart >= 0, "Public API history boundary should be present");
+  assert.ok(webHistoryStart > apiHistoryStart, "Web history boundary should follow Public API history");
+  const apiHistory = svg.slice(apiHistoryStart, webHistoryStart);
 
   assert.match(apiHistory, /2–4 hours ago: Down/);
   assert.match(apiHistory, /0–2 hours ago: Operational/);

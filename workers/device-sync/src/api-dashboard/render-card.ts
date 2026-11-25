@@ -32,6 +32,7 @@ type CardProps = {
 type CardLayout = CardProps & {
   health: Health;
   compact: boolean;
+  showIndividualHistory: boolean;
   pad: number;
   left: number;
   services: DashboardSource["components"];
@@ -240,7 +241,7 @@ function buildCardLayout(props: CardProps): CardLayout {
     ? Math.max(8, Math.floor((statusDotX - left - s(14)) / s(10)))
     : Math.max(8, Math.floor((width - pad * 2 - s(16)) / s(17)));
   return { ...props, health, compact, pad, left, services, hasParentGroups, serviceRows, events, visibleEvents,
-    eventAreaHeight, hasDetails, contentY, lineHeight, visibleRows: rows, hiddenServices, hiddenGroups,
+    eventAreaHeight, hasDetails, contentY, lineHeight, visibleRows: rows, hiddenServices, hiddenGroups, showIndividualHistory,
     sourceStatusLabel, statusTextX, statusDotX, titleMaxChars };
 }
 
@@ -305,7 +306,7 @@ function renderServiceComponentRow(component: DashboardSource["components"][numb
   const { source, x, width, scale, pad, left, compact } = layout;
   const { name } = component;
   const { displayStatus, color, statusMeta } = serviceStatusPresentation(component, source, layout);
-  const history = source.provider === "uptime-kuma" && source.freshness === "fresh" && layout.width >= layout.scale * 720
+  const history = layout.showIndividualHistory
     ? recentServiceChecks(component, source.fetchedAt)
     : undefined;
   return svgServiceRow({ x: left, y: rowY, right: x + width - pad, scale, name, status: displayStatus, color, statusMeta, compact, showStatus: true, history });
