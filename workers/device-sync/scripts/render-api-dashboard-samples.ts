@@ -30,17 +30,21 @@ function visualScenarios(base: { width: number; height: number; sources: any[] }
       id, provider: "atlassian-statuspage", displayName, hostname,
       fetchedAt: "2026-11-05T12:00:00.000Z", freshness: "fresh", status: "operational",
       statusDescription: "All systems operational", groups, components, incidents: [],
-      maintenance: [{ id: `${id}-maintenance`, name: "Sample flight-planning service v4.2.0 update", status: "scheduled", impact: "maintenance", updatedAt: "2026-11-05T11:45:00.000Z", scheduledFor: "2026-11-06T02:00:00.000Z" }],
+      maintenance: [{ id: `${id}-maintenance`, name: "Sample flight-planning service v4.2.0 update", status: "scheduled", impact: "maintenance", updatedAt: "2026-11-05T11:45:00.000Z", scheduledFor: "2026-11-06T02:00:00.000Z", scheduledUntil: "2026-11-06T03:30:00.000Z", componentNames: names.slice(0, 2) }],
     };
   };
-  scenarios.push({ name: "office-statuspage-display", value: {
+  const officeDisplay = {
     width: base.width,
     height: base.height,
     sources: [
       officeSource("west", "West region services", "status-west.example.net", ["Flight search", "Booking API", "Check-in", "Payment service", "Public website", "Notifications"]),
       officeSource("north", "North region services", "status-north.example.net", ["Search API", "Booking API", "Mobile check-in", "Payment service", "Public website", "Messaging"]),
     ],
-  } });
+  };
+  scenarios.push({ name: "office-statuspage-display", value: officeDisplay });
+  const officeWithoutMaintenance = structuredClone(officeDisplay);
+  for (const source of officeWithoutMaintenance.sources) source.maintenance = [];
+  scenarios.push({ name: "office-statuspage-no-maintenance", value: officeWithoutMaintenance });
   const degraded = clone();
   degraded.sources[0].components[0].status = "degraded";
   degraded.sources[0].status = "degraded";
