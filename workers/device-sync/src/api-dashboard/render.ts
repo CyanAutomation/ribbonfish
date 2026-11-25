@@ -47,11 +47,60 @@ function validateDashboard(sources: DashboardSource[], width: number, height: nu
   if (sources.reduce((sum, source) => sum + source.components.length, 0) > 2_000) throw new Error("Dashboard has too many components.");
 }
 
+type MaintenanceSourceRecord = {
+  source: DashboardSource;
+  maintenance: DashboardSource["maintenance"][number];
+  order: number;
+  start?: string;
+};
+
+const activeMaintenanceStatus = (status: string) => /active|in.?progress|ongoing|started/i.test(status);
+const maintenanceImpactRanks: Record<string, number> = { critical: 0, major: 1, minor: 2, maintenance: 3, unknown: 4 };
+
+function maintenanceImpactRank(impact: string | undefined): number {
+  return maintenanceImpactRanks[impact?.toLowerCase() ?? "unknown"] ?? 4;
+}
+
+function mergeMaintenanceRecords(records: MaintenanceSourceRecord[]): SvgMaintenanceAgendaEvent {
+  records = records.toSorted((a, b) => a.order - b.order);
+  const first = records[0];
+  let status = first.maintenance.status;
+  let impact = first.maintenance.impact;
+  const sources = new Set<string>();
+  const affected = new Set<string>();
+  const updatedAt: string[] = [];
+  const fetchedAt: string[] = [];
+  const scheduledUntil: string[] = [];
+  for (const { source, maintenance } of records) {
+    sources.add(source.displayName);
+    const componentNames = maintenance.componentNames?.length
+      ? maintenance.componentNames
+      : source.components.filter((component) => !component.isGroup && component.status === "maintenance").map((component) => component.name);
+    for (const name of componentNames) affected.add(name);
+    if (activeMaintenanceStatus(maintenance.status) && !activeMaintenanceStatus(status)) status = maintenance.status;
+    if (maintenanceImpactRank(maintenance.impact) < maintenanceImpactRank(impact)) impact = maintenance.impact;
+    if (maintenance.updatedAt) updatedAt.push(maintenance.updatedAt);
+    if (source.fetchedAt) fetchedAt.push(source.fetchedAt);
+    if (maintenance.scheduledUntil && Number.isFinite(Date.parse(maintenance.scheduledUntil))) scheduledUntil.push(new Date(maintenance.scheduledUntil).toISOString());
+  }
+  const latest = (timestamps: string[]) => timestamps.toSorted((a, b) => Date.parse(a) - Date.parse(b)).at(-1);
+  return {
+    name: first.maintenance.name,
+    status,
+    impact,
+    color: dashboardColors.maintenance,
+    scheduledFor: records.find((record) => record.start)?.start,
+    scheduledUntil: latest(scheduledUntil),
+    referenceAt: latest(fetchedAt),
+    updatedAt: latest(updatedAt),
+    sources: [...sources],
+    affected: [...affected],
+  };
+}
+
 function buildMaintenanceEvents(sources: DashboardSource[]): SvgMaintenanceAgendaEvent[] {
-  const deduplicated = new Map<string, SvgMaintenanceAgendaEvent>();
-  const activeStatus = (status: string) => /active|in.?progress|ongoing|started/i.test(status);
-  const impactRanks: Record<string, number> = { critical: 0, major: 1, minor: 2, maintenance: 3, unknown: 4 };
-  const impactRank = (impact: string | undefined) => impactRanks[impact?.toLowerCase() ?? "unknown"] ?? 4;
+  const recordsByName = new Map<string, MaintenanceSourceRecord[]>();
+  let order = 0;
   for (const source of sources) {
     if (source.disabled || source.freshness !== "fresh") continue;
     for (const maintenance of source.maintenance) {
@@ -59,35 +108,32 @@ function buildMaintenanceEvents(sources: DashboardSource[]): SvgMaintenanceAgend
       const start = maintenance.scheduledFor && Number.isFinite(Date.parse(maintenance.scheduledFor))
         ? new Date(maintenance.scheduledFor).toISOString()
         : undefined;
-      const key = `${normalizedName}|${start ?? `unscheduled:${maintenance.status.toLocaleLowerCase()}`}`;
-      const affected = maintenance.componentNames?.length
-        ? maintenance.componentNames
-        : source.components.filter((component) => !component.isGroup && component.status === "maintenance").map((component) => component.name);
-      const existing = deduplicated.get(key);
-      if (existing) {
-        existing.sources = [...new Set([...existing.sources, source.displayName])];
-        existing.affected = [...new Set([...existing.affected, ...affected])];
-        if (activeStatus(maintenance.status) && !activeStatus(existing.status)) existing.status = maintenance.status;
-        if (impactRank(maintenance.impact) < impactRank(existing.impact)) existing.impact = maintenance.impact;
-        if (maintenance.updatedAt && (!existing.updatedAt || Date.parse(maintenance.updatedAt) > Date.parse(existing.updatedAt))) existing.updatedAt = maintenance.updatedAt;
-        if (source.fetchedAt && (!existing.referenceAt || Date.parse(source.fetchedAt) > Date.parse(existing.referenceAt))) existing.referenceAt = source.fetchedAt;
-      } else {
-        deduplicated.set(key, {
-          name: maintenance.name,
-          status: maintenance.status,
-          impact: maintenance.impact,
-          color: dashboardColors.maintenance,
-          scheduledFor: maintenance.scheduledFor,
-          scheduledUntil: maintenance.scheduledUntil,
-          referenceAt: source.fetchedAt,
-          updatedAt: maintenance.updatedAt,
-          sources: [source.displayName],
-          affected: [...new Set(affected)],
-        });
-      }
+      const record = { source, maintenance, start, order: order++ };
+      recordsByName.set(normalizedName, [...(recordsByName.get(normalizedName) ?? []), record]);
     }
   }
-  return [...deduplicated.values()].sort((a, b) => Number(activeStatus(b.status)) - Number(activeStatus(a.status))
+
+  const events: SvgMaintenanceAgendaEvent[] = [];
+  for (const records of recordsByName.values()) {
+    const scheduledByStart = new Map<string, MaintenanceSourceRecord[]>();
+    const unscheduled: MaintenanceSourceRecord[] = [];
+    for (const record of records) {
+      if (!record.start) {
+        unscheduled.push(record);
+        continue;
+      }
+      scheduledByStart.set(record.start, [...(scheduledByStart.get(record.start) ?? []), record]);
+    }
+    const scheduledGroups = [...scheduledByStart.values()];
+    if (unscheduled.length) {
+      // Missing times can match a named window only when that name has one scheduled time.
+      if (scheduledGroups.length === 1) scheduledGroups[0].push(...unscheduled);
+      else scheduledGroups.push(unscheduled);
+    }
+    events.push(...scheduledGroups.map(mergeMaintenanceRecords));
+  }
+
+  return events.sort((a, b) => Number(activeMaintenanceStatus(b.status)) - Number(activeMaintenanceStatus(a.status))
     || (Date.parse(a.scheduledFor ?? "") || Number.MAX_SAFE_INTEGER) - (Date.parse(b.scheduledFor ?? "") || Number.MAX_SAFE_INTEGER)
     || a.name.localeCompare(b.name));
 }

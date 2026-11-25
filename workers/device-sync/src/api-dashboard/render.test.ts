@@ -464,6 +464,66 @@ test("scheduled maintenance is promoted into one shared, detailed agenda and dup
   assert.doesNotMatch(svg, /MAINTENANCE · Platform update/);
 });
 
+test("unscheduled duplicates merge with a single scheduled match and promote their active status", () => {
+  const createSource = (id: string, displayName: string, maintenance: DashboardSource["maintenance"][number]): DashboardSource => ({
+    ...sample,
+    id,
+    displayName,
+    provider: "atlassian-statuspage",
+    maintenance: [maintenance],
+  });
+  const west = createSource("west", "West", { id: "west-update", name: "Platform update", status: "scheduled", impact: "maintenance", updatedAt: null });
+  const north = createSource("north", "North", { id: "north-update", name: "Platform update", status: "in_progress", impact: "major", updatedAt: null, scheduledFor: "2026-01-02T05:00:00.000Z" });
+
+  const svg = dashboardSVG([west, north]);
+
+  assert.match(svg, /Scheduled maintenance · 1 event/);
+  assert.equal((svg.match(/Platform update/g) ?? []).length, 1);
+  assert.match(svg, /IN PROGRESS/);
+  assert.match(svg, /Sources: West, North/);
+  assert.match(svg, /Starts 2026-01-02 05:00 UTC/);
+});
+
+test("unscheduled duplicates with different statuses merge without a scheduled time", () => {
+  const west: DashboardSource = {
+    ...sample,
+    id: "west",
+    displayName: "West",
+    maintenance: [{ id: "west-update", name: "Platform update", status: "scheduled", impact: "maintenance", updatedAt: null }],
+  };
+  const north: DashboardSource = {
+    ...west,
+    id: "north",
+    displayName: "North",
+    maintenance: [{ id: "north-update", name: "Platform update", status: "in_progress", impact: "maintenance", updatedAt: null }],
+  };
+
+  const svg = dashboardSVG([west, north]);
+
+  assert.match(svg, /Scheduled maintenance · 1 event/);
+  assert.equal((svg.match(/Platform update/g) ?? []).length, 1);
+  assert.match(svg, /IN PROGRESS/);
+  assert.match(svg, /Sources: West, North/);
+  assert.match(svg, /Schedule time not provided/);
+});
+
+test("an unscheduled event stays separate when the same name has multiple scheduled windows", () => {
+  const source: DashboardSource = {
+    ...sample,
+    maintenance: [
+      { id: "window-one", name: "Platform update", status: "scheduled", impact: "maintenance", updatedAt: null, scheduledFor: "2026-01-02T05:00:00.000Z" },
+      { id: "window-two", name: "Platform update", status: "scheduled", impact: "maintenance", updatedAt: null, scheduledFor: "2026-01-02T07:00:00.000Z" },
+      { id: "unscheduled", name: "Platform update", status: "scheduled", impact: "maintenance", updatedAt: null },
+    ],
+  };
+
+  const svg = dashboardSVG([source]);
+
+  assert.match(svg, /Scheduled maintenance · 3 events/);
+  assert.equal((svg.match(/Platform update/g) ?? []).length, 2, "two cards render and one is summarized in the overflow count");
+  assert.match(svg, /\+ 1 more maintenance event/);
+});
+
 test("the service cards reclaim the agenda space when no maintenance is active", () => {
   const source: DashboardSource = {
     ...sample,
