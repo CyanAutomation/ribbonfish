@@ -184,8 +184,6 @@ function buildCardEvents(source: DashboardSource): SvgDashboardEvent[] {
   return [
     ...source.incidents.map((item) => ({ kind: "Incident" as const, name: item.name, status: item.status, impact: item.impact,
       color: item.impact === "critical" || item.impact === "major" ? colors.down : colors.degraded, updatedAt: item.updatedAt })),
-    ...source.maintenance.map((item) => ({ kind: "Maintenance" as const, name: item.name, status: item.status, impact: item.impact,
-      color: colors.maintenance, updatedAt: item.updatedAt, scheduledFor: item.scheduledFor, referenceAt: source.fetchedAt })),
   ];
 }
 

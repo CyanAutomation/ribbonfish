@@ -109,6 +109,19 @@ export interface SvgDashboardEvent {
   referenceAt?: string | null;
 }
 
+export interface SvgMaintenanceAgendaEvent {
+  name: string;
+  status: string;
+  impact?: string;
+  color: string;
+  scheduledFor?: string | null;
+  scheduledUntil?: string | null;
+  referenceAt?: string | null;
+  updatedAt?: string | null;
+  sources: string[];
+  affected: string[];
+}
+
 function eventClock(value: string | null | undefined, includeDate = false): string | undefined {
   if (!value) return undefined;
   const date = new Date(value);
@@ -129,6 +142,52 @@ function relativeTime(value: string | null | undefined, reference: string | null
     : absMinutes < 24 * 60 ? `${hours} ${hours === 1 ? "hour" : "hours"}`
       : `${days} ${days === 1 ? "day" : "days"}`;
   return delta >= 0 ? `in ${duration}` : `started ${duration} ago`;
+}
+
+function formatEventStatus(value: string): string {
+  return value.replace(/_/g, " ").toUpperCase();
+}
+
+function formatEventScope(label: string, names: string[]): string {
+  if (!names.length) return `${label}: Not specified`;
+  return `${label}: ${names.join(", ")}`;
+}
+
+/** Expanded, shared agenda card for upcoming and active maintenance. */
+export function svgMaintenanceAgenda(input: { x: number; y: number; width: number; height: number; scale: number; events: SvgMaintenanceAgendaEvent[]; hiddenCount?: number }): string {
+  const { x, y, width, height, scale, events, hiddenCount = 0 } = input;
+  if (!events.length || width <= 0 || height <= 0) return "";
+  const s = (value: number) => value * scale;
+  const totalCount = events.length + hiddenCount;
+  const headerBaseline = y + s(31);
+  const title = `Scheduled maintenance · ${totalCount} ${totalCount === 1 ? "event" : "events"}`;
+  let result = `<g role="group" aria-label="${svgText(title)}"><rect x="${x}" y="${y}" width="${width}" height="${height}" rx="${s(14)}" fill="#18263b" stroke="#7659a8" stroke-width="${s(2)}"/><rect x="${x}" y="${y}" width="${s(7)}" height="${height}" rx="${s(4)}" fill="#a78bfa"/><text x="${x + s(20)}" y="${headerBaseline}" fill="#e3d8ff" font-size="${s(24)}" font-weight="700">${svgText(title)}</text>`;
+  events.forEach((event, index) => {
+    const rowTop = y + s(42 + index * 144);
+    const innerX = x + s(12);
+    const innerWidth = width - s(24);
+    const textX = innerX + s(18);
+    const contentWidth = innerWidth - s(36);
+    const maxChars = (fontSize: number) => Math.max(8, Math.floor(contentWidth / (fontSize * s(0.54))));
+    result += `<rect x="${innerX}" y="${rowTop}" width="${innerWidth}" height="${s(138)}" rx="${s(10)}" fill="#202d40" stroke="#3c4d66" stroke-width="${s(1)}"/>`;
+    result += `<rect x="${innerX}" y="${rowTop}" width="${s(5)}" height="${s(138)}" rx="${s(2)}" fill="${svgText(event.color)}"/>`;
+    result += `<text x="${textX}" y="${rowTop + s(26)}" fill="#f4f7fb" font-size="${s(26)}" font-weight="700">${svgText(truncateText(event.name, maxChars(26)))}</text>`;
+    const alreadyStarted = /active|in.?progress|ongoing|started/i.test(event.status);
+    const startsInFuture = Date.parse(event.scheduledFor ?? "") > Date.parse(event.referenceAt ?? "");
+    const relativeStart = alreadyStarted && startsInFuture ? undefined : relativeTime(event.scheduledFor, event.referenceAt);
+    const stateParts = [formatEventStatus(event.status), relativeStart, event.impact && event.impact !== "unknown" ? `Impact: ${event.impact}` : undefined].filter(Boolean);
+    result += `<text x="${textX}" y="${rowTop + s(51)}" fill="${svgText(event.color)}" font-size="${s(20)}" font-weight="700">${svgText(truncateText(stateParts.join(" · "), maxChars(20)))}</text>`;
+    const schedule = [event.scheduledFor ? `Starts ${eventClock(event.scheduledFor, true)}` : undefined, event.scheduledUntil ? `Ends ${eventClock(event.scheduledUntil, true)}` : undefined].filter(Boolean).join(" · ") || "Schedule time not provided";
+    result += `<text x="${textX}" y="${rowTop + s(76)}" fill="#d0dbea" font-size="${s(19)}">${svgText(truncateText(schedule, maxChars(19)))}</text>`;
+    const scope = `${formatEventScope("Sources", event.sources)} · ${formatEventScope("Affected", event.affected)}`;
+    result += `<text x="${textX}" y="${rowTop + s(101)}" fill="#d0dbea" font-size="${s(19)}">${svgText(truncateText(scope, maxChars(19)))}</text>`;
+    if (event.updatedAt) result += `<text x="${textX}" y="${rowTop + s(126)}" fill="#9eacc0" font-size="${s(17)}">${svgText(`Updated ${eventClock(event.updatedAt) ?? "time unavailable"}`)}</text>`;
+  });
+  if (hiddenCount) {
+    const hiddenY = y + s(42 + events.length * 144 - 5);
+    result += `<text x="${x + s(20)}" y="${hiddenY}" fill="#d0dbea" font-size="${s(17)}">+ ${hiddenCount} more maintenance ${hiddenCount === 1 ? "event" : "events"}</text>`;
+  }
+  return `${result}</g>`;
 }
 
 /** Shared, high-contrast event panel for active incidents and scheduled work. */

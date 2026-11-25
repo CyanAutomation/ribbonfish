@@ -8,6 +8,8 @@ export interface DashboardIncident {
   impact: string;
   updatedAt: string | null;
   scheduledFor?: string | null;
+  scheduledUntil?: string | null;
+  componentNames?: string[];
 }
 
 export interface EndpointCacheMetadata {

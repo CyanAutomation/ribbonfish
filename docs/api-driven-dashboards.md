@@ -142,22 +142,24 @@ uptime percentage. Shared SVG components in
 panels, service rows, group summaries, event panels, a named status key, and
 check-history strips, and source-freshness notices. The status key names each
 health color, and history strips show their 24-hour-to-now direction.
-Incident and maintenance events have a dedicated high-contrast area on each
-source card. Scheduled maintenance keeps its start time separate from its last
-update and shows both when available, with a relative time to the scheduled
-start (or how long ago it began). Event clocks remain in UTC. Major incidents
-use a stronger severity color, while event labels preserve meaning without
-color.
+Incidents have a dedicated high-contrast area on each source card. Fresh
+scheduled maintenance is de-duplicated across sources into a shared agenda
+below the source cards. Its cards show status, countdown, start and end times,
+impact, affected services, source names, and last update when available. The
+agenda gives active work priority and summarizes additional events. It only
+reserves space while maintenance is present, so source cards reclaim the full
+height when there is none. Event clocks remain in UTC. Major incidents use a
+stronger severity color, while event labels preserve meaning without color.
 
 `npm test` runs a `wrangler dev --local` integration test against Wrangler’s
 Cloudflare Workers runtime. It initializes the bundled Wasm module and font,
-renders twelve synthetic 1920 by 1080 scenarios, validates their PNG headers, and
+renders thirteen synthetic 1920 by 1080 scenarios, validates their PNG headers, and
 writes them to [`examples/api-dashboard/visual-samples/`](../examples/api-dashboard/visual-samples/).
 The realistic seven-source image is also written to
 [`examples/api-dashboard/status-dashboard.png`](../examples/api-dashboard/status-dashboard.png).
 Scenarios cover operational, degraded, down, incident, maintenance, partial and
-total source failure, a large monitor group, long names, a two-source office
-display, and the seven-source layout. They contain generic synthetic data, not
+total source failure, a large monitor group, long names, two-source office
+displays with and without maintenance, and the seven-source layout. They contain generic synthetic data, not
 captured customer data. The
 test also covers deterministic PNG bytes in Node; the Workers runtime test is
 the compatibility proof. PNGs are checked at native resolution and the main

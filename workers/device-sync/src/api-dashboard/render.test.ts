@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { dashboardSVG, renderDashboardPNG } from "./render.ts";
-import { svgCheckHistory, svgEventPanel, svgFreshnessBadge, svgGroupSummary, svgHealthOverview, svgPanel, svgProviderIdentity, svgServiceRow, svgSourceNotice, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
+import { svgCheckHistory, svgEventPanel, svgFreshnessBadge, svgGroupSummary, svgHealthOverview, svgMaintenanceAgenda, svgPanel, svgProviderIdentity, svgServiceRow, svgSourceNotice, svgStatusBadge, svgStatusDot, svgText, truncateText } from "./render-components.ts";
 import type { DashboardSource } from "./model.ts";
 
 const sample: DashboardSource = { id: "source-1", provider: "uptime-kuma", displayName: "<SCRIPT>alert('x')</SCRIPT>", fetchedAt: "2026-01-01T00:00:00.000Z", freshness: "fresh", status: "operational", statusDescription: "All systems operational", incidents: [], maintenance: [], components: [
@@ -411,7 +411,7 @@ test("unexpected cached statuses use the Unknown label in wide and narrow cards"
   assert.doesNotMatch(narrow, /Last: undefined/);
 });
 
-test("Statuspage incidents and scheduled maintenance use a prominent event panel", () => {
+test("Statuspage incidents remain in their source card while maintenance uses the shared agenda", () => {
   const source: DashboardSource = {
     ...sample,
     provider: "atlassian-statuspage",
@@ -422,12 +422,130 @@ test("Statuspage incidents and scheduled maintenance use a prominent event panel
   const svg = dashboardSVG([source]);
   assert.match(svg, /fill="#202d40"/);
   assert.match(svg, /INCIDENT/);
-  assert.match(svg, /MAINTENANCE/);
+  assert.match(svg, /Scheduled maintenance · 1 event/);
   assert.match(svg, /Elevated error rate/);
   assert.match(svg, /Sample flight-planning service v4\.2\.0 update/);
   assert.match(svg, /Starts 2026-01-02 05:00 UTC/);
   assert.match(svg, /in 2 hours/);
   assert.match(svg, /Updated 03:00 UTC/);
+  assert.doesNotMatch(svg, /MAINTENANCE · Sample flight-planning/);
+});
+
+test("scheduled maintenance is promoted into one shared, detailed agenda and duplicate feeds are combined", () => {
+  const west: DashboardSource = {
+    ...sample,
+    id: "west",
+    displayName: "West Europe",
+    provider: "atlassian-statuspage",
+    fetchedAt: "2026-01-02T03:00:00.000Z",
+    components: [{ ...sample.components[0], name: "Flight app", status: "maintenance" }],
+    maintenance: [{ id: "maintenance-west", name: "Platform update", status: "scheduled", impact: "maintenance", updatedAt: "2026-01-02T02:30:00.000Z", scheduledFor: "2026-01-02T05:00:00.000Z", scheduledUntil: "2026-01-02T06:00:00.000Z", componentNames: ["Flight app"] }],
+  };
+  const north: DashboardSource = {
+    ...west,
+    id: "north",
+    displayName: "North America",
+    components: [{ ...sample.components[0], name: "Reporting", status: "maintenance" }],
+    maintenance: [{ ...west.maintenance[0], id: "maintenance-north", status: "in_progress", componentNames: ["Reporting"] }],
+  };
+
+  const svg = dashboardSVG([west, north], 1280, 720);
+
+  assert.match(svg, /Scheduled maintenance · 1 event/);
+  assert.equal((svg.match(/Platform update/g) ?? []).length, 1, "a shared event should render once");
+  assert.match(svg, /IN PROGRESS/);
+  assert.match(svg, /Starts 2026-01-02 05:00 UTC/);
+  assert.match(svg, /Ends 2026-01-02 06:00 UTC/);
+  assert.doesNotMatch(svg, /in 2 hours/);
+  assert.match(svg, /Impact: maintenance/);
+  assert.match(svg, /Affected: Flight app, Reporting/);
+  assert.match(svg, /Sources: West Europe, North America/);
+  assert.match(svg, /Updated 02:30 UTC/);
+  assert.doesNotMatch(svg, /MAINTENANCE · Platform update/);
+});
+
+test("the service cards reclaim the agenda space when no maintenance is active", () => {
+  const source: DashboardSource = {
+    ...sample,
+    provider: "atlassian-statuspage",
+    maintenance: [{ id: "maintenance", name: "Platform update", status: "scheduled", impact: "maintenance", updatedAt: null, scheduledFor: "2026-01-02T05:00:00.000Z" }],
+  };
+  const cardY = (svg: string) => Number(svg.match(/<rect x="[\d.]+" y="([\d.]+)" width="[\d.]+" height="[\d.]+" rx="[\d.]+" fill="#142238" stroke="#344a66"/)?.[1]);
+  const withoutMaintenance = dashboardSVG([{ ...source, maintenance: [] }], 1280, 720);
+  const withMaintenance = dashboardSVG([source], 1280, 720);
+
+  assert.doesNotMatch(withoutMaintenance, /Scheduled maintenance/);
+  assert.equal(cardY(withMaintenance), cardY(withoutMaintenance), "source cards remain anchored below the dashboard summary");
+  const cardHeight = (svg: string) => Number(svg.match(/<rect x="[\d.]+" y="[\d.]+" width="[\d.]+" height="([\d.]+)" rx="[\d.]+" fill="#142238" stroke="#344a66"/)?.[1]);
+  assert.ok(cardHeight(withMaintenance) < cardHeight(withoutMaintenance), "only active maintenance reduces source-card height");
+  assert.match(withMaintenance, /Platform update/);
+  assert.ok(Number(withMaintenance.match(/Scheduled maintenance[^<]*<\/text><rect x="[\d.]+" y="([\d.]+)"/)?.[1]) > cardY(withMaintenance));
+  assert.doesNotMatch(withMaintenance, /MAINTENANCE · Platform update/);
+});
+
+test("the agenda gives active work priority, shows the next scheduled work, and counts overflow", () => {
+  const source: DashboardSource = {
+    ...sample,
+    maintenance: [
+      { id: "later", name: "Later maintenance", status: "scheduled", impact: "minor", updatedAt: null, scheduledFor: "2026-01-03T05:00:00.000Z" },
+      { id: "soon", name: "Next maintenance", status: "scheduled", impact: "major", updatedAt: null, scheduledFor: "2026-01-02T05:00:00.000Z" },
+      { id: "active", name: "Active maintenance", status: "in_progress", impact: "major", updatedAt: null, scheduledFor: "2026-01-02T02:00:00.000Z" },
+    ],
+  };
+
+  const svg = dashboardSVG([source], 1280, 720);
+
+  assert.ok(svg.indexOf("Active maintenance") < svg.indexOf("Next maintenance"));
+  assert.match(svg, /Scheduled maintenance · 3 events/);
+  assert.match(svg, /\+ 1 more maintenance event/);
+  assert.doesNotMatch(svg, /Later maintenance/);
+});
+
+test("dense multirow dashboards expand one maintenance card and summarize the rest", () => {
+  const sources = Array.from({ length: 4 }, (_, index) => ({ ...sample, id: `source-${index}` }));
+  sources[0].maintenance = [
+    { id: "active", name: "Active maintenance", status: "in_progress", impact: "major", updatedAt: null, scheduledFor: "2026-01-02T02:00:00.000Z" },
+    { id: "next", name: "Next maintenance", status: "scheduled", impact: "minor", updatedAt: null, scheduledFor: "2026-01-02T05:00:00.000Z" },
+    { id: "later", name: "Later maintenance", status: "scheduled", impact: "minor", updatedAt: null, scheduledFor: "2026-01-03T05:00:00.000Z" },
+  ];
+
+  const svg = dashboardSVG(sources, 1280, 720);
+
+  assert.match(svg, /Scheduled maintenance · 3 events/);
+  assert.match(svg, /Active maintenance/);
+  assert.doesNotMatch(svg, /Next maintenance|Later maintenance/);
+  assert.match(svg, /\+ 2 more maintenance events/);
+});
+
+test("cached maintenance from stale feeds is not shown as current work", () => {
+  const source: DashboardSource = {
+    ...sample,
+    freshness: "stale",
+    maintenance: [{ id: "old", name: "Possibly outdated work", status: "scheduled", impact: "maintenance", updatedAt: null, scheduledFor: "2026-01-02T05:00:00.000Z" }],
+  };
+  assert.doesNotMatch(dashboardSVG([source]), /Scheduled maintenance|Possibly outdated work/);
+});
+
+test("maintenance-free office cards keep service rows compact instead of stretching them through empty space", () => {
+  const source: DashboardSource = {
+    ...sample,
+    provider: "atlassian-statuspage",
+    groups: [{ id: "customer", name: "Customer services", order: 0 }, { id: "shared", name: "Shared services", order: 1 }],
+    components: [
+      { ...sample.components[0], id: "flight", name: "Flight search", groupId: "customer", groupName: "Customer services", groupOrder: 0, componentOrder: 0 },
+      { ...sample.components[0], id: "booking", name: "Booking API", groupId: "customer", groupName: "Customer services", groupOrder: 0, componentOrder: 1 },
+      { ...sample.components[0], id: "web", name: "Public website", groupId: "shared", groupName: "Shared services", groupOrder: 1, componentOrder: 2 },
+      { ...sample.components[0], id: "mail", name: "Notifications", groupId: "shared", groupName: "Shared services", groupOrder: 1, componentOrder: 3 },
+    ],
+    maintenance: [],
+  };
+  const svg = dashboardSVG([source], 1280, 720);
+  const labels = ["Customer services", "Flight search", "Booking API", "Shared services", "Public website", "Notifications"];
+  const baselines = labels.map((label) => Number(svg.match(new RegExp(`<text x="[^\"]+" y="([\\d.]+)"[^>]*>${label}</text>`))?.[1]));
+
+  assert.ok(baselines.every(Number.isFinite));
+  assert.ok(baselines.slice(1).every((baseline, index) => baseline - baselines[index] <= 42), `service row gaps are too large: ${baselines}`);
+  assert.doesNotMatch(svg, /Scheduled maintenance/);
 });
 
 test("healthy Statuspage groups show service names when they fit", () => {
@@ -489,6 +607,23 @@ test("shared event panel escapes names and gives scheduled time a separate visua
   assert.match(panel, /in 2 hours/);
 });
 
+test("maintenance agenda is a reusable, escaped UI component with a visible overflow count", () => {
+  const agenda = svgMaintenanceAgenda({ x: 10, y: 20, width: 900, height: 300, scale: 1, events: [
+    { name: "Upgrade <core>", status: "in_progress", impact: "major", color: "#a78bfa", scheduledFor: "2026-01-02T02:00:00.000Z", scheduledUntil: "2026-01-02T06:00:00.000Z", referenceAt: "2026-01-02T03:00:00.000Z", updatedAt: "2026-01-02T02:30:00.000Z", sources: ["West"], affected: ["API"] },
+  ], hiddenCount: 2 });
+  assert.match(agenda, /Scheduled maintenance · 3 events/);
+  assert.match(agenda, /Upgrade &lt;core&gt;/);
+  assert.match(agenda, /IN PROGRESS/);
+  assert.match(agenda, /started 1 hour ago/);
+  assert.match(agenda, /Starts 2026-01-02 02:00 UTC/);
+  assert.match(agenda, /Ends 2026-01-02 06:00 UTC/);
+  assert.match(agenda, /Impact: major/);
+  assert.match(agenda, /Sources: West/);
+  assert.match(agenda, /Affected: API/);
+  assert.match(agenda, /2 more maintenance events/);
+  assert.doesNotMatch(agenda, /<core>/);
+});
+
 test("freshness badge is a reusable, labelled SVG primitive for every feed state", () => {
   assert.match(svgFreshnessBadge(10, 20, 1, "Data fresh", "#20c997"), /Data fresh/);
   assert.match(svgFreshnessBadge(10, 20, 1, "Feed unavailable", "#ff647c"), /#ff647c/);
@@ -504,6 +639,7 @@ test("SVG color attributes escape caller-provided values", () => {
     svgFreshnessBadge(0, 20, 1, "Data fresh", hostileColor),
     svgServiceRow({ x: 0, y: 12, right: 200, scale: 1, name: "Service", status: "Up", color: hostileColor }),
     svgEventPanel({ x: 0, y: 0, width: 240, height: 58, scale: 1, events: [{ kind: "Incident", name: "Service", status: "investigating", color: hostileColor }] }),
+    svgMaintenanceAgenda({ x: 0, y: 0, width: 400, height: 220, scale: 1, events: [{ name: "Maintenance", status: "scheduled", color: hostileColor, sources: [], affected: [] }] }),
   ];
   for (const fragment of fragments) {
     assert.doesNotMatch(fragment, /onload="|<script\b/i);
