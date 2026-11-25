@@ -137,11 +137,16 @@ maintenance states show their last transition time when heartbeat history
 contains one. Pending, unknown, and stale rows show their latest sample time.
 Group summaries can show a 24-hour check strip from available Kuma heartbeats;
 missing two-hour buckets are shown as unknown, and the strip does not claim an
-uptime percentage. Shared SVG components in
+uptime percentage. Wide, fresh Kuma cards also show a 24-hour strip on each
+monitor row when that monitor has heartbeat history; narrower cards keep the
+group summary to preserve room for service names and status text. Groups with
+the most severe current service state appear first, while ties retain their
+configured order. Shared SVG components in
 `src/api-dashboard/render-components.ts` provide escaped status dots, badges,
 panels, service rows, group summaries, event panels, a named status key, and
 check-history strips, and source-freshness notices. The status key names each
-health color, and history strips show their 24-hour-to-now direction.
+health color, and history strips show their 24-hour-to-now direction and mark
+missing history windows as unknown.
 Incidents have a dedicated high-contrast area on each source card. Fresh
 scheduled maintenance is de-duplicated across sources into a shared agenda
 below the source cards. Its cards show status, countdown, start and end times,
