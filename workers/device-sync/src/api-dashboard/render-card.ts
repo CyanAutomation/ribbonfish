@@ -32,6 +32,7 @@ type CardProps = {
 type CardLayout = CardProps & {
   health: Health;
   compact: boolean;
+  showIndividualHistory: boolean;
   pad: number;
   left: number;
   services: DashboardSource["components"];
@@ -110,12 +111,18 @@ function recentGroupChecks(components: DashboardSource["components"], fetchedAt:
   return buckets;
 }
 
+function recentServiceChecks(component: DashboardSource["components"][number], fetchedAt: string): Array<Health | null> | undefined {
+  if (!component.history?.length) return undefined;
+  return recentGroupChecks([component], fetchedAt);
+}
+
 function addGroupRows(
   rows: ServiceDisplayRow[],
   source: DashboardSource,
   name: string,
   components: DashboardSource["components"],
   groupHeader: boolean,
+  showIndividualHistory: boolean,
 ) {
   if (groupHeader) rows.push({ kind: "group", name });
   if (!components.length) {
@@ -140,7 +147,7 @@ function addGroupRows(
       rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components, source.fetchedAt) });
     }
   } else if (source.provider === "uptime-kuma" && components.length <= 16 && components.some((component) => component.history?.length)) {
-    rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components, source.fetchedAt) });
+    if (!showIndividualHistory) rows.push({ kind: "summary", count: operationalCount, history: recentGroupChecks(components, source.fetchedAt) });
     for (const component of components) rows.push({ kind: "service", component });
   } else if (source.provider === "uptime-kuma" && components.length <= 16) {
     for (const component of components) rows.push({ kind: "service", component });
@@ -153,17 +160,21 @@ function addGroupRows(
   }
 }
 
-function buildServiceRows(source: DashboardSource): ServiceDisplayRow[] {
+function buildServiceRows(source: DashboardSource, showIndividualHistory: boolean): ServiceDisplayRow[] {
   const parentGroups = (source.groups ?? source.components.filter((component) => component.isGroup)
     .map((component) => ({ id: component.id, name: component.name, order: component.groupOrder ?? component.componentOrder ?? 0 })))
     .sort((a, b) => a.order - b.order);
   const services = source.components.filter((component) => !component.isGroup);
   const rows: ServiceDisplayRow[] = [];
   const seenServices = new Set<string>();
-  for (const parent of parentGroups) {
+  const groupedParents = parentGroups.map((parent) => {
     const children = services.filter((component) => component.groupId === parent.id || (!component.groupId && component.groupName === parent.name))
       .sort((a, b) => healthOrder(a.status) - healthOrder(b.status) || (a.componentOrder ?? 0) - (b.componentOrder ?? 0));
-    addGroupRows(rows, source, parent.name, children, true);
+    const priority = children.length ? Math.min(...children.map((component) => healthOrder(component.status))) : healthOrder("operational");
+    return { parent, children, priority };
+  }).sort((a, b) => a.priority - b.priority || a.parent.order - b.parent.order);
+  for (const { parent, children } of groupedParents) {
+    addGroupRows(rows, source, parent.name, children, true, showIndividualHistory);
     for (const component of children) seenServices.add(component.id);
   }
   const remaining = services.filter((component) => !seenServices.has(component.id))
@@ -173,9 +184,12 @@ function buildServiceRows(source: DashboardSource): ServiceDisplayRow[] {
     const name = component.groupName ?? "Services";
     groups.set(name, [...(groups.get(name) ?? []), component]);
   }
-  const orderedGroups = [...groups.entries()];
+  const orderedGroups = [...groups.entries()].sort(([, a], [, b]) => {
+    const priority = (components: typeof remaining) => Math.min(...components.map((component) => healthOrder(component.status)));
+    return priority(a) - priority(b) || (a[0]?.groupOrder ?? 0) - (b[0]?.groupOrder ?? 0);
+  });
   for (const [groupName, components] of orderedGroups) {
-    addGroupRows(rows, source, groupName, components, components.length > 0 && (parentGroups.length > 0 || orderedGroups.length > 1 || groupName !== "Services"));
+    addGroupRows(rows, source, groupName, components, components.length > 0 && (parentGroups.length > 0 || orderedGroups.length > 1 || groupName !== "Services"), showIndividualHistory);
   }
   return rows;
 }
@@ -202,7 +216,8 @@ function buildCardLayout(props: CardProps): CardLayout {
   const left = x + pad;
   const services = source.components.filter((component) => !component.isGroup);
   const hasParentGroups = Boolean(source.groups?.length || source.components.some((component) => component.isGroup));
-  const serviceRows = buildServiceRows(source);
+  const showIndividualHistory = source.provider === "uptime-kuma" && source.freshness === "fresh" && width >= scale * 720;
+  const serviceRows = buildServiceRows(source, showIndividualHistory);
   const events = buildCardEvents(source);
   const visibleEvents = events.slice(0, 3);
   const eventAreaHeight = visibleEvents.length ? s(18 + visibleEvents.length * 54) : 0;
@@ -226,7 +241,7 @@ function buildCardLayout(props: CardProps): CardLayout {
     ? Math.max(8, Math.floor((statusDotX - left - s(14)) / s(10)))
     : Math.max(8, Math.floor((width - pad * 2 - s(16)) / s(17)));
   return { ...props, health, compact, pad, left, services, hasParentGroups, serviceRows, events, visibleEvents,
-    eventAreaHeight, hasDetails, contentY, lineHeight, visibleRows: rows, hiddenServices, hiddenGroups,
+    eventAreaHeight, hasDetails, contentY, lineHeight, visibleRows: rows, hiddenServices, hiddenGroups, showIndividualHistory,
     sourceStatusLabel, statusTextX, statusDotX, titleMaxChars };
 }
 
@@ -291,7 +306,10 @@ function renderServiceComponentRow(component: DashboardSource["components"][numb
   const { source, x, width, scale, pad, left, compact } = layout;
   const { name } = component;
   const { displayStatus, color, statusMeta } = serviceStatusPresentation(component, source, layout);
-  return svgServiceRow({ x: left, y: rowY, right: x + width - pad, scale, name, status: displayStatus, color, statusMeta, compact, showStatus: true });
+  const history = layout.showIndividualHistory
+    ? recentServiceChecks(component, source.fetchedAt)
+    : undefined;
+  return svgServiceRow({ x: left, y: rowY, right: x + width - pad, scale, name, status: displayStatus, color, statusMeta, compact, showStatus: true, history });
 }
 
 function serviceStatusPresentation(

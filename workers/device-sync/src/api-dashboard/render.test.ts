@@ -52,6 +52,25 @@ test("dashboard layout ranks unhealthy sources first without reordering its inpu
   assert.deepEqual(sources, originalSources);
 });
 
+test("groups with unhealthy services render before healthy groups", () => {
+  const grouped: DashboardSource = {
+    ...sample,
+    groups: [
+      { id: "healthy", name: "Healthy systems", order: 0 },
+      { id: "affected", name: "Affected systems", order: 1 },
+    ],
+    components: [
+      { ...sample.components[0], id: "healthy-service", name: "Healthy API", groupId: "healthy", groupName: "Healthy systems", status: "operational" },
+      { ...sample.components[0], id: "affected-service", name: "Affected API", groupId: "affected", groupName: "Affected systems", status: "down" },
+    ],
+  };
+
+  const svg = dashboardSVG([grouped]);
+
+  assert.ok(svg.indexOf("Affected systems") < svg.indexOf("Healthy systems"));
+  assert.ok(svg.indexOf("Affected API") < svg.indexOf("Healthy API"));
+});
+
 test("overflow and active event footer labels occupy separate rows", () => {
   const crowded: DashboardSource = {
     ...sample,
@@ -164,7 +183,7 @@ test("shared SVG primitives escape text and render status panels, dots, and badg
   assert.doesNotMatch(svgServiceRow({ x: 10, y: 30, right: 600, scale: 1, name: "API", status: "Operational", color: "#20c997" }), /120 ms/);
 });
 
-test("healthy slide dashboards keep the overall takeaway, omit the status key, and retain history bars", () => {
+test("healthy slide dashboards keep the overall takeaway and show labelled per-monitor history", () => {
   const historical: DashboardSource = {
     ...sample,
     fetchedAt: "2026-01-02T03:05:00.000Z",
@@ -176,8 +195,7 @@ test("healthy slide dashboards keep the overall takeaway, omit the status key, a
   const svg = dashboardSVG([historical]);
   assert.match(svg, />1\/1 Operational</);
   assert.match(svg, />24h<\/text>/);
-  assert.match(svg, />Now<\/text>/);
-  assert.match(svg, /24-hour history in 12 two-hour windows/);
+  assert.match(svg, /24-hour history for A very long component name/);
   assert.doesNotMatch(svg, /Status key/);
 });
 
@@ -231,7 +249,7 @@ test("small healthy Uptime Kuma groups list routine monitors without response ti
   assert.doesNotMatch(svg, /84 ms|121 ms/);
 });
 
-test("Kuma group summaries show labelled 24-hour history when available", () => {
+test("wide Kuma cards show per-monitor history instead of duplicating the group strip", () => {
   const historical: DashboardSource = {
     ...sample,
     fetchedAt: "2026-01-02T03:05:00.000Z",
@@ -242,7 +260,8 @@ test("Kuma group summaries show labelled 24-hour history when available", () => 
   };
   const svg = dashboardSVG([historical]);
   assert.match(svg, />24h<\/text>/);
-  assert.match(svg, /<title>24-hour history in 12 two-hour windows/);
+  assert.match(svg, /24-hour history for A very long component name/);
+  assert.doesNotMatch(svg, /<title>24-hour history in 12 two-hour windows/);
   assert.match(svg, /#ff647c/);
 });
 
@@ -254,7 +273,7 @@ test("history bars distinguish no data, report sparse coverage, and name each tw
   assert.match(svg, /22–24 hours ago: Down/);
   assert.match(svg, /0–2 hours ago: Operational/);
   assert.match(svg, /2–4 hours ago: No data/);
-  assert.match(svg, /fill="#334155"/);
+  assert.match(svg, /fill="#64748b"/);
 });
 
 test("full coverage and mixed-monitor group history use the worst observed status per window", () => {
@@ -269,6 +288,52 @@ test("full coverage and mixed-monitor group history use the worst observed statu
   const svg = dashboardSVG([mixed]);
   assert.match(svg, /2–4 hours ago: Down/);
   assert.match(svg, /Limited history · 24h · 1\/12 windows with data/);
+});
+
+test("service rows can display their own accessible 24-hour history", () => {
+  const row = svgServiceRow({
+    x: 10,
+    y: 40,
+    right: 620,
+    scale: 1,
+    name: "API",
+    status: "Operational",
+    color: "#20c997",
+    history: ["down", null, ...Array(10).fill("operational")],
+  });
+
+  assert.match(row, /API/);
+  assert.match(row, />24h<\/text>/);
+  assert.match(row, /24-hour history for API/);
+  assert.match(row, /22–24 hours ago: Down/);
+  assert.match(row, /fill="#64748b"/);
+});
+
+test("fresh Kuma monitor rows render their own history without mixing sibling monitors", () => {
+  const source: DashboardSource = {
+    ...sample,
+    fetchedAt: "2026-01-02T03:05:00.000Z",
+    components: [
+      { ...sample.components[0], id: "api", name: "Public API", status: "operational", history: [
+        { at: "2026-01-02T00:00:00.000Z", status: "down" },
+        { at: "2026-01-02T03:00:00.000Z", status: "operational" },
+      ] },
+      { ...sample.components[0], id: "web", name: "Web", status: "operational", history: [
+        { at: "2026-01-02T03:00:00.000Z", status: "operational" },
+      ] },
+    ],
+  };
+
+  const svg = dashboardSVG([source]);
+  const apiHistoryStart = svg.indexOf("24-hour history for Public API");
+  const webHistoryStart = svg.indexOf("24-hour history for Web");
+  assert.ok(apiHistoryStart >= 0, "Public API history boundary should be present");
+  assert.ok(webHistoryStart > apiHistoryStart, "Web history boundary should follow Public API history");
+  const apiHistory = svg.slice(apiHistoryStart, webHistoryStart);
+
+  assert.match(apiHistory, /2–4 hours ago: Down/);
+  assert.match(apiHistory, /0–2 hours ago: Operational/);
+  assert.doesNotMatch(apiHistory, /history for Web/);
 });
 
 test("affected service rows retain a last sample timestamp while healthy rows summarize", () => {

@@ -68,17 +68,25 @@ export function svgProviderIdentity(x: number, y: number, scale: number, provide
   return `<text x="${x}" y="${y}" fill="#d0dbea" font-size="${17 * scale}"><tspan fill="#f5f8fc" font-weight="700">${svgText(provider)}</tspan><tspan> | ${svgText(hostname)}</tspan></text>`;
 }
 
-export function svgServiceRow(input: { x: number; y: number; right: number; scale: number; name: string; status: string; color: string; statusMeta?: string; compact?: boolean; showStatus?: boolean }): string {
-  const { x, y, right, scale, name, status, color, statusMeta, compact = false, showStatus = false } = input;
+export function svgServiceRow(input: { x: number; y: number; right: number; scale: number; name: string; status: string; color: string; statusMeta?: string; compact?: boolean; showStatus?: boolean; history?: Array<string | null> }): string {
+  const { x, y, right, scale, name, status, color, statusMeta, compact = false, showStatus = false, history } = input;
   const statusLabel = status === "Operational" && !showStatus ? "" : [status, statusMeta].filter(Boolean).join(" · ");
   const statusCharWidth = scale * (compact ? 7 : 9.5);
   const statusShare = /^(Stale|Unconfirmed|Last:|Last known:)/.test(statusLabel) ? .66 : .48;
   const maxStatusChars = Math.floor((right - x) * statusShare / statusCharWidth);
   const shownStatus = statusLabel ? truncateText(statusLabel, maxStatusChars) : "";
   const statusWidth = shownStatus.length * statusCharWidth;
-  const maxName = Math.max(8, Math.floor((right - x - scale * 38 - statusWidth) / (scale * 10.5)));
+  const historyWidth = history?.length ? scale * (compact ? 70 : 136) : 0;
+  const historyLabelWidth = historyWidth ? scale * 25 : 0;
+  const historyGap = historyWidth ? scale * 12 : 0;
+  const maxName = Math.max(8, Math.floor((right - x - scale * 38 - statusWidth - historyWidth - historyLabelWidth - historyGap) / (scale * 10.5)));
   let row = svgStatusDot(x + scale * 7, y - scale * 5, scale * 5, color);
   row += `<text x="${x + scale * 22}" y="${y}" fill="#e5edf6" font-size="${scale * (compact ? 14 : 20)}">${svgText(truncateText(name, maxName))}</text>`;
+  if (history?.length) {
+    const historyX = right - (shownStatus ? statusWidth + historyGap : 0) - historyWidth;
+    row += `<text x="${historyX - historyLabelWidth}" y="${y - scale * 3}" fill="#94a3b8" font-size="${scale * (compact ? 9 : 11)}">24h</text>`;
+    row += svgCheckHistory({ x: historyX, y: y - scale * 18, width: historyWidth, height: scale * 16, states: history, scale, subject: name });
+  }
   if (shownStatus) row += `<text x="${right}" y="${y}" text-anchor="end" fill="${svgText(color)}" font-size="${scale * (compact ? 13 : 17)}" font-weight="700">${svgText(shownStatus)}</text>`;
   return row;
 }
@@ -216,8 +224,8 @@ export function svgEventPanel(input: { x: number; y: number; width: number; heig
 }
 
 /** Accessible, compact 24-hour status history shared by source group summaries. */
-export function svgCheckHistory(input: { x: number; y: number; width: number; height: number; states: Array<string | null>; scale?: number }): string {
-  const { x, y, width, height, states, scale = 1 } = input;
+export function svgCheckHistory(input: { x: number; y: number; width: number; height: number; states: Array<string | null>; scale?: number; subject?: string }): string {
+  const { x, y, width, height, states, scale = 1, subject } = input;
   const palette: Record<string, string> = { operational: "#20c997", degraded: "#f6c453", down: "#ff647c", maintenance: "#a78bfa", pending: "#60a5fa", unknown: "#64748b", stale: "#fb923c" };
   if (!states.length) return "";
   const gap = scale * 2;
@@ -228,9 +236,9 @@ export function svgCheckHistory(input: { x: number; y: number; width: number; he
     const to = 24 - index * 2;
     return `${from}–${to} hours ago: ${state === null ? "No data" : labels[state] ?? "Unknown"}`;
   };
-  const historyDescription = `24-hour history in 12 two-hour windows, oldest to newest: ${states.map(describe).join("; ")}`;
+  const historyDescription = `24-hour history${subject ? ` for ${subject}` : ""} in 12 two-hour windows, oldest to newest: ${states.map(describe).join("; ")}`;
   return `<g role="img" aria-label="${svgText(historyDescription)}"><title>${svgText(historyDescription)}</title>${states.map((state, index) => {
     const title = describe(state, index);
-    return `<rect x="${x + index * (cellWidth + gap)}" y="${y}" width="${cellWidth}" height="${height}" rx="${scale * 2}" fill="${state === null ? "#334155" : palette[state] ?? palette.unknown}"><title>${svgText(title)}</title></rect>`;
+    return `<rect x="${x + index * (cellWidth + gap)}" y="${y}" width="${cellWidth}" height="${height}" rx="${scale * 2}" fill="${state === null ? palette.unknown : palette[state] ?? palette.unknown}"><title>${svgText(title)}</title></rect>`;
   }).join("")}</g>`;
 }
