@@ -32,7 +32,7 @@
     "fallow": "^3.41.0",
     "jsdom": "^31.0.1",
     "parse5": "^8.1.1",
-    "postcss": "^8.5.32",
+    "postcss": "^8.5.33",
     "typescript": "^7.0.2",
     "wrangler": "4.162.0",
     "yaml": "^2.9.1"
