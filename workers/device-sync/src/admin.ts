@@ -675,11 +675,11 @@ async function approveEnrollmentRequest(requestID: string, env: WorkerEnvironmen
       "WHERE request_id = ? AND status = 'pending' AND expires_at > ?",
     ).bind(now, actorID, decisionID, requestID, now),
     env.DB.prepare(
-      "INSERT INTO devices (device_id, token_hash, public_key, enabled, created_at, last_seen_at) " +
-      "SELECT r.device_id, NULL, r.public_key, COALESCE(d.enabled, 1), COALESCE(d.created_at, ?), NULL " +
+      "INSERT INTO devices (device_id, token_hash, public_key, enabled, created_at) " +
+      "SELECT r.device_id, NULL, r.public_key, COALESCE(d.enabled, 1), COALESCE(d.created_at, ?) " +
       "FROM enrollment_requests r LEFT JOIN devices d ON d.device_id = r.device_id " +
       "WHERE r.request_id = ? AND r.status = 'approved' AND r.decision_id = ? " +
-      "ON CONFLICT(device_id) DO UPDATE SET token_hash = NULL, public_key = excluded.public_key, last_seen_at = NULL",
+      "ON CONFLICT(device_id) DO UPDATE SET token_hash = NULL, public_key = excluded.public_key",
     ).bind(now, requestID, decisionID),
     auditStatement(env, actorID, "device.enrollment_approved", "device", enrollment.device_id,
       { fingerprint: enrollment.fingerprint ?? undefined }, { onlyWhenPreviousChanged: true }),

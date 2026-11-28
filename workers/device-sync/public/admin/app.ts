@@ -35,7 +35,6 @@ import {
   renderFindingList,
   setPageHeaderMetadata,
   createPlaylistSyncStatus,
-  type RefreshMode,
 } from "./ui-components.ts";
 import { initModuleNavigation } from "./module-navigation.ts";
 import {
@@ -450,7 +449,6 @@ function playlistActionButtons(playlist, deleteAction, layout) {
       successMessage: `Playlist ${playlist.playlist_id} is active. Devices will receive it on their next sync.`,
       context: "playlist",
       showMessage,
-      refresh,
     }));
     actions.push(readinessDisclosure.element, activate);
   }
@@ -478,7 +476,6 @@ function playlistActionButtons(playlist, deleteAction, layout) {
           successMessage: `Playlist ${playlist.playlist_id} was deleted. Uploaded images remain available for reuse.`,
           context: "playlist",
           showMessage,
-          refresh,
         });
       });
       actions.push(actionDisclosure(`More actions for ${playlist.playlist_id}`, [remove]));
@@ -633,7 +630,6 @@ const renderCaptureTargets = createCaptureTargetRenderer({
   getCaptureIntervalOptions: () => intervalDefinitions?.capture.options ?? [],
   filterCaptureTargets,
   showMessage,
-  refresh: () => refresh(),
   showConfirmDialog,
 });
 
@@ -687,8 +683,7 @@ function deviceActionButtons(device, layout) {
         }),
       );
       if (!confirmed) return;
-      showMessage(formatDeviceEnabledMessage(device.device_id, nextEnabled), false, "device");
-      await refresh();
+      showMessage(`${formatDeviceEnabledMessage(device.device_id, nextEnabled)} Click Refresh data to update the device list.`, false, "device");
     } catch (error) { showMessage(error.message, true, "device"); }
   });
 
@@ -707,8 +702,7 @@ function deviceActionButtons(device, layout) {
         () => api(`/admin/api/devices/${encodeURIComponent(device.device_id)}`, { method: "DELETE" }),
       );
       if (!confirmed) return;
-      showMessage(`Device ${device.device_id} was deleted.`, false, "device");
-      await refresh();
+      showMessage(`Device ${device.device_id} was deleted. Click Refresh data to update the device list.`, false, "device");
     } catch (error) { showMessage(error.message, true, "device"); }
   });
   const moreActions = [remove];
@@ -732,7 +726,6 @@ function deviceActionButtons(device, layout) {
         );
         if (!confirmed) return;
         displaySecret(`New token for ${device.device_id}`, result.device_token);
-        await refresh();
       } catch (error) { showMessage(error.message, true, "device"); }
     });
     moreActions.push(rotate);
@@ -897,7 +890,6 @@ function pendingRequestActions(request, layout) {
     successMessage: `Device ${request.device_id} was approved.`,
     context: "device",
     showMessage,
-    refresh,
   }));
 
   const reject = button("Reject", "danger");
@@ -919,7 +911,6 @@ function pendingRequestActions(request, layout) {
     successMessage: `Device request for ${request.device_id} was rejected.`,
     context: "device",
     showMessage,
-    refresh,
   }));
   return createActionGroup([approve, reject], {
     label: `Actions for enrollment request from ${request.device_id}`,
@@ -1030,7 +1021,7 @@ function hasUnsavedApiDashboardChanges() {
     .some((form) => form.dataset.dirty === "true");
 }
 
-const runRefresh = createRefreshCoordinator({
+const refreshActions = createRefreshCoordinator({
   operation: refreshData,
   hasUnsavedChanges: hasUnsavedApiDashboardChanges,
   confirmDiscard: () => {
@@ -1049,10 +1040,6 @@ const runRefresh = createRefreshCoordinator({
     "dashboards",
   ),
 });
-
-function refresh(mode: RefreshMode = "action") {
-  return runRefresh(mode);
-}
 
 async function refreshData(): Promise<boolean> {
   const [overview, enrollmentRequests, captureDecisions, intervals, apiDashboards] = await Promise.all([
@@ -1095,7 +1082,7 @@ async function refreshData(): Promise<boolean> {
     overview.capture_efficiency,
   );
   renderCaptureTargets(browserTargets, captureDecisions);
-  renderApiDashboards(apiDashboards, { showMessage, refresh, showConfirmDialog });
+  renderApiDashboards(apiDashboards, { showMessage, showConfirmDialog });
   renderAvailableSites(overview.capture_targets ?? []);
   renderDevices(overview.devices, overview.active_playlist);
   renderPendingEnrollments(enrollmentRequests);
@@ -1178,14 +1165,13 @@ requiredElement(document, "#capture-site-form").addEventListener("submit", async
     requiredFormControl<HTMLInputElement>(form, "viewport_width").value = "1920";
     requiredFormControl<HTMLInputElement>(form, "viewport_height").value = "1080";
     showInlineMessage(feedback, result.schedule_reviewed
-      ? "This site already exists and its schedule has been reviewed."
-      : "Site added with the default daily schedule. Open Edit and confirm the schedule before adding this site to a playlist.");
+      ? "This site already exists and its schedule has been reviewed. Click Refresh data to reload the site list."
+      : "Site added with the default daily schedule. Open Edit and confirm the schedule before adding this site to a playlist. Click Refresh data to reload the site list.");
     const dialog = requiredElement<HTMLDialogElement>(document, "#capture-site-dialog");
     if (dialog.open) {
       if (typeof dialog.close === "function") dialog.close();
       else dialog.removeAttribute("open");
     }
-    await refresh();
   } catch (error) { showInlineMessage(feedback, error.message, true); }
   finally { finishBusy(); }
 });
@@ -1220,8 +1206,7 @@ apiDashboardCreateForm.addEventListener("submit", async (event) => {
       }),
     });
     form.dataset.dirty = "false";
-    showInlineMessage(feedback, "API dashboard created. Run it now or add it to a playlist to schedule refreshes.");
-    await refresh();
+    showInlineMessage(feedback, "API dashboard created. Run it now or add it to a playlist to schedule refreshes. Click Refresh data to reload the dashboard list.");
   } catch (error) { showInlineMessage(feedback, error.message, true); }
   finally { finishBusy(); }
 });
@@ -1238,14 +1223,10 @@ requiredElement(document, "#reload").addEventListener("click", async (event) => 
   const refreshButton = event.currentTarget as HTMLButtonElement;
   refreshButton.disabled = true;
   try {
-    await refresh("manual");
+    await refreshActions.manual();
   } catch (error) { showMessage(error.message, true); }
   finally { refreshButton.disabled = false; }
 });
-
-setInterval(() => {
-  if (!document.hidden) refresh("background").catch(() => {});
-}, 60_000);
 
 requiredElement(document, "#playlist-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1296,11 +1277,10 @@ requiredElement(document, "#playlist-form").addEventListener("submit", async (ev
     const captureNote = result.capture_count
       ? " Initial screenshots are queued after saving when capacity allows. Recent screenshots and active jobs may be reused."
       : "";
-    showMessage(`New version ${compactIdentifier(result.revision)} is ready to activate.${captureNote}`, false, "playlist");
+    showMessage(`New version ${compactIdentifier(result.revision)} is ready to activate.${captureNote} Click Refresh data to update the playlist list.`, false, "playlist");
     formElement.reset();
     resetPlaylistEditor();
     resetIntervalSelections(formElement);
-    await refresh();
     feedback.textContent = "";
     feedback.hidden = true;
   } catch (error) { showInlineMessage(feedback, error.message, true); }
@@ -1323,5 +1303,5 @@ requiredElement(document, "#hide-secret").addEventListener("click", () => {
   requiredElement(document, "#secret-panel").hidden = true;
 });
 
-refresh("initial")
+refreshActions.initial()
   .catch((error) => showMessage(error.message, true));

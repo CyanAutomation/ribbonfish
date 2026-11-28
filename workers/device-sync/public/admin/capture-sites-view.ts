@@ -19,7 +19,6 @@ type CaptureTargetRendererOptions = {
   getCaptureIntervalOptions: () => Array<{ label: string; value: number }>;
   filterCaptureTargets: () => void;
   showMessage: (message: string, isError?: boolean, section?: string) => void;
-  refresh: () => Promise<unknown>;
   showConfirmDialog: (options: any) => Promise<boolean>;
 };
 
@@ -216,11 +215,10 @@ export function createCaptureTargetRenderer(options: CaptureTargetRendererOption
         saved.push(update.message);
       }
       const message = saved.includes("screenshot schedule") && scheduleWasUnreviewed
-        ? "Screenshot schedule reviewed. This site can now be added to playlists."
-        : `Updated ${saved.join(", ")}.`;
+        ? "Screenshot schedule reviewed. This site can now be added to playlists. Click Refresh data to reload the site list."
+        : `Updated ${saved.join(", ")}. Click Refresh data to reload the site list.`;
       options.showMessage(message, false, "sites");
       closeDialog();
-      await options.refresh();
     } catch (error) {
       options.showMessage(errorMessage(error), true, "sites");
     } finally {
@@ -407,8 +405,7 @@ function createSiteActions(target: any, decision: any, options: CaptureTargetRen
         method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
       });
       const status = result.status === "running" ? "has started" : "is queued";
-      options.showMessage(`Screenshot job ${compactIdentifier(result.job_id)} ${status}.`, false, "sites");
-      await options.refresh();
+      options.showMessage(`Screenshot job ${compactIdentifier(result.job_id)} ${status}. Refresh data to view its latest status.`, false, "sites");
     } catch (error) { options.showMessage(errorMessage(error), true, "sites"); }
     finally { capture.disabled = false; }
   });
@@ -431,8 +428,7 @@ function createSiteActions(target: any, decision: any, options: CaptureTargetRen
     try {
       const confirmed = await confirmSiteRemoval(target, options, description);
       if (!confirmed) return;
-      options.showMessage(`${target.display_url} was removed. Future screenshots have stopped.`, false, "sites");
-      await options.refresh();
+      options.showMessage(`${target.display_url} was removed. Future screenshots have stopped. Click Refresh data to reload the site list.`, false, "sites");
     } catch (error) { options.showMessage(errorMessage(error), true, "sites"); }
   });
   menu.append(remove);
@@ -464,8 +460,7 @@ function createScreenshotQualityReviewDisclosure(target: any, options: CaptureTa
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ job_id: latest.job_id, quality: label }),
       });
-      options.showMessage("Screenshot completeness review saved.", false, "sites");
-      await options.refresh();
+      options.showMessage("Screenshot completeness review saved. Click Refresh data to view the updated review.", false, "sites");
     },
   });
   const content = node("div", undefined, "screenshot-quality-review-disclosure__content");
@@ -530,8 +525,7 @@ function createCaptureWorkbenchDisclosure(target: any, decision: any, options: C
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ due_at: parsed.due_at }),
         });
-        options.showMessage("One scheduled screenshot skip is confirmed.", false, "sites");
-        await options.refresh();
+        options.showMessage("One scheduled screenshot skip is confirmed. Click Refresh data to view the updated schedule.", false, "sites");
         return;
       }
     } catch (error) {

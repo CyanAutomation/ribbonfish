@@ -14,7 +14,7 @@ class FakeDatabase {
       token_hash: "do-not-return-this",
       enabled: 1,
       created_at: 100,
-      last_seen_at: 200,
+      health_received_at: 200,
     }]]);
     this.enrollments = [];
     this.enrollmentRequests = [];
@@ -95,8 +95,8 @@ class FakeDatabase {
             .map(({ revision }) => ({ revision })) };
         }
         if (sql.includes("FROM devices")) {
-          return { results: [...database.devices.values()].map(({ device_id, enabled, created_at, last_seen_at, public_key }) =>
-            ({ device_id, enabled, created_at, last_seen_at, auth_type: public_key ? "key" : "token" })) };
+          return { results: [...database.devices.values()].map(({ device_id, enabled, created_at, health_received_at, public_key }) =>
+            ({ device_id, enabled, created_at, health_received_at, auth_type: public_key ? "key" : "token" })) };
         }
         if (sql.includes("FROM playlists p")) {
           const counts = new Map();
@@ -584,6 +584,8 @@ test("overview omits device token hashes and reports missing active assets", asy
   assert.equal(JSON.stringify(body).includes("do-not-return-this"), false);
   assert.equal(body.devices[0].device_id, "pi-office");
   assert.equal(body.devices[0].auth_type, "token");
+  assert.equal(body.devices[0].last_seen_at, 200, "last seen now comes from the latest health report");
+  assert.equal(body.devices[0].health.received_at, 200);
   assert.equal(body.environment, "development");
   assert.equal(body.active_playlist.effective_revision, body.active_playlist.revision);
   assert.ok(Number.isSafeInteger(body.generated_at));

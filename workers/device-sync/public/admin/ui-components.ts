@@ -117,8 +117,6 @@ export interface LoadingIndicatorComponent {
   isLoading(): boolean;
 }
 
-export type RefreshMode = "initial" | "manual" | "background" | "action";
-
 export interface RefreshCoordinatorOptions<T> {
   operation(): Promise<T>;
   hasUnsavedChanges(): boolean;
@@ -128,26 +126,34 @@ export interface RefreshCoordinatorOptions<T> {
   onSkipped?(): void;
 }
 
-/** Coordinate refresh prompts, quiet polling, shared in-flight work, and explicit busy feedback. */
-export function createRefreshCoordinator<T>(options: RefreshCoordinatorOptions<T>): (mode?: RefreshMode) => Promise<T | undefined> {
+export interface RefreshActions<T> {
+  initial(): Promise<T | undefined>;
+  manual(): Promise<T | undefined>;
+}
+
+/** Coordinate the one initial load and explicit refreshes, with shared in-flight work and busy feedback. */
+export function createRefreshCoordinator<T>(options: RefreshCoordinatorOptions<T>): RefreshActions<T> {
   const operation = createSingleFlight(async () => {
     const result = await options.operation();
     if (options.isSkipped?.(result)) options.onSkipped?.();
     return result;
   });
-  return async (mode: RefreshMode = "action") => {
+  const run = async (mode: "initial" | "manual") => {
     if (options.hasUnsavedChanges()) {
-      if (mode === "background" || mode === "initial") return undefined;
+      if (mode === "initial") return undefined;
       if (!options.confirmDiscard()) return undefined;
     }
 
-    if (mode !== "initial" && mode !== "manual") return operation();
     const finishLoading = options.loading.begin(mode === "initial" ? "Loading Ribbonfish…" : "Refreshing Ribbonfish…");
     try {
       return await operation();
     } finally {
       finishLoading();
     }
+  };
+  return {
+    initial: () => run("initial"),
+    manual: () => run("manual"),
   };
 }
 

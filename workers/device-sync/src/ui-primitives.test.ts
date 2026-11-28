@@ -230,9 +230,9 @@ test("status notices expose polite informational feedback without an error or su
   const dom = new JSDOM("<!doctype html><html><body><div class='alert alert--success' hidden><span data-feedback-text></span></div></body></html>");
   const notice = requiredMatch<HTMLElement>(dom.window.document, ".alert");
   const text = requiredMatch<HTMLElement>(notice, "[data-feedback-text]");
-  setStatusNotice(notice, text, "Automatic refresh paused to preserve your unsaved dashboard edits.", "info");
+  setStatusNotice(notice, text, "Refresh paused to preserve your unsaved dashboard edits.", "info");
 
-  assert.equal(text.textContent, "Automatic refresh paused to preserve your unsaved dashboard edits.");
+  assert.equal(text.textContent, "Refresh paused to preserve your unsaved dashboard edits.");
   assert.equal(notice.hidden, false);
   assert.equal(notice.getAttribute("role"), "status");
   assert.equal(notice.getAttribute("aria-live"), "polite");
@@ -242,7 +242,7 @@ test("status notices expose polite informational feedback without an error or su
   dom.window.close();
 });
 
-test("refresh coordinator keeps background work quiet and protects unsaved forms", async () => {
+test("refresh coordinator exposes only initial and manual refresh actions", async () => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>");
   const loading = createLoadingIndicator({ ownerDocument: dom.window.document });
   let dirty = true;
@@ -255,18 +255,18 @@ test("refresh coordinator keeps background work quiet and protects unsaved forms
     loading,
   });
 
-  await refresh("background");
-  await refresh("initial");
+  assert.deepEqual(Object.keys(refresh).sort(), ["initial", "manual"]);
+  await refresh.initial();
   assert.equal(loads, 0);
   assert.equal(confirmations, 0);
   assert.equal(loading.element.hidden, true);
-  await refresh("action");
+  await refresh.manual();
   assert.equal(confirmations, 1);
   assert.equal(loads, 0, "a declined discard does not refresh");
   dom.window.close();
 });
 
-test("refresh coordinator deduplicates background/manual work and always clears busy state", async () => {
+test("refresh coordinator deduplicates initial/manual work and always clears busy state", async () => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>");
   const loading = createLoadingIndicator({ ownerDocument: dom.window.document });
   let calls = 0;
@@ -281,19 +281,19 @@ test("refresh coordinator deduplicates background/manual work and always clears 
     loading,
   });
 
-  const background = refresh("background");
+  const initial = refresh.initial();
   await Promise.resolve();
-  const manual = refresh("manual");
+  const manual = refresh.manual();
   assert.equal(calls, 1);
   assert.equal(loading.element.hidden, false);
   assert.equal(loading.element.querySelector(".loading-indicator__label")?.textContent, "Refreshing Ribbonfish…");
   rejectLoad?.(new Error("network unavailable"));
-  await assert.rejects(Promise.all([background, manual]), /network unavailable/);
+  await assert.rejects(Promise.all([initial, manual]), /network unavailable/);
   assert.equal(loading.element.hidden, true);
   dom.window.close();
 });
 
-test("refresh coordinator reports one mid-flight skip and later quiet polls stay silent", async () => {
+test("refresh coordinator reports a refresh skipped to protect unsaved forms", async () => {
   const dom = new JSDOM("<!doctype html><html><body></body></html>");
   let dirty = false;
   let calls = 0;
@@ -307,8 +307,7 @@ test("refresh coordinator reports one mid-flight skip and later quiet polls stay
     onSkipped: () => { notices += 1; },
   });
 
-  await refresh("background");
-  await refresh("background");
+  await refresh.manual();
   assert.equal(calls, 1);
   assert.equal(notices, 1);
   dom.window.close();

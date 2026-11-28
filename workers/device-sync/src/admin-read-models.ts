@@ -68,7 +68,7 @@ export async function readOverview(env: WorkerEnvironment) {
   const windowStart = now - 30 * 24 * 60 * 60 * 1000;
   const [devices, playlists, active, audit, captureTargets, captureRuntimeAverages, integrityIssues, captureJobs, captureChangeHistory, captureHistory, captureDurationSummaries, captureUsage, captureDecisions, captureQualityReviews, jevCandidateQualityReviews] = await Promise.all([
     env.DB.prepare(
-      "SELECT d.device_id, d.enabled, d.created_at, d.last_seen_at, " +
+      "SELECT d.device_id, d.enabled, d.created_at, " +
       "CASE WHEN d.public_key IS NULL THEN 'token' ELSE 'key' END AS auth_type, " +
       "h.received_at AS health_received_at, h.reported_state, h.agent_version, h.sync_status, " +
       "h.applied_playlist_id, h.applied_revision, h.report_json " +
@@ -486,7 +486,7 @@ function summarizeDeviceHealth(device: SqlRow, now: number) {
     device_id: device.device_id,
     enabled: device.enabled,
     created_at: device.created_at,
-    last_seen_at: device.last_seen_at,
+    last_seen_at: device.health_received_at ?? null,
     auth_type: device.auth_type,
     health: {
       status: device.enabled ? deriveDeviceHealth(report, device.health_received_at, now) : "disabled",

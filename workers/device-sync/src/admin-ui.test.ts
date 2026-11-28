@@ -82,6 +82,15 @@ test("management page exposes accessible fleet and playlist sections", async () 
   }
 });
 
+test("management data refreshes on load and through the refresh button only", async () => {
+  const app = await readFile(new URL("../public/admin/app.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(app, /\bsetInterval\s*\(/, "the admin app has no recurring refresh timer");
+  assert.equal((app.match(/refreshActions\.(?:initial|manual)\(\)/g) ?? []).length, 2,
+    "the app starts one load refresh and wires one refresh-button action");
+  assert.doesNotMatch(app, /(?:options|callbacks)\.refresh\s*\(/,
+    "successful mutations do not reload the dashboard automatically");
+});
+
 test("transient notices replace, pause, resume, and clear their expiry", () => {
   let nextID = 0;
   const timers = new Map();

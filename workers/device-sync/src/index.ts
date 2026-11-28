@@ -44,7 +44,6 @@ type PlaylistReadResult =
 
 const MAX_TELEMETRY_BYTES = 8 << 10;
 const MAX_ASSET_BYTES = 32 << 20;
-const LAST_SEEN_WRITE_INTERVAL_MS = 5 * 60 * 1000;
 
 const worker = {
   fetch(request, env, ctx) {
@@ -95,8 +94,8 @@ const fetchRoutes = new Map<string, FetchRoute>([
   ["/v1/enroll", { method: "POST", handle: (request, env) => enroll(request, env) }],
   ["/v1/enrollment-requests", { method: "POST", handle: (request, env) => requestDeviceEnrollment(request, env) }],
   ["/v1/telemetry", { method: "POST", handle: (request, env) => receiveDeviceTelemetry(request, env) }],
-  ["/v2/playlist", { method: "GET", handle: (request, env, ctx) => readPlaylist(request, env, ctx, 2) }],
-  ["/v3/playlist", { method: "GET", handle: (request, env, ctx) => readPlaylist(request, env, ctx, 3) }],
+  ["/v2/playlist", { method: "GET", handle: (request, env) => readPlaylist(request, env, 2) }],
+  ["/v3/playlist", { method: "GET", handle: (request, env) => readPlaylist(request, env, 3) }],
 ]);
 
 export async function fetchHandler(request: Request, env: WorkerEnvironment, ctx?: WorkerExecutionContext) {
@@ -139,10 +138,9 @@ async function receiveDeviceTelemetry(request: Request, env: WorkerEnvironment):
   return jsonResponse(await persistDeviceHealth(env.DB, deviceID, report, Date.now()));
 }
 
-async function readPlaylist(request: Request, env: WorkerEnvironment, ctx: WorkerExecutionContext | undefined, version: 2 | 3): Promise<Response> {
+async function readPlaylist(request: Request, env: WorkerEnvironment, version: 2 | 3): Promise<Response> {
   const deviceID = request.headers.get("X-Ribbonfish-Device-ID") ?? "";
   await authenticate(request, env, deviceID);
-  await updateLastSeen(env, deviceID, ctx);
   const { playlist, etag, notModified } = await readActivePlaylist(env, request.headers.get("If-None-Match"), version);
   if (notModified) return new Response(null, { status: 304, headers: privateHeaders({ ETag: etag }) });
   if (!playlist) throw new HTTPError(502, "active playlist was not available");
@@ -183,20 +181,6 @@ async function readAssignedAsset(request: Request, env: WorkerEnvironment, diges
   });
   if (object.httpEtag) headers.set("ETag", object.httpEtag);
   return new Response(object.body, { status: 200, headers });
-}
-
-function updateLastSeen(env: WorkerEnvironment, deviceID: string, ctx?: WorkerExecutionContext) {
-  const now = Date.now();
-  const update = Promise.resolve()
-    .then(() => env.DB.prepare(
-      "UPDATE devices SET last_seen_at = ? WHERE device_id = ? AND enabled = 1 AND (last_seen_at IS NULL OR last_seen_at <= ?)",
-    ).bind(now, deviceID, now - LAST_SEEN_WRITE_INTERVAL_MS).run())
-    .catch(() => {});
-  if (ctx?.waitUntil) {
-    ctx.waitUntil(update);
-    return;
-  }
-  return update;
 }
 
 async function healthCheck(env: WorkerEnvironment) {

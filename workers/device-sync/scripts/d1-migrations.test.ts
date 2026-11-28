@@ -222,3 +222,45 @@ test("screenshot quality review migration binds review labels to retained captur
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   assert.match(result.stdout, /Resource location: local/);
 });
+
+test("device health timestamp migration removes the poll-only last-seen column and preserves devices", async (t) => {
+  const persistTo = await mkdtemp(join(tmpdir(), "ribbonfish-local-d1-"));
+  t.after(() => rm(persistTo, { recursive: true, force: true }));
+  const migration = await readFile(join(packageRoot, "migrations/0023_device_health_last_seen.sql"), "utf8");
+  const fixture = join(persistTo, "device-health-last-seen.sql");
+  await writeFile(fixture, `
+    CREATE TABLE devices (
+      device_id TEXT PRIMARY KEY,
+      token_hash TEXT,
+      public_key TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      last_seen_at INTEGER,
+      CHECK ((token_hash IS NOT NULL AND public_key IS NULL) OR (token_hash IS NULL AND public_key IS NOT NULL))
+    );
+    INSERT INTO devices (device_id, token_hash, enabled, created_at, last_seen_at)
+      VALUES ('pi-office', 'token-hash', 1, 100, 200);
+    ${migration}
+    CREATE TABLE device_health_migration_assertions (passed INTEGER NOT NULL CHECK (passed = 1));
+    INSERT INTO device_health_migration_assertions
+    SELECT CASE WHEN
+      NOT EXISTS (SELECT 1 FROM pragma_table_info('devices') WHERE name = 'last_seen_at') AND
+      (SELECT token_hash FROM devices WHERE device_id = 'pi-office') = 'token-hash' AND
+      (SELECT created_at FROM devices WHERE device_id = 'pi-office') = 100
+    THEN 1 ELSE 0 END;
+  `);
+
+  const result = spawnSync(process.execPath, [
+    wrangler, "d1", "execute", "ribbonfish-devices", "--local", "--persist-to", persistTo,
+    "--config", "wrangler.management.toml", "--file", fixture,
+  ], {
+    cwd: packageRoot,
+    env: { ...process.env, CI: "1" },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /Resource location: local/);
+});

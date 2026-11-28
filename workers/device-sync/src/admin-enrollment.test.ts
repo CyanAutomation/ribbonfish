@@ -23,7 +23,7 @@ class EnrollmentAdminDatabase {
     }]]);
     this.devices = new Map([[
       "pi-office",
-      { device_id: "pi-office", token_hash: "legacy-hash", public_key: null, enabled: 1, created_at: 50, last_seen_at: 90 },
+      { device_id: "pi-office", token_hash: "legacy-hash", public_key: null, enabled: 1, created_at: 50 },
     ]]);
     this.audit = [];
   }
@@ -96,7 +96,6 @@ class EnrollmentAdminDatabase {
             public_key: key,
             enabled: current?.enabled ?? 1,
             created_at: current?.created_at ?? createdAt,
-            last_seen_at: null,
           });
           changes = 1;
         }
@@ -231,7 +230,7 @@ test("console refuses to approve an expired request or a public key already assi
 
   const duplicateEnv = environment();
   duplicateEnv.DB.devices.set("pi-spare", {
-    device_id: "pi-spare", token_hash: null, public_key: publicKey, enabled: 1, created_at: 75, last_seen_at: null,
+    device_id: "pi-spare", token_hash: null, public_key: publicKey, enabled: 1, created_at: 75,
   });
   const duplicateResponse = await handleAdminRequest(new Request(
     `https://worker.test/admin/api/enrollment-requests/${requestID}/approve`,
@@ -247,7 +246,7 @@ test("approval SQL transaction replaces a legacy token with a key and records it
   try {
     sqlite.exec(await readFile(new URL("../schema.sql", import.meta.url), "utf8"));
     sqlite.prepare(
-      "INSERT INTO devices (device_id, token_hash, public_key, enabled, created_at, last_seen_at) VALUES (?, ?, NULL, 1, 50, 90)",
+      "INSERT INTO devices (device_id, token_hash, public_key, enabled, created_at) VALUES (?, ?, NULL, 1, 50)",
     ).run("pi-office", "legacy-hash");
     sqlite.prepare(
       "INSERT INTO enrollment_requests (request_id, device_id, public_key, fingerprint, created_at, last_seen_at, expires_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
@@ -263,7 +262,7 @@ test("approval SQL transaction replaces a legacy token with a key and records it
     assert.equal(device.public_key, publicKey);
     assert.equal(device.token_hash, null);
     assert.equal(device.created_at, 50);
-    assert.equal(device.last_seen_at, null);
+    assert.equal(Object.hasOwn(device, "last_seen_at"), false);
     assert.equal(sqlite.prepare("SELECT event_type FROM audit_events").get().event_type, "device.enrollment_approved");
   } finally {
     sqlite.close();
@@ -282,7 +281,7 @@ test("approved physical identity can immediately read the active playlist with i
     const fingerprint = requestID.slice(0, 32).match(/.{4}/g).join("-");
     const digest = "b".repeat(64);
     sqlite.prepare(
-      "INSERT INTO devices (device_id, token_hash, public_key, enabled, created_at, last_seen_at) VALUES (?, ?, NULL, 1, 50, 90)",
+      "INSERT INTO devices (device_id, token_hash, public_key, enabled, created_at) VALUES (?, ?, NULL, 1, 50)",
     ).run("pi-office", "old-token-hash");
     sqlite.prepare(
       "INSERT INTO enrollment_requests (request_id, device_id, public_key, fingerprint, created_at, last_seen_at, expires_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
