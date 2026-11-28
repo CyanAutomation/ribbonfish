@@ -3,64 +3,40 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runConfirmedAction } from "../public/admin/confirmed-action.ts";
 
-test("a confirmed action reports success and refreshes after it completes", async () => {
+test("a confirmed action reports success without reloading dashboard data", async () => {
   const messages: Array<[string, boolean?, string?]> = [];
-  let refreshed = false;
+  let performed = false;
   await runConfirmedAction({
-    confirmAndPerform: async () => true,
+    confirmAndPerform: async () => { performed = true; return true; },
     successMessage: "Playlist activated",
     context: "playlist",
     showMessage: (...message) => messages.push(message),
-    refresh: async () => { refreshed = true; },
   });
 
-  assert.deepEqual(messages, [["Playlist activated", false, "playlist"]]);
-  assert.equal(refreshed, true);
+  assert.deepEqual(messages, [["Playlist activated Click Refresh data to load the latest status.", false, "playlist"]]);
+  assert.equal(performed, true);
 });
 
-test("a declined action shows no result and does not refresh", async () => {
+test("a declined action shows no result", async () => {
   const messages: Array<[string, boolean?, string?]> = [];
-  let refreshed = false;
   await runConfirmedAction({
     confirmAndPerform: async () => false,
     successMessage: "Playlist activated",
     context: "playlist",
     showMessage: (...message) => messages.push(message),
-    refresh: async () => { refreshed = true; },
   });
 
   assert.deepEqual(messages, []);
-  assert.equal(refreshed, false);
 });
 
-test("a failed action reports its error and does not refresh", async () => {
+test("a failed action reports its error", async () => {
   const messages: Array<[string, boolean?, string?]> = [];
-  let refreshed = false;
   await runConfirmedAction({
     confirmAndPerform: async () => { throw new Error("request failed"); },
     successMessage: "Playlist activated",
     context: "playlist",
     showMessage: (...message) => messages.push(message),
-    refresh: async () => { refreshed = true; },
   });
 
   assert.deepEqual(messages, [["request failed", true, "playlist"]]);
-  assert.equal(refreshed, false);
-});
-
-test("a failed refresh reports the completed action and refresh error together", async () => {
-  const messages: Array<[string, boolean?, string?]> = [];
-  await runConfirmedAction({
-    confirmAndPerform: async () => true,
-    successMessage: "Playlist activated",
-    context: "playlist",
-    showMessage: (...message) => messages.push(message),
-    refresh: async () => { throw new Error("refresh failed"); },
-  });
-
-  assert.deepEqual(messages, [[
-    "Playlist activated, but the dashboard could not refresh: refresh failed",
-    true,
-    "playlist",
-  ]]);
 });

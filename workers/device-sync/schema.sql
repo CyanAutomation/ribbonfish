@@ -4,7 +4,6 @@ CREATE TABLE IF NOT EXISTS devices (
   public_key TEXT,
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
-  last_seen_at INTEGER,
   CHECK ((token_hash IS NOT NULL AND public_key IS NULL) OR (token_hash IS NULL AND public_key IS NOT NULL))
 );
 

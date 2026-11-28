@@ -44,13 +44,11 @@ test("capture workbench actions call the advisory route, then confirm an eligibl
 
   try {
     let confirmations = 0;
-    let refreshes = 0;
     const messages: string[] = [];
     const render = createCaptureTargetRenderer({
       getCaptureIntervalOptions: () => [{ label: "5 minutes", value: 300 }],
       filterCaptureTargets: () => {},
       showMessage: (message) => { messages.push(message); },
-      refresh: async () => { refreshes += 1; },
       showConfirmDialog: async () => { confirmations += 1; return true; },
     });
     render([{
@@ -80,7 +78,6 @@ test("capture workbench actions call the advisory route, then confirm an eligibl
     assert.equal(confirmations, 1);
     assert.equal(requests[1]?.url, "/admin/api/captures/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/skip-once");
     assert.deepEqual(requests[1]?.body, { due_at: dueAt });
-    assert.equal(refreshes, 1);
     assert.match(messages.join(" "), /schedule is unchanged|skip is confirmed/i);
   } finally {
     globalThis.fetch = previousFetch;

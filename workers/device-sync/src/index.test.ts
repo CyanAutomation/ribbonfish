@@ -21,7 +21,6 @@ class FakeDatabase {
       device_id: "pi-office",
       token_hash: "",
       enabled: 1,
-      last_seen_at: null,
     };
     this.enrollment = { code_hash: "", expires_at: Date.now() + 60_000, consumed_at: null };
     this.insertedDevice = null;
@@ -30,12 +29,13 @@ class FakeDatabase {
     this.playlists = new Map([[`${playlist.id}:${playlist.revision}`, playlist]]);
     this.captureItems = [];
     this.activePlaylist = { playlist_id: playlist.id, revision: playlist.revision };
-    this.lastSeenWrites = 0;
+    this.statements = [];
     this.playlistListReads = 0;
   }
 
   prepare(sql) {
     const database = this;
+    database.statements.push(sql);
     let values = [];
     const statement = {
       bind(...boundValues) { values = boundValues; return statement; },
@@ -87,15 +87,6 @@ class FakeDatabase {
         return { results: value?.assets ?? [] };
       },
       async run() {
-        if (sql.startsWith("UPDATE devices SET last_seen_at")) {
-          if (database.lastSeenUpdateHandler) return database.lastSeenUpdateHandler();
-          database.lastSeenWrites++;
-          if (database.device.last_seen_at === null || database.device.last_seen_at <= values[2]) {
-            database.device.last_seen_at = values[0];
-            return { meta: { changes: 1 } };
-          }
-          return { meta: { changes: 0 } };
-        }
         return { meta: { changes: 0 } };
       },
       get values() { return values; },
@@ -169,13 +160,12 @@ test("version 2 playlist endpoint authenticates the device and returns a revisio
   assert.equal(response.headers.get("etag"), '"revision-1"');
   assert.equal(response.headers.get("cache-control"), "private, no-store, no-transform");
   assert.deepEqual(await response.json(), playlist);
-  assert.equal(Number.isSafeInteger(db.device.last_seen_at), true, "playlist polling updates device telemetry");
 
   const unchanged = await fetchHandler(request({ "If-None-Match": '"revision-1"' }), env);
   assert.equal(unchanged.status, 304);
   assert.equal(db.playlistListReads, 1, "a matching ETag skips playlist asset reads");
-  assert.equal(db.lastSeenWrites, 2, "polls attempt telemetry updates, while D1 applies the write interval");
-  assert.equal(db.device.last_seen_at <= Date.now(), true);
+  assert.equal(db.statements.some((sql) => sql.startsWith("UPDATE devices SET last_seen_at")), false,
+    "playlist polling does not write last-seen telemetry");
 });
 
 test("v3 capture playlist assets include their UTC timestamp and revise when an unchanged image is recaptured", async () => {
@@ -266,42 +256,6 @@ test("v2 canonical revision changes when an unchanged capture is recaptured", as
   assert.equal(second.status, 200);
   assert.notEqual(second.headers.get("etag"), first.headers.get("etag"));
   assert.deepEqual((await second.json()).assets[0], { sha256: digest, size: 4 });
-});
-
-test("conditional playlist reads throttle last-seen writes in D1", async () => {
-  const { env, db } = testEnvironment();
-  await authorize(db);
-  const request = new Request("https://worker.test/v2/playlist", {
-    headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office" },
-  });
-  await fetchHandler(request, env);
-  const firstSeen = db.device.last_seen_at;
-  await fetchHandler(request, env);
-  assert.equal(db.device.last_seen_at, firstSeen, "a second poll inside the throttle window does not rewrite telemetry");
-});
-
-test("last-seen telemetry runs in the background and cannot block playlist delivery", { timeout: 5000 }, async () => {
-  const { env, db } = testEnvironment();
-  await authorize(db);
-  let rejectUpdate;
-  db.lastSeenUpdateHandler = () => new Promise((_, reject) => { rejectUpdate = reject; });
-  let telemetryPromise;
-  const context = { waitUntil(promise) { telemetryPromise = promise; } };
-  const request = new Request("https://worker.test/v2/playlist", {
-    headers: { Authorization: `Bearer ${token}`, "X-Ribbonfish-Device-ID": "pi-office" },
-  });
-  const response = await fetchHandler(request, env, context);
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
-    version: 2,
-    revision: "revision-1",
-    id: "welcome",
-    rotation_interval: "30s",
-    assets: [{ sha256: "a".repeat(64), size: 4 }],
-  });
-  assert.equal(typeof telemetryPromise, "object");
-  rejectUpdate(new Error("simulated D1 failure"));
-  await telemetryPromise;
 });
 
 test("health endpoint is healthy only when active playlist assets are present", async () => {

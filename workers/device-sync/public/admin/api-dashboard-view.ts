@@ -22,7 +22,6 @@ type Dashboard = Record<string, any>;
 type ConfirmOptions = { title: string; description: string; confirmLabel: string; destructive?: boolean };
 type ApiDashboardViewCallbacks = {
   showMessage: (message: string, isError?: boolean, context?: string) => void;
-  refresh: () => unknown;
   showConfirmDialog: (options: ConfirmOptions) => Promise<boolean>;
 };
 
@@ -294,8 +293,7 @@ async function runDashboardNow(run: HTMLButtonElement, dashboard: Dashboard, cal
   run.disabled = true;
   try {
     await api(`/admin/api/captures/${encodeURIComponent(dashboard.capture_id)}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-    callbacks.showMessage("API dashboard refresh queued.", false, "dashboards");
-    await callbacks.refresh();
+    callbacks.showMessage("API dashboard refresh queued. Click Refresh data to view its latest status.", false, "dashboards");
   } catch (error) {
     callbacks.showMessage((error as Error).message, true, "dashboards");
   } finally {
@@ -308,7 +306,7 @@ async function toggleDashboard(dashboard: Dashboard, callbacks: ApiDashboardView
     await api(`/admin/api/api-dashboards/${encodeURIComponent(dashboard.capture_id)}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !dashboard.enabled }),
     });
-    await callbacks.refresh();
+    callbacks.showMessage(`API dashboard ${dashboard.enabled ? "disabled" : "enabled"}. Click Refresh data to update the list.`, false, "dashboards");
   } catch (error) {
     callbacks.showMessage((error as Error).message, true, "dashboards");
   }
@@ -316,12 +314,12 @@ async function toggleDashboard(dashboard: Dashboard, callbacks: ApiDashboardView
 
 async function removeDashboard(dashboard: Dashboard, callbacks: ApiDashboardViewCallbacks): Promise<void> {
   try {
-    await confirmBeforeAction(
+    const confirmed = await confirmBeforeAction(
       (text) => callbacks.showConfirmDialog({ title: "Remove API dashboard?", description: text, confirmLabel: "Remove dashboard", destructive: true }),
       `Remove ${dashboard.name}? Future API captures will stop and existing playlist revisions keep their assigned image.`,
       () => api(`/admin/api/captures/${encodeURIComponent(dashboard.capture_id)}`, { method: "DELETE" }),
     );
-    await callbacks.refresh();
+    if (confirmed) callbacks.showMessage("API dashboard removed. Click Refresh data to update the list.", false, "dashboards");
   } catch (error) {
     callbacks.showMessage((error as Error).message, true, "dashboards");
   }
@@ -430,8 +428,7 @@ async function saveDashboardSettings(
       body: JSON.stringify({ name: nameInput.value, ...parsed, capture_interval_seconds: Number(intervalInput.value) }),
     });
     form.dataset.dirty = "false";
-    callbacks.showMessage("API dashboard configuration saved.", false, "dashboards");
-    await callbacks.refresh();
+    callbacks.showMessage("API dashboard configuration saved. Click Refresh data to view the updated settings.", false, "dashboards");
   } catch (caught) {
     feedback.textContent = caught instanceof Error ? caught.message : String(caught);
     feedback.hidden = false;

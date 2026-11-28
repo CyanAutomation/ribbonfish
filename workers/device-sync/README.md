@@ -469,10 +469,12 @@ show as disabled, and devices that have never reported show as unknown.
 The one-minute scheduled pass records stale/offline transitions and the next
 report records recovery in that same event history.
 
-Playlist polling updates device `last_seen_at` at most once every five minutes.
-For static playlists, a matching ETag is checked from the active playlist row
-and capture-slot existence before loading the asset lists; dynamic capture
-playlists still resolve their current screenshot state before returning `304`.
+The admin `last_seen_at` value is derived from the latest health report,
+normally received every five minutes. Playlist polling does not write device
+activity to D1. For static playlists, a matching ETag is checked from the
+active playlist row and capture-slot existence before loading the asset lists.
+Dynamic capture playlists still resolve their current screenshot state before
+returning `304`.
 
 Before every capture, the Worker sends a bounded `HEAD` request to the recorded
 target URL with its saved ETag and Last-Modified validators. Any recorded target
@@ -507,9 +509,6 @@ one-time codes.
 The rate-limit binding uses Cloudflare's per-location rate limiter, which is
 approximate rather than a globally exact quota. It complements signature
 validation and the approval step.
-
-Playlist polling updates `devices.last_seen_at`. This is a timestamp of the most
-recent poll, not a persistent connection or a precise online/offline signal.
 
 ## Playlist publishing
 
